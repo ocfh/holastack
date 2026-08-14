@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS applications (
     name VARCHAR(128) NOT NULL,
     description VARCHAR(255) DEFAULT '',
     app_eui VARCHAR(32) DEFAULT '',
+    callback_url VARCHAR(512) DEFAULT '',
     created_at INT NOT NULL
 );
 
@@ -34,6 +35,12 @@ CREATE TABLE IF NOT EXISTS devices (
     fcnt_down INT NOT NULL DEFAULT 0,
     status VARCHAR(16) NOT NULL DEFAULT 'pending',
     last_gw_id VARCHAR(32) DEFAULT '',
+    last_seen INT DEFAULT 0,
+    battery INT DEFAULT -1,
+    margin INT DEFAULT 0,
+    latitude DOUBLE DEFAULT 0,
+    longitude DOUBLE DEFAULT 0,
+    altitude DOUBLE DEFAULT 0,
     ping_period INT NOT NULL DEFAULT 0,
     beacon_epoch INT NOT NULL DEFAULT 0,
     created_at INT NOT NULL,
@@ -62,6 +69,7 @@ CREATE TABLE IF NOT EXISTS uplinks (
     payload_hex TEXT,
     decrypted_hex TEXT,
     phy_payload TEXT,
+    raw_json TEXT,
     data_rate VARCHAR(32) DEFAULT '',
     frequency DOUBLE DEFAULT 0,
     rssi INT DEFAULT 0,

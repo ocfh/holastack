@@ -95,6 +95,15 @@ class Database
                 ['devices', 'last_gw_id', 'TEXT DEFAULT \'\''],
                 ['devices', 'ping_period', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'beacon_epoch', 'INTEGER NOT NULL DEFAULT 0'],
+                ['devices', 'last_seen', 'INTEGER DEFAULT 0'],
+                ['devices', 'battery', 'INTEGER DEFAULT -1'],
+                ['devices', 'margin', 'INTEGER DEFAULT 0'],
+                ['devices', 'latitude', 'REAL DEFAULT 0'],
+                ['devices', 'longitude', 'REAL DEFAULT 0'],
+                ['devices', 'altitude', 'REAL DEFAULT 0'],
+                ['uplinks', 'phy_payload', 'TEXT DEFAULT \'\''],
+                ['uplinks', 'raw_json', 'TEXT DEFAULT \'\''],
+                ['applications', 'callback_url', 'TEXT DEFAULT \'\''],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
@@ -114,6 +123,22 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INT AUTO_INCREMENT PRIMARY KEY, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INT DEFAULT 0, app_id INT DEFAULT 0, message TEXT, created_at INT NOT NULL)');
             if (!self::mysqlColumnExists('uplinks', 'phy_payload')) {
                 $pdo->exec('ALTER TABLE uplinks ADD COLUMN phy_payload TEXT');
+            }
+            if (!self::mysqlColumnExists('uplinks', 'raw_json')) {
+                $pdo->exec('ALTER TABLE uplinks ADD COLUMN raw_json TEXT');
+            }
+            foreach ([
+                ['devices', 'last_seen', 'INT DEFAULT 0'],
+                ['devices', 'battery', 'INT DEFAULT -1'],
+                ['devices', 'margin', 'INT DEFAULT 0'],
+                ['devices', 'latitude', 'DOUBLE DEFAULT 0'],
+                ['devices', 'longitude', 'DOUBLE DEFAULT 0'],
+                ['devices', 'altitude', 'DOUBLE DEFAULT 0'],
+                ['applications', 'callback_url', 'VARCHAR(512) DEFAULT \'\''],
+            ] as [$tbl, $col, $def]) {
+                if (!self::mysqlColumnExists($tbl, $col)) {
+                    $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");
+                }
             }
         }
     }

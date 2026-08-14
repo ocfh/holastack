@@ -250,8 +250,8 @@ class NetworkServer
 
             // 保存会话（先建会话，下行在去重缓冲后统一下发，不影响 5s 窗口）
             Database::execute(
-                "UPDATE devices SET dev_addr=?, nwk_s_key=?, app_s_key=?, status='active', fcnt_up=0, fcnt_down=0, join_eui=?, last_gw_id=? WHERE id=?",
-                [bin2hex($devAddr), bin2hex($nwkSKey), bin2hex($appSKey), $appEui, $gwEui, $device['id']]
+                "UPDATE devices SET dev_addr=?, nwk_s_key=?, app_s_key=?, status='active', fcnt_up=0, fcnt_down=0, join_eui=?, last_gw_id=?, last_seen=? WHERE id=?",
+                [bin2hex($devAddr), bin2hex($nwkSKey), bin2hex($appSKey), $appEui, $gwEui, time(), $device['id']]
             );
             $this->log("JOIN OK devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . sprintf(" (parse=%.0fms db_q=%.0fms mic=%.0fms key=%.0fms ja=%.0fms total=%.0fms)",
                 ($t1-$t0)*1000, ($t3-$t2)*1000, ($t5-$t4)*1000, ($t6-$t5)*1000, 0, (microtime(true)-$t6)*1000));
@@ -314,20 +314,54 @@ class NetworkServer
         }
 
         Database::execute(
-            "UPDATE devices SET fcnt_up=? WHERE id=?",
-            [$fcnt, $device['id']]
+            "UPDATE devices SET fcnt_up=?, last_seen=? WHERE id=?",
+            [$fcnt, time(), $device['id']]
         );
+
+        // 原始帧 + 网关元数据（用于前端“原始 JSON”查看与第三方对接）
+        $rawJson = json_encode([
+            'dev_addr'   => $devAddrHex,
+            'dev_eui'    => $device['dev_eui'],
+            'fcnt'       => $fcnt,
+            'port'       => $p['fport'] ?? 0,
+            'confirmed'  => ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 1 : 0,
+            'decrypted_hex' => bin2hex($decrypted),
+            'phy_payload'=> bin2hex($phy),
+            'gateway_id' => $gwEui,
+            'rssi'       => $rssi,
+            'snr'        => $lsnr,
+            'frequency'  => $freq,
+            'data_rate'  => $datr,
+            'tmst'       => $tmst,
+            'received_at'=> time(),
+        ], JSON_UNESCAPED_UNICODE);
+
         Database::execute(
-            "INSERT INTO uplinks (dev_id, app_id, dev_addr, dev_eui, fcnt, port, confirmed, payload_hex, decrypted_hex, phy_payload, data_rate, frequency, rssi, snr, gateway_id, received_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO uplinks (dev_id, app_id, dev_addr, dev_eui, fcnt, port, confirmed, payload_hex, decrypted_hex, phy_payload, data_rate, frequency, rssi, snr, gateway_id, received_at, raw_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
                 $device['id'], $device['app_id'], $devAddrHex, $device['dev_eui'], $fcnt,
                 $p['fport'] ?? 0, ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 1 : 0,
-                bin2hex($p['frmpayload']), bin2hex($decrypted), bin2hex($phy), $datr, $freq, $rssi, $lsnr, $gwEui, time(),
+                bin2hex($p['frmpayload']), bin2hex($decrypted), bin2hex($phy), $datr, $freq, $rssi, $lsnr, $gwEui, time(), $rawJson,
             ]
         );
         $this->log("DATA UP devAddr=$devAddrHex fcnt=$fcnt port=" . ($p['fport'] ?? '-') . " payload=" . bin2hex($decrypted));
         $this->logEvent('uplink', 'info', "上行接收 devAddr=$devAddrHex fcnt=$fcnt port=" . ($p['fport'] ?? '-') . " rssi=$rssi snr=$lsnr", $gwEui, $device['id'], $device['app_id']);
+
+        // 设备遥测回调：解析电量/链路余量(GPS 等)写回设备表，并触发应用 Webhook
+        $telemetry = $this->captureTelemetry($device, $p, $decrypted);
+        $this->fireCallback($device['app_id'], [
+            'dev_eui'    => $device['dev_eui'],
+            'dev_addr'   => $devAddrHex,
+            'fcnt'       => $fcnt,
+            'port'       => $p['fport'] ?? 0,
+            'confirmed'  => ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 1 : 0,
+            'payload_hex'=> bin2hex($decrypted),
+            'rssi'       => $rssi,
+            'snr'        => $lsnr,
+            'gateway_id' => $gwEui,
+            'received_at'=> time(),
+        ] + $telemetry);
 
         // 确认帧（ConfirmedDataUp）
         if ($mtype === Frame::MTYPE_CONFIRMED_UP) {
@@ -367,6 +401,120 @@ class NetworkServer
     private function bumpDownFCnt(int $devId): void
     {
         Database::execute("UPDATE devices SET fcnt_down = fcnt_down + 1 WHERE id=?", [$devId]);
+    }
+
+    /**
+     * 解析设备上行中的遥测数据并写回 devices 表，返回供 Webhook 使用的字段。
+     * 约定（与前端/设备端对齐）：
+     *  - 端口 0（MAC 命令）且首字节 0x06 = DevStatusAns：第 2 字节电量(0=外部供电,1..254=%)，第 3 字节链路余量(6bit 有符号, -32..31 dB)。
+     *  - 端口 4 且净负载恰好 10 字节：lat(int32 LE, ×1e-6°), lon(int32 LE, ×1e-6°), alt(int16 LE, m) —— 简易 GPS 编码。
+     */
+    private function captureTelemetry(array $device, array $p, string $decryptedBin): array
+    {
+        $upd = [];
+        $params = [];
+        $telemetry = ['battery' => null, 'margin' => null, 'latitude' => null, 'longitude' => null, 'altitude' => null];
+        $fport = $p['fport'] ?? null;
+
+        if ($fport === 0 && strlen($decryptedBin) >= 3 && $decryptedBin[0] === "\x06") {
+            $bat = ord($decryptedBin[1]); // 0=外部供电, 1..254=百分比, 255=保留
+            $m = ord($decryptedBin[2]);
+            $mg = $m & 0x3F;
+            if ($mg > 31) {
+                $mg -= 64;
+            }
+            $upd[] = 'battery=?';
+            $params[] = $bat;
+            $upd[] = 'margin=?';
+            $params[] = $mg;
+            $telemetry['battery'] = $bat;
+            $telemetry['margin'] = $mg;
+        }
+
+        if ($fport === 4 && strlen($decryptedBin) === 10) {
+            $lat = unpack('V', substr($decryptedBin, 0, 4))[1];
+            if ($lat > 0x7FFFFFFF) {
+                $lat -= 0x100000000;
+            }
+            $lon = unpack('V', substr($decryptedBin, 4, 4))[1];
+            if ($lon > 0x7FFFFFFF) {
+                $lon -= 0x100000000;
+            }
+            $alt = unpack('v', substr($decryptedBin, 8, 2))[1];
+            if ($alt > 0x7FFF) {
+                $alt -= 0x10000;
+            }
+            $lat /= 1e6;
+            $lon /= 1e6;
+            if (abs($lat) <= 90 && abs($lon) <= 180) {
+                $upd[] = 'latitude=?';
+                $params[] = $lat;
+                $upd[] = 'longitude=?';
+                $params[] = $lon;
+                $upd[] = 'altitude=?';
+                $params[] = $alt;
+                $telemetry['latitude'] = $lat;
+                $telemetry['longitude'] = $lon;
+                $telemetry['altitude'] = $alt;
+            }
+        }
+
+        if ($upd) {
+            $params[] = $device['id'];
+            Database::execute("UPDATE devices SET " . implode(', ', $upd) . " WHERE id=?", $params);
+            $this->log("TELEMETRY dev#{$device['id']} " . implode(' ', array_filter(array_map(
+                fn($k, $v) => $v === null ? '' : "$k=$v",
+                array_keys($telemetry),
+                $telemetry
+            ), 'strlen')));
+        }
+        return $telemetry;
+    }
+
+    /**
+     * 应用级 Webhook 回调（设备回调）。若应用配置了 callback_url，则异步 POST 上行/遥测 JSON。
+     * 使用非阻塞 socket，避免在 UDP 接收循环里等待 HTTP 响应。发送失败仅记录日志，不影响主流程。
+     */
+    private function fireCallback(int $appId, array $data): void
+    {
+        $app = Database::fetch("SELECT callback_url FROM applications WHERE id=?", [$appId]);
+        if (!$app || empty($app['callback_url'])) {
+            return;
+        }
+        $url = $app['callback_url'];
+        $parts = parse_url($url);
+        $scheme = strtolower($parts['scheme'] ?? '');
+        if ($scheme !== 'http' && $scheme !== 'https') {
+            return;
+        }
+        $host = $parts['host'] ?? '';
+        if ($host === '') {
+            return;
+        }
+        $port = (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
+        $path = ($parts['path'] ?? '/') . (!empty($parts['query']) ? '?' . $parts['query'] : '');
+        $body = json_encode($data, JSON_UNESCAPED_UNICODE);
+        $transport = $scheme === 'https' ? 'ssl' : 'tcp';
+        $fp = @stream_socket_client(
+            "$transport://$host:$port",
+            $errno,
+            $errstr,
+            1.0,
+            STREAM_CLIENT_ASYNC_CONNECT
+        );
+        if (!$fp) {
+            $this->log("CALLBACK: connect failed app#$appId ($errstr)");
+            return;
+        }
+        stream_set_blocking($fp, false);
+        $req = "POST $path HTTP/1.1\r\n"
+            . "Host: $host\r\n"
+            . "Content-Type: application/json\r\n"
+            . "Content-Length: " . strlen($body) . "\r\n"
+            . "Connection: close\r\n\r\n"
+            . $body;
+        @fwrite($fp, $req);
+        @fclose($fp);
     }
 
     // ---------------- Class B / C 主动下行调度 ----------------

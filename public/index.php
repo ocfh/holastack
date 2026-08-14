@@ -106,7 +106,8 @@ function handleApi(string $method, string $path): array
     // 其余需登录；写操作（创建/更新/删除）需 admin，下行入队 operator 即可
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
     $isDownlink = ($resource === 'devices' && ($segs[2] ?? '') === 'downlink');
-    $needsAdmin = $isWrite && !$isDownlink;
+    $isPwChange = ($resource === 'users' && ($segs[1] ?? '') === 'password');
+    $needsAdmin = $isWrite && !$isDownlink && !$isPwChange;
     Auth::guardApi($needsAdmin ? Auth::ROLE_ADMIN : Auth::ROLE_OPERATOR);
 
     switch ($resource) {
@@ -162,6 +163,11 @@ function handleApi(string $method, string $path): array
         case 'users':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteUser((int) $segs[1]);
+            }
+            if (($segs[1] ?? '') === 'password' && $method === 'POST') {
+                $cur = Auth::currentUser();
+                $target = (isset($body['user_id']) && $body['user_id'] !== '') ? (int) $body['user_id'] : (int) $cur['id'];
+                return WebApp::changePassword($target, $body['new_password'] ?? '');
             }
             if ($method === 'POST') {
                 if (empty($body['username']) || empty($body['password'])) {
@@ -236,6 +242,7 @@ function renderPage(): string
   </nav>
   <div class="spacer"></div>
   <span class="who" id="who"></span>
+  <button class="ghost" onclick="changePw()">修改密码</button>
   <button class="ghost" onclick="logout()">退出</button>
 </header>
 
@@ -254,7 +261,7 @@ function renderPage(): string
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 
 <script>
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[]};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], regions:['EU868','CN470'], upsFilter:''};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -263,8 +270,10 @@ async function boot(){
     const r = await fetch('/api/me', opt);
     if (r.ok) { const j = await r.json(); state.user = j.user; }
   } catch(e){}
+  try { const rr = await fetch('/api/regions'); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
   renderShell();
 }
+const regionOptions = (sel) => state.regions.map(r=>`<option ${r===sel?'selected':''}>${r}</option>`).join('');
 function renderShell(){
   if (!state.user) {
     document.getElementById('topbar').classList.add('hidden');
@@ -275,7 +284,7 @@ function renderShell(){
   document.getElementById('login').classList.add('hidden');
   document.getElementById('topbar').classList.remove('hidden');
   document.getElementById('view').classList.remove('hidden');
-  document.getElementById('who').textContent = state.user.username + '（' + state.user.role + '）';
+  document.getElementById('who').textContent = state.user.username;
   document.getElementById('navUsers').style.display = (state.user.role === 'admin') ? '' : 'none';
   nav('dashboard');
 }
@@ -327,7 +336,7 @@ function nav(v){
 document.querySelectorAll('.nav').forEach(a=>a.onclick=()=>nav(a.dataset.v));
 
 // 自动刷新：只读的实时视图（概览/网关/上行/日志）每 5 秒刷新；模态框打开时暂停，避免打断编辑
-const AUTO_REFRESH_VIEWS = ['dashboard','gateways','uplinks','events'];
+const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','events'];
 setInterval(()=>{
   if (document.getElementById('modal').classList.contains('show')) return; // 弹窗打开时暂停
   if (AUTO_REFRESH_VIEWS.includes(state.view)) nav(state.view);
@@ -346,22 +355,45 @@ async function viewDashboard(){
 }
 async function viewApplications(){
   const r = await api('GET','/api/applications'); state.apps = r.data||[];
-  const rows = state.apps.map(a=>`<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
-     <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="delApplication(${a.id})">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`).join('')||`<tr><td colspan="5" class="muted">暂无应用</td></tr>`;
+  const rows = state.apps.map(a=>`<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${esc(a.callback_url||'')}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
+     <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="delApplication(${a.id})">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无应用</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>应用</h2>${adminBtn('<button onclick="newApplication()">+ 新建应用</button>')}</div>
-    <table><thead><tr><th>ID</th><th>名称</th><th>AppEUI</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>ID</th><th>名称</th><th>AppEUI</th><th>回调 URL</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function viewDevices(){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
-  const rows = state.devs.map(d=>`<tr>
-    <td>${d.id}</td><td>${esc(d.name)}</td>
-    <td><span class="tag">${d.activation}</span></td>
-    <td><span class="tag ${d.class}">${d.class}</span></td>
-    <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(d.dev_addr)}</td>
-    <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
-    <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="delDevice(${d.id})">删除</button>`)} <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`).join('')||`<tr><td colspan="8" class="muted">暂无设备</td></tr>`;
+  const rows = state.devs.map(d=>{
+    const online = d.online==='online';
+    const tel = [];
+    if (d.battery!==null && d.battery!==undefined && +d.battery>=0) tel.push('电量'+(+d.battery===0?'外电':(+d.battery)+'%'));
+    if (d.margin!==null && d.margin!==undefined && d.margin!=='') tel.push('余量'+(+d.margin)+'dB');
+    if (d.latitude && +d.latitude!==0 && d.longitude!==null) tel.push('GPS '+ (+d.latitude).toFixed(5)+','+(+d.longitude).toFixed(5));
+    const telStr = tel.length? `<div class="muted" style="font-size:11px">${tel.join(' · ')}</div>`:'';
+    const seen = (d.last_seen_fmt && d.last_seen_fmt!=='-') ? d.last_seen_fmt : '-';
+    return `<tr>
+      <td>${d.id}</td><td>${esc(d.name)}</td>
+      <td><span class="tag">${d.activation}</span></td>
+      <td><span class="tag ${d.class}">${d.class}</span></td>
+      <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
+      <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(d.dev_addr)}</td>
+      <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
+      <td class="muted">${seen}${telStr}</td>
+      <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="delDevice(${d.id})">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
+  }).join('')||`<tr><td colspan="10" class="muted">暂无设备</td></tr>`;
   document.getElementById('view').innerHTML = `<h2>设备</h2>
-    <table><thead><tr><th>ID</th><th>名称</th><th>激活</th><th>Class</th><th>DevEUI</th><th>DevAddr</th><th>状态</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>ID</th><th>名称</th><th>激活</th><th>Class</th><th>状态</th><th>DevEUI</th><th>DevAddr</th><th>入网</th><th>最近/遥测</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function deviceDetail(id){
+  const r = await api('GET','/api/devices'); state.devs = r.data||[];
+  const d=(state.devs||[]).find(x=>x.id===id); if(!d)return;
+  const kv=(label,val)=>`<label>${label}</label><input value="${esc(val||'')}" readonly onclick="this.select()">`;
+  openModal(`<h3>设备密钥 #${id} ${esc(d.name)}</h3>
+    ${kv('DevEUI', d.dev_eui)}
+    ${d.activation==='OTAA'
+      ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
+      : kv('DevAddr', d.dev_addr) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
+    <p class="muted" style="font-size:12px">点击输入框即可全选复制。修改请点“编辑”。</p>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 async function viewGateways(){
   const r = await api('GET','/api/gateways'); state.gws = r.data||[];
@@ -378,13 +410,27 @@ async function viewGateways(){
 }
 
 async function viewUplinks(){
-  const r = await api('GET','/api/uplinks'); state.ups = r.data||[];
-  const rows = state.ups.map(u=>`<tr><td>${u.id}</td><td class="muted">${hex(u.dev_addr)}</td><td>${u.fcnt}</td>
-    <td>${u.port}</td><td>${u.confirmed?'✓':'-'}</td><td><code>${hex(u.decrypted_hex)}</code></td>
-    <td><code class="muted">${hex(u.phy_payload)}</code></td><td class="muted">${u.gateway_id||'-'}</td>
-    <td class="muted">${u.rssi} / ${u.snr}</td><td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td></tr>`).join('')||`<tr><td colspan="10" class="muted">暂无上行</td></tr>`;
-  document.getElementById('view').innerHTML = `<h2>上行消息（收到的 LoRa 帧）</h2><p class="muted">每 5 秒自动刷新。phy 列为原始 LoRaWAN 帧（hex）。</p>
-    <table><thead><tr><th>ID</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const r = await api('GET','/api/uplinks' + (state.upsFilter ? '?dev_id='+state.upsFilter : '')); state.ups = r.data||[];
+  const dr = await api('GET','/api/devices'); const devs = dr.data||[];
+  const opts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
+  const rows = state.ups.map(u=>`<tr><td>${u.id}</td>
+    <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(u.dev_addr)}</a></td>
+    <td>${u.fcnt}</td><td>${u.port}</td><td>${u.confirmed?'✓':'-'}</td>
+    <td><code>${hex(u.decrypted_hex)}</code></td>
+    <td><code class="muted">${hex(u.phy_payload)}</code></td>
+    <td class="muted">${u.gateway_id||'-'}</td>
+    <td class="muted">${u.rssi} / ${u.snr}</td>
+    <td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td>
+    <td><button class="btn ghost" onclick="showRaw(${u.id})">原始JSON</button></td></tr>`).join('')||`<tr><td colspan="11" class="muted">暂无上行</td></tr>`;
+  document.getElementById('view').innerHTML = `<h2>上行消息（收到的 LoRa 帧）</h2>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 340px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;viewUplinks()">${opts}</select></div></div>
+    <p class="muted">每 5 秒自动刷新。phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“原始JSON”查看网关上报元数据。</p>
+    <table><thead><tr><th>ID</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function showRaw(id){
+  const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
+  let j={}; try { j = u.raw_json ? JSON.parse(u.raw_json) : {}; } catch(e){}
+  openModal(`<h3>原始 JSON #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
 async function viewEvents(){
@@ -402,22 +448,65 @@ async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/users'); state.users = r.data||[];
   const rows = state.users.map(u=>`<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td><td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
-     <td><button class="btn danger" onclick="delUser(${u.id})">删除</button></td></tr>`).join('')||`<tr><td colspan="5" class="muted">暂无用户</td></tr>`;
+     <td><button class="btn danger" onclick="delUser(${u.id})">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`).join('')||`<tr><td colspan="5" class="muted">暂无用户</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户</h2><button onclick="newUser()">+ 新建用户</button></div>
     <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
+async function changePw(){
+  let targetSel = '';
+  if (isAdmin()) {
+    const r = await api('GET','/api/users');
+    targetSel = `<label>目标用户（管理员可改他人；留空=自己）</label><select id="m_pw_uid"><option value="">我自己</option>${(r.data||[]).map(u=>`<option value="${u.id}">${esc(u.username)}</option>`).join('')}</select>`;
+  }
+  openModal(`<h3>修改密码</h3>${targetSel}
+    <label>新密码（≥6 位）</label><input id="m_pw_new" type="password">
+    <label>确认新密码</label><input id="m_pw_cfm" type="password">
+    <div id="pw_err" class="muted" style="color:var(--err)"></div>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="savePw()">保存</button></div>`);
+}
+async function savePw(){
+  const np=v('m_pw_new'), cf=v('m_pw_cfm'); const err=document.getElementById('pw_err');
+  if(np.length<6){ err.textContent='密码至少 6 位'; return; }
+  if(np!==cf){ err.textContent='两次输入不一致'; return; }
+  const body={new_password:np};
+  const uid=document.getElementById('m_pw_uid'); if(uid && uid.value) body.user_id=+uid.value;
+  const r=await api('POST','/api/users/password',body); if(r.error){err.textContent=r.error;return;} closeModal();
+  if(!body.user_id){ alert('密码已修改，请重新登录'); state.token=null; state.user=null; localStorage.removeItem('elw_token'); renderShell(); }
+  else alert('已修改该用户密码');
+}
+async function changePwFor(id){
+  openModal(`<h3>修改用户 #${id} 密码</h3>
+    <label>新密码（≥6 位）</label><input id="m_pw_new" type="password">
+    <label>确认新密码</label><input id="m_pw_cfm" type="password">
+    <div id="pw_err" class="muted" style="color:var(--err)"></div>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="savePwFor(${id})">保存</button></div>`);
+}
+async function savePwFor(id){
+  const np=v('m_pw_new'), cf=v('m_pw_cfm'); const err=document.getElementById('pw_err');
+  if(np.length<6){ err.textContent='密码至少 6 位'; return; }
+  if(np!==cf){ err.textContent='两次输入不一致'; return; }
+  const r=await api('POST','/api/users/password',{user_id:id,new_password:np}); if(r.error){err.textContent=r.error;return;} closeModal(); alert('已修改该用户密码');
+}
 
 // 表单
-function newApplication(){ openModal(`<h3>新建应用</h3><label>名称</label><input id="m_name"><label>AppEUI (可选)</label><input id="m_app_eui" placeholder="0000000000000000"><label>描述</label><input id="m_desc">
+const randHex = (n) => Array.from({length:n},()=>Math.floor(Math.random()*16).toString(16)).join('');
+function newApplication(){ openModal(`<h3>新建应用</h3><label>名称</label><input id="m_name">
+  <label>AppEUI（可选，留空自动随机生成）</label>
+  <div class="row"><div><input id="m_app_eui" placeholder="0000000000000000"></div><div style="flex:0 0 auto"><button class="ghost" type="button" onclick="document.getElementById('m_app_eui').value=randHex(8)">随机生成</button></div></div>
+  <label>回调 URL（可选，设备上行/遥测 Webhook，留空不回调）</label><input id="m_cb" placeholder="https://example.com/uplink">
+  <label>描述</label><input id="m_desc">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveApp()">保存</button></div>`); }
-async function saveApp(){ const r = await api('POST','/api/applications',{name:v('m_name'),app_eui:v('m_app_eui'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
+async function saveApp(){ const r = await api('POST','/api/applications',{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
 async function editApplication(id){ const r = await api('GET','/api/applications'); const a = (r.data||[]).find(x=>x.id===id); if(!a)return;
-  openModal(`<h3>编辑应用 #${id}</h3><label>名称</label><input id="m_name" value="${esc(a.name)}"><label>AppEUI</label><input id="m_app_eui" value="${esc(a.app_eui)}"><label>描述</label><input id="m_desc" value="${esc(a.description)}">
+  openModal(`<h3>编辑应用 #${id}</h3><label>名称</label><input id="m_name" value="${esc(a.name)}">
+  <label>AppEUI</label><div class="row"><div><input id="m_app_eui" value="${esc(a.app_eui)}"></div><div style="flex:0 0 auto"><button class="ghost" type="button" onclick="document.getElementById('m_app_eui').value=randHex(8)">随机生成</button></div></div></label>
+  <label>回调 URL</label><input id="m_cb" value="${esc(a.callback_url||'')}" placeholder="https://example.com/uplink">
+  <label>描述</label><input id="m_desc" value="${esc(a.description)}">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveAppEdit(${id})">保存</button></div>`); }
-async function saveAppEdit(id){ const r = await api('PUT',`/api/applications/${id}`,{name:v('m_name'),app_eui:v('m_app_eui'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
+async function saveAppEdit(id){ const r = await api('PUT',`/api/applications/${id}`,{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
 async function delApplication(id){ if(!confirm('确认删除该应用及其下所有设备？'))return; const r = await api('DELETE',`/api/applications/${id}`); if(r.error){alert(r.error);return;} viewApplications(); }
 
-function newDevice(appId){ const regions=["EU868","CN470"].map(r=>`<option>${r}</option>`).join("");
+function newDevice(appId){ const regions=regionOptions("");
   openModal(`<h3>新建设备 (应用 #${appId})</h3><label>名称</label><input id="m_name"><label>DevEUI (16 hex)</label><input id="m_dev_eui"><label>激活方式</label><select id="m_act" onchange="toggleAct()"><option value="OTAA">OTAA</option><option value="ABP">ABP</option></select>
     <div id="otaa"><label>JoinEUI (16 hex)</label><input id="m_join_eui"><label>AppKey (32 hex)</label><input id="m_app_key"></div>
     <div id="abp" class="hidden"><label>DevAddr (8 hex)</label><input id="m_dev_addr"><label>NwkSKey (32 hex)</label><input id="m_nwk"><label>AppSKey (32 hex)</label><input id="m_app"></div>
@@ -429,25 +518,26 @@ async function saveDevice(appId){ const act=v('m_act'); const body={app_id:appId
   if(act==='OTAA'){ body.join_eui=v('m_join_eui'); body.app_key=v('m_app_key'); } else { body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
   const r = await api('POST','/api/devices',body); if(r.error){alert(r.error);return;} closeModal(); viewDevices(); }
 async function editDevice(id){ const r = await api('GET','/api/devices'); const d=(r.data||[]).find(x=>x.id===id); if(!d)return;
-  const regions=["EU868","CN470"].map(r=>`<option ${r===d.region?'selected':''}>${r}</option>`).join("");
   const otaa=d.activation==='OTAA';
   openModal(`<h3>编辑设备 #${id}</h3><label>名称</label><input id="m_name" value="${esc(d.name)}">
     <label>激活方式</label><input value="${d.activation}" disabled>
     <label>Class</label><select id="m_class"><option ${d.class==='A'?'selected':''}>A</option><option ${d.class==='B'?'selected':''}>B</option><option ${d.class==='C'?'selected':''}>C</option></select>
-    <label>区域</label><select id="m_region">${regions}</select>
-    ${otaa?`<label>AppKey (32 hex，留空不改)</label><input id="m_app_key" placeholder="留空保持不变">`:`<label>DevAddr (8 hex)</label><input id="m_dev_addr" value="${esc(d.dev_addr)}"><label>NwkSKey (32 hex)</label><input id="m_nwk" value="${esc(d.nwk_s_key)}"><label>AppSKey (32 hex)</label><input id="m_app" value="${esc(d.app_s_key)}"`}
+    <label>区域</label><select id="m_region">${regionOptions(d.region)}</select>
+    ${otaa?`<label>DevEUI (16 hex，留空不改)</label><input id="m_dev_eui" value="${esc(d.dev_eui)}" placeholder="留空保持不变"><label>JoinEUI (16 hex，留空不改)</label><input id="m_join_eui" value="${esc(d.join_eui)}" placeholder="留空保持不变"><label>AppKey (32 hex，留空不改)</label><input id="m_app_key" placeholder="留空保持不变">`:`<label>DevAddr (8 hex)</label><input id="m_dev_addr" value="${esc(d.dev_addr)}"><label>NwkSKey (32 hex)</label><input id="m_nwk" value="${esc(d.nwk_s_key)}"><label>AppSKey (32 hex)</label><input id="m_app" value="${esc(d.app_s_key)}"`}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveDeviceEdit(${id})">保存</button></div>`); }
 async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class'),region:v('m_region')};
   if(document.getElementById('m_app_key')) body.app_key=v('m_app_key');
+  if(document.getElementById('m_dev_eui')) body.dev_eui=v('m_dev_eui');
+  if(document.getElementById('m_join_eui')) body.join_eui=v('m_join_eui');
   if(document.getElementById('m_dev_addr')){ body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
   const r = await api('PUT',`/api/devices/${id}`,body); if(r.error){alert(r.error);return;} closeModal(); viewDevices(); }
 async function delDevice(id){ if(!confirm('确认删除该设备及其上下行记录？'))return; const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(r.error);return;} viewDevices(); }
 
-function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid"><label>名称</label><input id="m_name"><label>区域</label><input id="m_region" placeholder="如 EU868">
+function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveGateway()">保存</button></div>`); }
 async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region')}); if(r.error){alert(r.error);return;} closeModal(); viewGateways(); }
 async function editGateway(gwId){ const r = await api('GET','/api/gateways'); const g=(r.data||[]).find(x=>x.gw_id===gwId); if(!g)return;
-  openModal(`<h3>编辑网关 ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><input id="m_region" value="${esc(g.region)}">
+  openModal(`<h3>编辑网关 ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveGatewayEdit('${gwId}')">保存</button></div>`); }
 async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(r.error);return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ if(!confirm('确认删除该网关？'))return; const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(r.error);return;} viewGateways(); }

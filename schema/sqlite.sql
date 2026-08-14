@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS applications (
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     app_eui TEXT DEFAULT '',
+    callback_url TEXT DEFAULT '',
     created_at INTEGER NOT NULL
 );
 
