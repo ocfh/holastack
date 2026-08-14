@@ -108,5 +108,6 @@ CREATE TABLE IF NOT EXISTS events (
     dev_id INT DEFAULT 0,
     app_id INT DEFAULT 0,
     message TEXT,
+    raw_json TEXT,
     created_at INT NOT NULL
 );

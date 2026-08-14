@@ -261,7 +261,7 @@ function renderPage(): string
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 
 <script>
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], regions:['EU868','CN470'], upsFilter:''};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:''};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -421,10 +421,10 @@ async function viewUplinks(){
     <td class="muted">${u.gateway_id||'-'}</td>
     <td class="muted">${u.rssi} / ${u.snr}</td>
     <td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td>
-    <td><button class="btn ghost" onclick="showRaw(${u.id})">原始JSON</button></td></tr>`).join('')||`<tr><td colspan="11" class="muted">暂无上行</td></tr>`;
+    <td><button class="btn ghost" onclick="showRaw(${u.id})">JSON</button></td></tr>`).join('')||`<tr><td colspan="11" class="muted">暂无上行</td></tr>`;
   document.getElementById('view').innerHTML = `<h2>上行消息（收到的 LoRa 帧）</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 340px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;viewUplinks()">${opts}</select></div></div>
-    <p class="muted">每 5 秒自动刷新。phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“原始JSON”查看网关上报元数据。</p>
+    <p class="muted">每 5 秒自动刷新。phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“JSON”查看网关上报元数据。</p>
     <table><thead><tr><th>ID</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function showRaw(id){
@@ -434,15 +434,22 @@ async function showRaw(id){
 }
 
 async function viewEvents(){
-  const r = await api('GET','/api/events');
+  const r = await api('GET','/api/events'); state.evs = r.data||[];
   const rows = (r.data||[]).map(e=>{
     const lvl = e.level==='error' ? 'err' : (e.level==='warn' ? 'pending' : 'ok');
     const who = e.gateway_id ? ('gw '+e.gateway_id) : (e.dev_id ? ('dev #'+e.dev_id) : '');
     return `<tr><td><span class="tag">${e.type}</span></td><td><span class="tag ${lvl}">${e.level}</span></td>
-      <td class="muted">${esc(who)}</td><td>${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td></tr>`;
-  }).join('')||`<tr><td colspan="5" class="muted">暂无事件</td></tr>`;
-  document.getElementById('view').innerHTML = `<h2>事件日志</h2><p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件（每 5 秒自动刷新）。</p>
-    <table><thead><tr><th>类型</th><th>级别</th><th>对象</th><th>消息</th><th>时间</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <td class="muted">${esc(who)}</td><td>${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td>
+      <td><button class="btn ghost" onclick="showEventRaw(${e.id})">JSON</button></td></tr>`;
+  }).join('')||`<tr><td colspan="6" class="muted">暂无事件</td></tr>`;
+  document.getElementById('view').innerHTML = `<h2>事件日志</h2><p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件（每 5 秒自动刷新）。点“JSON”查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。</p>
+    <table><thead><tr><th>类型</th><th>级别</th><th>对象</th><th>消息</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function showEventRaw(id){
+  const e=(state.evs||[]).find(x=>x.id===id); if(!e)return;
+  let j={}; try { j = e.raw_json ? JSON.parse(e.raw_json) : {}; } catch(err){}
+  if (!Object.keys(j).length) { j = e; delete j.raw_json; }
+  openModal(`<h3>事件 JSON #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }

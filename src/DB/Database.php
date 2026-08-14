@@ -104,12 +104,13 @@ class Database
                 ['uplinks', 'phy_payload', 'TEXT DEFAULT \'\''],
                 ['uplinks', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['applications', 'callback_url', 'TEXT DEFAULT \'\''],
+                ['events', 'raw_json', 'TEXT DEFAULT \'\''],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
             // 兜底：确保令牌表 / 事件表存在
             $pdo->exec('CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INTEGER DEFAULT 0, app_id INTEGER DEFAULT 0, message TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INTEGER DEFAULT 0, app_id INTEGER DEFAULT 0, message TEXT DEFAULT \'\', raw_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             self::ensureColumn('uplinks', 'phy_payload', 'TEXT DEFAULT \'\'');
         } else {
             // MySQL：按 ; 拆分执行
@@ -120,12 +121,15 @@ class Database
             }
             // 兜底：确保令牌表 / 事件表存在
             $pdo->exec('CREATE TABLE IF NOT EXISTS auth_tokens (token VARCHAR(64) PRIMARY KEY, user_id INT NOT NULL, created_at INT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INT AUTO_INCREMENT PRIMARY KEY, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INT DEFAULT 0, app_id INT DEFAULT 0, message TEXT, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INT AUTO_INCREMENT PRIMARY KEY, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INT DEFAULT 0, app_id INT DEFAULT 0, message TEXT, raw_json TEXT, created_at INT NOT NULL)');
             if (!self::mysqlColumnExists('uplinks', 'phy_payload')) {
                 $pdo->exec('ALTER TABLE uplinks ADD COLUMN phy_payload TEXT');
             }
             if (!self::mysqlColumnExists('uplinks', 'raw_json')) {
                 $pdo->exec('ALTER TABLE uplinks ADD COLUMN raw_json TEXT');
+            }
+            if (!self::mysqlColumnExists('events', 'raw_json')) {
+                $pdo->exec('ALTER TABLE events ADD COLUMN raw_json TEXT');
             }
             foreach ([
                 ['devices', 'last_seen', 'INT DEFAULT 0'],
@@ -135,6 +139,7 @@ class Database
                 ['devices', 'longitude', 'DOUBLE DEFAULT 0'],
                 ['devices', 'altitude', 'DOUBLE DEFAULT 0'],
                 ['applications', 'callback_url', 'VARCHAR(512) DEFAULT \'\''],
+                ['events', 'raw_json', 'TEXT'],
             ] as [$tbl, $col, $def]) {
                 if (!self::mysqlColumnExists($tbl, $col)) {
                     $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");

@@ -346,20 +346,25 @@ class NetworkServer
             ]
         );
         $this->log("DATA UP devAddr=$devAddrHex fcnt=$fcnt port=" . ($p['fport'] ?? '-') . " payload=" . bin2hex($decrypted));
-        $this->logEvent('uplink', 'info', "上行接收 devAddr=$devAddrHex fcnt=$fcnt port=" . ($p['fport'] ?? '-') . " rssi=$rssi snr=$lsnr", $gwEui, $device['id'], $device['app_id']);
+        $this->logEvent('uplink', 'info', "上行接收 devAddr=$devAddrHex fcnt=$fcnt port=" . ($p['fport'] ?? '-') . " rssi=$rssi snr=$lsnr", $gwEui, $device['id'], $device['app_id'], $rawJson);
 
-        // 设备遥测回调：解析电量/链路余量(GPS 等)写回设备表，并触发应用 Webhook
+        // 设备遥测回调：解析电量/链路余量(GPS 等)写回设备表，并触发应用 Webhook（TTN v3 格式）
         $telemetry = $this->captureTelemetry($device, $p, $decrypted);
         $this->fireCallback($device['app_id'], [
+            'name'       => $device['name'],
             'dev_eui'    => $device['dev_eui'],
             'dev_addr'   => $devAddrHex,
             'fcnt'       => $fcnt,
             'port'       => $p['fport'] ?? 0,
             'confirmed'  => ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 1 : 0,
+            'frm_payload'=> base64_encode($decrypted),
             'payload_hex'=> bin2hex($decrypted),
             'rssi'       => $rssi,
             'snr'        => $lsnr,
             'gateway_id' => $gwEui,
+            'frequency'  => $freq,
+            'datr'       => $datr,
+            'tmst'       => $tmst,
             'received_at'=> time(),
         ] + $telemetry);
 
@@ -475,9 +480,16 @@ class NetworkServer
      * 应用级 Webhook 回调（设备回调）。若应用配置了 callback_url，则异步 POST 上行/遥测 JSON。
      * 使用非阻塞 socket，避免在 UDP 接收循环里等待 HTTP 响应。发送失败仅记录日志，不影响主流程。
      */
+    /**
+     * 应用级 Webhook（设备回调）。
+     * 负载采用 TTN (The Things Stack v3) 的 uplink_message 结构，
+     * 可直接被 TTN 兼容的接收端（如用户提供的 webhook.php）解析：
+     *   - end_device_ids.{device_id,dev_eui,dev_addr,application_ids.application_id}
+     *   - uplink_message.{f_port,f_cnt,frm_payload(base64),decoded_payload,rx_metadata,rssi,snr,settings}
+     */
     private function fireCallback(int $appId, array $data): void
     {
-        $app = Database::fetch("SELECT callback_url FROM applications WHERE id=?", [$appId]);
+        $app = Database::fetch("SELECT id, name, callback_url FROM applications WHERE id=?", [$appId]);
         if (!$app || empty($app['callback_url'])) {
             return;
         }
@@ -493,7 +505,56 @@ class NetworkServer
         }
         $port = (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
         $path = ($parts['path'] ?? '/') . (!empty($parts['query']) ? '?' . $parts['query'] : '');
-        $body = json_encode($data, JSON_UNESCAPED_UNICODE);
+
+        // ---- 组装 TTN v3 uplink_message 结构 ----
+        $bandwidth = 0;
+        $sf = 0;
+        if (preg_match('/SF(\d+)\s*BW\s*(\d+)/i', $data['datr'] ?? '', $m)) {
+            $sf = (int) $m[1];
+            $bandwidth = (int) $m[2] * 1000;
+        }
+        $ts = (int) ($data['received_at'] ?? time());
+        $isoTs = gmdate('Y-m-d\TH:i:s.v\Z', $ts);
+
+        $telemetry = [];
+        foreach (['battery', 'margin', 'latitude', 'longitude', 'altitude'] as $k) {
+            if (array_key_exists($k, $data) && $data[$k] !== null && $data[$k] !== '') {
+                $telemetry[$k] = $data[$k];
+            }
+        }
+
+        $payload = [
+            'end_device_ids' => [
+                'device_id'       => $data['name'] ?: $data['dev_eui'],
+                'dev_eui'         => $data['dev_eui'],
+                'dev_addr'        => $data['dev_addr'],
+                'application_ids' => ['application_id' => $app['name'] ?: ('app-' . $appId)],
+            ],
+            'received_at' => $isoTs,
+            'uplink_message' => [
+                'f_port'          => (int) ($data['port'] ?? 0),
+                'f_cnt'           => (int) ($data['fcnt'] ?? 0),
+                'frm_payload'     => $data['frm_payload'] ?? '',
+                'decoded_payload' => $telemetry ?: null,
+                'confirmed'       => !empty($data['confirmed']),
+                'rx_metadata'     => [
+                    [
+                        'gateway_ids'  => ['gateway_id' => $data['gateway_id'] ?? ''],
+                        'rssi'         => (int) ($data['rssi'] ?? 0),
+                        'channel_rssi' => (int) ($data['rssi'] ?? 0),
+                        'snr'          => (float) ($data['snr'] ?? 0),
+                        'received_at'  => $isoTs,
+                    ],
+                ],
+                'settings' => [
+                    'data_rate' => ['lora' => ['bandwidth' => $bandwidth, 'spreading_factor' => $sf]],
+                    'frequency' => (string) ($data['frequency'] ?? ''),
+                    'timestamp' => (int) ($data['tmst'] ?? 0),
+                ],
+            ],
+        ];
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+
         $transport = $scheme === 'https' ? 'ssl' : 'tcp';
         $fp = @stream_socket_client(
             "$transport://$host:$port",
@@ -826,12 +887,12 @@ class NetworkServer
     }
 
     /** 记录一条事件到 events 表（同时写文本日志）。失败不影响主流程。 */
-    private function logEvent(string $type, string $level, string $message, string $gwId = '', ?int $devId = 0, ?int $appId = 0): void
+    private function logEvent(string $type, string $level, string $message, string $gwId = '', ?int $devId = 0, ?int $appId = 0, string $rawJson = ''): void
     {
         try {
             Database::execute(
-                "INSERT INTO events (type, level, gateway_id, dev_id, app_id, message, created_at) VALUES (?,?,?,?,?,?,?)",
-                [$type, $level, $gwId, $devId, $appId, $message, time()]
+                "INSERT INTO events (type, level, gateway_id, dev_id, app_id, message, raw_json, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                [$type, $level, $gwId, $devId, $appId, $message, $rawJson, time()]
             );
         } catch (\Throwable $e) {
             // 事件落库失败不应中断接收链路
