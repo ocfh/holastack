@@ -159,7 +159,9 @@ function handleApi(string $method, string $path): array
             $devId = isset($segs[1]) ? (int) $segs[1] : null;
             return ['data' => WebApp::listDownlinks($devId)];
         case 'events':
-            return ['data' => WebApp::listEvents()];
+            $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
+            $gwId = isset($get['gw_id']) ? trim($get['gw_id']) : null;
+            return ['data' => WebApp::listEvents($devId, $gwId)];
         case 'users':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteUser((int) $segs[1]);
@@ -261,7 +263,7 @@ function renderPage(): string
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 
 <script>
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:''};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', evsDevFilter:'', evsGwFilter:''};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -434,7 +436,21 @@ async function showRaw(id){
 }
 
 async function viewEvents(){
-  const r = await api('GET','/api/events'); state.evs = r.data||[];
+  // 拉取设备/网关列表供下拉筛选（若已加载则复用）
+  if (!state.devs.length) { const rd = await api('GET','/api/devices'); state.devs = rd.data||[]; }
+  if (!state.gws.length)  { const rg = await api('GET','/api/gateways'); state.gws = rg.data||[]; }
+  // 构建筛选查询串
+  let q = [];
+  if (state.evsDevFilter) q.push('dev_id=' + state.evsDevFilter);
+  if (state.evsGwFilter)  q.push('gw_id=' + encodeURIComponent(state.evsGwFilter));
+  const qs = q.length ? ('?' + q.join('&')) : '';
+  const r = await api('GET','/api/events' + qs); state.evs = r.data||[];
+  const devOpts = ['<option value="">全部设备</option>'].concat(
+    state.devs.map(d=>`<option value="${d.id}" ${String(d.id)===state.evsDevFilter?'selected':''}>${esc(d.name)} · ${hex(d.dev_eui)}</option>`)
+  ).join('');
+  const gwOpts = ['<option value="">全部网关</option>'].concat(
+    state.gws.map(g=>`<option value="${esc(g.gw_id)}" ${g.gw_id===state.evsGwFilter?'selected':''}>${esc(g.gw_id)} · ${esc(g.name)}</option>`)
+  ).join('');
   const rows = (r.data||[]).map(e=>{
     const lvl = e.level==='error' ? 'err' : (e.level==='warn' ? 'pending' : 'ok');
     const who = e.gateway_id ? ('gw '+e.gateway_id) : (e.dev_id ? ('dev #'+e.dev_id) : '');
@@ -442,7 +458,13 @@ async function viewEvents(){
       <td class="muted">${esc(who)}</td><td>${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td>
       <td><button class="btn ghost" onclick="showEventRaw(${e.id})">JSON</button></td></tr>`;
   }).join('')||`<tr><td colspan="6" class="muted">暂无事件</td></tr>`;
-  document.getElementById('view').innerHTML = `<h2>事件日志</h2><p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件（每 5 秒自动刷新）。点“JSON”查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。</p>
+  document.getElementById('view').innerHTML = `<h2>事件日志</h2>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
+      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; viewEvents()">${devOpts}</select></div>
+      <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; viewEvents()">${gwOpts}</select></div>
+      <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; viewEvents()">重置</button>
+    </div>
+    <p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件（每 5 秒自动刷新）。点“JSON”查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。</p>
     <table><thead><tr><th>类型</th><th>级别</th><th>对象</th><th>消息</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function showEventRaw(id){

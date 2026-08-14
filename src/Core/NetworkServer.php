@@ -514,7 +514,8 @@ class NetworkServer
             $bandwidth = (int) $m[2] * 1000;
         }
         $ts = (int) ($data['received_at'] ?? time());
-        $isoTs = gmdate('Y-m-d\TH:i:s.v\Z', $ts);
+        // 直接给 MySQL DATETIME 兼容格式（用户的接收端 received_at 列为 DATETIME，不认 ISO 8601 的 T/Z）
+        $recvAt = gmdate('Y-m-d H:i:s', $ts);
 
         $telemetry = [];
         foreach (['battery', 'margin', 'latitude', 'longitude', 'altitude'] as $k) {
@@ -530,8 +531,9 @@ class NetworkServer
                 'dev_addr'        => $data['dev_addr'],
                 'application_ids' => ['application_id' => $app['name'] ?: ('app-' . $appId)],
             ],
-            'received_at' => $isoTs,
+            'received_at' => $recvAt,
             'uplink_message' => [
+                'received_at'     => $recvAt,
                 'f_port'          => (int) ($data['port'] ?? 0),
                 'f_cnt'           => (int) ($data['fcnt'] ?? 0),
                 'frm_payload'     => $data['frm_payload'] ?? '',
@@ -543,7 +545,7 @@ class NetworkServer
                         'rssi'         => (int) ($data['rssi'] ?? 0),
                         'channel_rssi' => (int) ($data['rssi'] ?? 0),
                         'snr'          => (float) ($data['snr'] ?? 0),
-                        'received_at'  => $isoTs,
+                        'received_at'  => $recvAt,
                     ],
                 ],
                 'settings' => [
@@ -556,25 +558,41 @@ class NetworkServer
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
 
         $transport = $scheme === 'https' ? 'ssl' : 'tcp';
+        // 阻塞连接（带超时）：异步连接 + 立即 fclose 会在握手未完成时丢弃请求，导致对端收不到 POST
         $fp = @stream_socket_client(
             "$transport://$host:$port",
             $errno,
             $errstr,
-            1.0,
-            STREAM_CLIENT_ASYNC_CONNECT
+            2.0
         );
         if (!$fp) {
-            $this->log("CALLBACK: connect failed app#$appId ($errstr)");
+            $this->log("CALLBACK: connect failed app#$appId ($errstr #$errno) url=$url");
             return;
         }
-        stream_set_blocking($fp, false);
         $req = "POST $path HTTP/1.1\r\n"
             . "Host: $host\r\n"
             . "Content-Type: application/json\r\n"
             . "Content-Length: " . strlen($body) . "\r\n"
             . "Connection: close\r\n\r\n"
             . $body;
-        @fwrite($fp, $req);
+        $len = strlen($req);
+        $written = 0;
+        while ($written < $len) {
+            $n = @fwrite($fp, substr($req, $written));
+            if ($n === false || $n === 0) {
+                break;
+            }
+            $written += $n;
+        }
+        if ($written < $len) {
+            $this->log("CALLBACK: write incomplete app#$appId (wrote $written/$len) url=$url");
+        } else {
+            // 读一点响应用于确认对端接受了（最多等 2s，避免阻塞太久）
+            stream_set_timeout($fp, 2);
+            $resp = @fread($fp, 512);
+            $status = $resp ? trim(strtok($resp, "\r\n")) : 'no-response';
+            $this->log("CALLBACK: POST app#$appId -> $status url=$url");
+        }
         @fclose($fp);
     }
 
