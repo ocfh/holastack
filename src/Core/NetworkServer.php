@@ -19,6 +19,7 @@ class NetworkServer
     private $gateways = [];   // gwId(hex) => ['addr'=>peer, 'name'=>.., 'pending'=>[]]
     private $running = true;
     private $lastDlCheck = 0; // 周期下行调度节流时间戳
+    private $joinBuf = [];    // Join-Request 去重缓冲：micKey => 下行候选（合并镜像频率等重复副本）
 
     public function __construct(int $port = ELW_GW_UDP_PORT)
     {
@@ -45,6 +46,8 @@ class NetworkServer
                 $this->lastDlCheck = time();
                 $this->processScheduledDownlinks();
             }
+            // Join-Request 去重缓冲刷新（按 MIC 合并重复副本后统一下发，避免网关 COLLISION_PACKET）
+            $this->flushJoinBuffer();
             $write = $except = null;
             $n = @stream_select($read, $write, $except, 1);
             if ($n === false) {
@@ -54,7 +57,7 @@ class NetworkServer
                 $peer = '';
                 $data = stream_socket_recvfrom($this->sock, 65535, 0, $peer);
                 if ($data !== false && $data !== '') {
-                    $this->handlePacket($data, $peer);
+                    $this->handlePacket($data, $peer, microtime(true));
                 }
             }
         }
@@ -67,40 +70,50 @@ class NetworkServer
 
     // ---------------- 包分发 ----------------
 
-    private function handlePacket(string $data, string $peer): void
+    private function handlePacket(string $data, string $peer, float $rxTime = 0): void
     {
         if (strlen($data) < 4) {
             return;
         }
-        $version = ord($data[0]);
+        $version = $data[0]; // 原始单字节（如 "\x02"），必须保留字节形式用于回显，不能 ord() 成 int（否则拼接会变成 ASCII '2'）
         $token = substr($data, 1, 2);
         $id = ord($data[3]);
         $gwEui = (strlen($data) >= 12) ? bin2hex(substr($data, 4, 8)) : '';
+        // 记住网关自身使用的协议版本（多为 0x02），下行回包必须原样回显，否则部分包转发器会因版本不匹配静默丢弃
+        if ($gwEui !== '') {
+            $this->gateways[$gwEui] = $this->gateways[$gwEui] ?? [];
+            $this->gateways[$gwEui]['version'] = $version;
+        }
 
         switch ($id) {
             case 0x00: // PUSH_DATA
-                $this->sendAck(0x01, $token, $peer);
+                $this->sendAck(0x01, $token, $peer, $gwEui);
                 $json = json_decode(substr($data, 12), true);
                 if (is_array($json)) {
-                    $this->handlePush($json, $peer, $gwEui);
+                    $this->handlePush($json, $peer, $gwEui, $rxTime);
                 }
                 break;
             case 0x02: // PULL_DATA
-                $this->sendAck(0x04, $token, $peer);
+                $this->sendAck(0x04, $token, $peer, $gwEui);
                 $this->registerGateway($peer, $gwEui);
+                // 记下本次 PULL_DATA 的 token，作为 PULL_RESP 的关联 ID（网关只原样回显到 TX_ACK，并不据此校验）
+                $this->gateways[$gwEui]['pull_token'] = $token;
                 $this->flushDownlink($gwEui, $peer);
                 break;
             case 0x05: // TX_ACK
-                // 可选：记录网关下行发射结果
+                $ackJson = json_decode(substr($data, 12), true);
+                $ackStatus = $ackJson['txpk_ack']['error'] ?? 'ok';
+                $this->log("TX_ACK gw=$gwEui status=$ackStatus");
                 break;
             default:
                 break;
         }
     }
 
-    private function sendAck(int $id, string $token, string $peer): void
+    private function sendAck(int $id, string $token, string $peer, string $gwEui = ''): void
     {
-        $pkt = "\x01" . $token . chr($id);
+        $ver = ($gwEui !== '' && isset($this->gateways[$gwEui]['version'])) ? $this->gateways[$gwEui]['version'] : "\x01";
+        $pkt = $ver . $token . chr($id);
         @stream_socket_sendto($this->sock, $pkt, 0, $peer);
     }
 
@@ -133,15 +146,17 @@ class NetworkServer
 
     // ---------------- PUSH_DATA 处理 ----------------
 
-    private function handlePush(array $json, string $peer, string $gwEui): void
+    private function handlePush(array $json, string $peer, string $gwEui, float $rxTime = 0): void
     {
-        if (isset($json['stat'])) {
-            $this->saveGatewayStat($gwEui, $json['stat']);
-        }
+        // 先处理上行帧（含 Join-Accept 下发），再写网关状态统计。
+        // 顺序很重要：Join-Accept 有 5s 窗口限制，DB 操作不能阻塞在前面。
         if (isset($json['rxpk']) && is_array($json['rxpk'])) {
             foreach ($json['rxpk'] as $rxpk) {
-                $this->processUplink($rxpk, $peer, $gwEui);
+                $this->processUplink($rxpk, $peer, $gwEui, $rxTime);
             }
+        }
+        if (isset($json['stat'])) {
+            $this->saveGatewayStat($gwEui, $json['stat']);
         }
     }
 
@@ -155,7 +170,7 @@ class NetworkServer
 
     // ---------------- 上行处理 ----------------
 
-    private function processUplink(array $rxpk, string $peer, string $gwEui): void
+    private function processUplink(array $rxpk, string $peer, string $gwEui, float $rxTime = 0): void
     {
         if (empty($rxpk['data'])) {
             return;
@@ -172,7 +187,8 @@ class NetworkServer
         $lsnr = isset($rxpk['lsnr']) ? (float) $rxpk['lsnr'] : 0;
 
         if ($mtype === Frame::MTYPE_JOIN_REQUEST) {
-            $this->handleJoinRequest($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer);
+            $this->log(sprintf("RX JoinRequest: gw=%s tmst=%d freq=%.3f datr=%s rssi=%d snr=%.1f (mtype=%d)", $gwEui, $tmst, $freq, $datr, $rssi, $lsnr, $mtype));
+            $this->handleJoinRequest($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer, $rxTime);
         } elseif ($mtype === Frame::MTYPE_UNCONFIRMED_UP || $mtype === Frame::MTYPE_CONFIRMED_UP) {
             $this->handleDataUp($phy, $mtype, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer);
         } else {
@@ -182,58 +198,74 @@ class NetworkServer
 
     // ---------------- OTAA Join ----------------
 
-    private function handleJoinRequest(string $phy, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, string $peer): void
+    private function handleJoinRequest(string $phy, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, string $peer, float $rxTime = 0): void
     {
+        $t0 = microtime(true);
         $jr = Frame::parseJoinRequest($phy);
         $devEui = bin2hex($jr['dev_eui']);
         $appEui = bin2hex($jr['app_eui']);
+        $t1 = microtime(true);
         $device = Database::fetch(
             "SELECT * FROM devices WHERE dev_eui=? AND activation='OTAA'",
             [$devEui]
         );
+        $t2 = microtime(true);
         if (!$device) {
             // 兼容部分模组以「反字节序」发送 DevEUI（常见 AT 指令模组）：
-            // 空中实际字节是设备标签的反序，再试一次反序值，使按标签（规范序）注册也能入网。
             $revDevEui = bin2hex(strrev($jr['dev_eui']));
             $device = Database::fetch(
                 "SELECT * FROM devices WHERE dev_eui=? AND activation='OTAA'",
                 [$revDevEui]
             );
         }
+        $t3 = microtime(true);
         if (!$device) {
             $this->log("JOIN: unknown device devEUI=$devEui appEUI=$appEUI");
             $this->logEvent('join', 'error', "入网请求：未知设备 devEUI=$devEui appEUI=$appEui", $gwEui);
             return;
         }
         $appKey = hex2bin($device['app_key']);
+        $t4 = microtime(true);
         if (!LoRaWANCrypto::verifyJoinRequestMIC($appKey, $phy)) {
             $this->log("JOIN: MIC failed for devEUI=$devEui");
             $this->logEvent('join', 'error', "入网请求：MIC 校验失败 devEUI=$devEui", $gwEui, $device['id'], $device['app_id']);
             return;
         }
+        $t5 = microtime(true);
 
-        // 生成会话
-        $appNonce = random_bytes(3);
-        $netId = random_bytes(3);
-        $devAddr = $this->generateDevAddr();
-        [$nwkSKey, $appSKey] = LoRaWANCrypto::computeSessionKeys($appKey, $appNonce, $netId, $jr['dev_nonce']);
+        // 去重键：Join-Request MIC（同一条物理包 → 同 MIC；网关镜像频率副本会被合并为一次下发）
+        $micKey = bin2hex(LoRaWANCrypto::joinRequestMIC($appKey, substr($phy, 0, -4)));
 
-        $dlSettings = 0x00; // RX1DRoffset=0, RX2DR=0
-        $rxDelay = 0x01;    // 1s（实际表使用 region 默认，这里标记由设备侧生效）
-        $region = Region::get($device['region'] ?: ELW_DEFAULT_REGION);
-        // 让设备使用区域默认 RX2：DLSettings 的 RX2 DataRate 由 NS 配置，这里用 0
-        $joinAccept = Frame::buildJoinAccept($appKey, $appNonce, $netId, $devAddr, $dlSettings, $rxDelay, null);
+        if (!isset($this->joinBuf[$micKey])) {
+            // 首次出现：生成会话（只生成一次，避免重复副本生成不同的 devAddr / 会话密钥）
+            $appNonce = random_bytes(3);
+            $netId = random_bytes(3);
+            $devAddr = $this->generateDevAddr();
+            [$nwkSKey, $appSKey] = LoRaWANCrypto::computeSessionKeys($appKey, $appNonce, $netId, $jr['dev_nonce']);
+            $dlSettings = 0x00; // RX1DRoffset=0, RX2DR=0
+            $rxDelay = 0x01;    // 1s（实际表使用 region 默认，这里标记由设备侧生效）
+            $region = Region::get($device['region'] ?: ELW_DEFAULT_REGION);
+            $joinAccept = Frame::buildJoinAccept($appKey, $appNonce, $netId, $devAddr, $dlSettings, $rxDelay, null);
+            $t6 = microtime(true);
 
-        // 保存会话
-        Database::execute(
-            "UPDATE devices SET dev_addr=?, nwk_s_key=?, app_s_key=?, status='active', fcnt_up=0, fcnt_down=0, join_eui=?, last_gw_id=? WHERE id=?",
-            [bin2hex($devAddr), bin2hex($nwkSKey), bin2hex($appSKey), $appEui, $gwEui, $device['id']]
-        );
-        $this->log("JOIN OK devEUI=$devEui -> devAddr=" . bin2hex($devAddr));
-        $this->logEvent('join', 'info', "入网成功 devEUI=$devEui -> devAddr=" . bin2hex($devAddr), $gwEui, $device['id'], $device['app_id']);
+            // 保存会话（先建会话，下行在去重缓冲后统一下发，不影响 5s 窗口）
+            Database::execute(
+                "UPDATE devices SET dev_addr=?, nwk_s_key=?, app_s_key=?, status='active', fcnt_up=0, fcnt_down=0, join_eui=?, last_gw_id=? WHERE id=?",
+                [bin2hex($devAddr), bin2hex($nwkSKey), bin2hex($appSKey), $appEui, $gwEui, $device['id']]
+            );
+            $this->log("JOIN OK devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . sprintf(" (parse=%.0fms db_q=%.0fms mic=%.0fms key=%.0fms ja=%.0fms total=%.0fms)",
+                ($t1-$t0)*1000, ($t3-$t2)*1000, ($t5-$t4)*1000, ($t6-$t5)*1000, 0, (microtime(true)-$t6)*1000));
+            $this->logEvent('join', 'info', "入网成功 devEUI=$devEui -> devAddr=" . bin2hex($devAddr), $gwEui, $device['id'], $device['app_id']);
+        } else {
+            // 重复副本（如 SX130x 镜像频率）：沿用首份会话，仅更新“最强信号”副本用于下行频点选择
+            $region = $this->joinBuf[$micKey]['region'];
+            $joinAccept = $this->joinBuf[$micKey]['joinAccept'];
+            $t6 = $t5;
+        }
 
-        // 下发 Join Accept（RX1 窗口：上行结束 + JOIN_ACCEPT_DELAY1）
-        $this->enqueueDownlink($gwEui, $peer, $joinAccept, $tmst + $this->uplinkAirtimeUs($phy, $datr) + $region->getJoinAcceptDelay1() * 1000, $freq, $datr, false);
+        // 缓冲下行：按 MIC 去重，约 80ms 后统一下发（取 RSSI 最强副本的频点/时隙），
+        // 避免同一物理包被网关重复上送（真实信号 + 镜像频率）导致 NS 调度两次下行 → 网关 COLLISION_PACKET。
+        $this->bufferJoinDownlink($micKey, $region, $joinAccept, $tmst, $freq, $datr, $rssi, $gwEui, $peer);
     }
 
     private function generateDevAddr(): string
@@ -301,10 +333,11 @@ class NetworkServer
         if ($mtype === Frame::MTYPE_CONFIRMED_UP) {
             $downPhy = Frame::buildDataDown($nwkSKey, $appSKey, 1, $p['dev_addr'], (int) $device['fcnt_down'] + 1, false, true, null, '');
             $this->bumpDownFCnt($device['id']);
+            // rxpk.tmst = end of reception, so dl_tmst = tmst + delay (no airtime)
             $this->enqueueDownlink($gwEui, $peer, $downPhy, $tmst + $region->getReceiveDelay1() * 1000, $freq, $datr, false);
         }
 
-        // 应用层待发下行
+        // 应用层待发下行（rxpk.tmst = end of reception, no airtime needed）
         $this->dispatchPendingAppDownlinks($device, $region, $tmst, $freq, $datr, $gwEui, $peer, $p['dev_addr'], $nwkSKey, $appSKey);
     }
 
@@ -415,30 +448,163 @@ class NetworkServer
     // ---------------- 下行入队 / 下发 ----------------
 
     /**
-     * 估算上行帧的空口时长（µs），用于把下行窗口对齐到「设备发送结束 + 延迟」。
-     * Semtech UDP 的 rxpk.tmst 是上行帧起始时刻，而设备 RX1/RX2 窗口从「发送结束」起算，
-     * 因此下发 tmst 必须加上本帧空口时长，否则下行会比设备 RX 窗口早一帧时长 → 设备收不到
-     * （模拟器忽略 tmst 故测不出，真实网关会因此丢 Join-Accept / 下行）。公式参照 SX1276 数据手册
-     * （显式头、CRC 开、CR=1）。
+     * 估算上行帧的空口时长（µs）。
+     *
+     * ⚠️ 此函数目前保留供参考/调试使用，下行调度【不再调用】它。
+     *
+     * Semtech UDP 协议 v1.7 明确规定：rxpk.tmst = "finished receiving"（接收结束时刻），
+     * 不是帧起始时刻。因此设备 RX1/RX2 窗口打开时刻 = rxpk.tmst + delay，
+     * 下行 txpk.tmst = rxpk.tmst + delay，【不需要加 airtime】。
+     *
+     * 旧代码错误地认为 tmst 是帧起始时刻，加了 airtime，导致下行晚发 1.483s（SF12），
+     * RX1 和 RX2 窗口全部错过。墙钟交叉验证确认：
+     *   ul_tmst + 5s = 73302617 -> 17:19:15.635 ≈ 设备日志 RX_1 at 17:19:15.657 ✓
+     *   ul_tmst + 6s = 74302617 -> 17:19:16.635 ≈ 设备日志 RX_2 at 17:19:16.655 ✓
+     *
+     * 公式照搬固件 RadioGetLoRaTimeOnAirNumerator (radio.c:1228) + RadioTimeOnAir (radio.c:1292)，
+     * 用于诊断/验证设备空口时长，不参与下行时序计算。
+     *
+     * LoRaWAN 常量取自固件 Radio.SetTxConfig 调用(如 RegionEU868.c:657)：
+     *   coderate = 1 (4/5)、preambleLen = 8、fixLen = false(显式头)、crcOn = true。
      */
-    private function uplinkAirtimeUs(string $phy, string $datr): int
+    private function uplinkAirtimeUs(string $phy, $datr, Region $region): int
     {
-        if (!preg_match('/SF(\d+)BW(\d+)/i', $datr, $m)) {
-            return 0;
+        $sf = 0;
+        $bw = 0;
+        if (preg_match('/SF(\d+)BW(\d+)/i', (string) $datr, $m)) {
+            $sf = (int) $m[1];
+            $bw = (int) $m[2] * 1000; // Hz
+        } elseif (is_numeric($datr)) {
+            $d = $region->getDataRate((int) $datr);
+            $sf = $d['sf'];
+            $bw = $d['bw'] * 1000;
         }
-        $sf = (int) $m[1];
-        $bw = (int) $m[2] * 1000; // Hz
-        if ($bw <= 0) {
-            return 0;
+        if ($sf <= 0 || $bw <= 0) {
+            // 解析失败：回退 SF12BW125（DR0），并告警
+            $this->log("WARN uplinkAirtimeUs: 无法解析 datr=" . var_export($datr, true) . "，回退 SF12BW125（下行时序可能为最保守估计）");
+            $sf = 12;
+            $bw = 125000;
         }
-        $pl = strlen($phy);
-        $de = ($sf >= 11 && $bw === 125000) ? 1 : 0; // SF11/12 @125k 低速率优化
-        $ts = (2 ** $sf) / $bw; // 每符号秒数
-        $num = 8 * $pl - 4 * $sf + 44 - 20 * $de;
-        $den = 4 * ($sf - 2 * $de);
-        $nPayload = 8 + (int) ceil(max(0, $num) / (float) $den);
-        $symbols = $nPayload + 8 + 4.25; // 载荷符号 + 前导(8 + 4.25)
-        return (int) round($symbols * $ts * 1_000_000);
+        $pl = strlen($phy);                 // PHYPayload 字节数
+        // —— 以下完全照搬固件 RadioGetLoRaTimeOnAirNumerator / RadioTimeOnAir ——
+        $coderate = 1;                      // LoRaWAN 4/5
+        $preambleLen = 8;                   // LoRaWAN 标准前导 8 符号
+        $fixLen = false;                    // 显式头(IH=0)
+        $crcOn = true;                      // 开 CRC
+        $crDenom = $coderate + 4;          // 5
+        $lowDatareOptimize = (($bw === 125000 && ($sf === 11 || $sf === 12)) || ($bw === 250000 && $sf === 12));
+        $ceilNumerator = ($pl << 3) + ($crcOn ? 16 : 0) - (4 * $sf) + ($fixLen ? 0 : 20);
+        if ($sf <= 6) {
+            $ceilDenominator = 4 * $sf;
+        } else {
+            $ceilNumerator += 8;
+            $ceilDenominator = $lowDatareOptimize ? 4 * ($sf - 2) : 4 * $sf;
+        }
+        if ($ceilNumerator < 0) {
+            $ceilNumerator = 0;
+        }
+        $intermediate = (int) floor(($ceilNumerator + $ceilDenominator - 1) / $ceilDenominator) * $crDenom + $preambleLen + 12;
+        if ($sf <= 6) {
+            $intermediate += 2;
+        }
+        // RadioGetLoRaTimeOnAirNumerator 返回 (4*intermediate+1) * 2^(sf-2)
+        $numerator = (4 * $intermediate + 1) * (1 << ($sf - 2));
+        // RadioTimeOnAir: 1000*numerator / bwHz → 毫秒；再转微秒
+        $toaMs = (int) ceil((1000 * $numerator) / $bw);
+        return $toaMs * 1000;
+    }
+
+    /**
+     * Join-Request 下行去重缓冲。
+     * - 同一 MIC（同一条物理包）只生成一次会话，重复副本合并。
+     * - 记录 RSSI 最强副本，用于决定下行频点/时隙（绕过 SX130x 镜像频率误调度）。
+     * - 实际下发由 flushJoinBuffer() 在 ~80ms 防抖后统一执行（合并 6µs 内的镜像副本）。
+     */
+    private function bufferJoinDownlink(string $micKey, Region $region, string $joinAccept, int $tmst, float $freq, string $datr, int $rssi, string $gwEui, string $peer): void
+    {
+        if (!isset($this->joinBuf[$micKey])) {
+            $this->joinBuf[$micKey] = [
+                'region'     => $region,
+                'joinAccept' => $joinAccept,
+                'gwEui'      => $gwEui,
+                'peer'       => $peer,
+                'bestRssi'   => $rssi,
+                'bestTmst'   => $tmst,
+                'bestFreq'   => $freq,
+                'bestDatr'   => $datr,
+                'firstSeen'  => microtime(true),
+                'scheduled'  => false,
+            ];
+        } else {
+            $e = &$this->joinBuf[$micKey];
+            // 取 RSSI 更强（数值更大）的副本决定下行频点/时隙
+            if ($rssi > $e['bestRssi']) {
+                $e['bestRssi'] = $rssi;
+                $e['bestTmst'] = $tmst;
+                $e['bestFreq'] = $freq;
+                $e['bestDatr'] = $datr;
+            }
+        }
+    }
+
+    /**
+     * 刷新 Join-Request 去重缓冲：对停留 >= 80ms 且尚未下发的条目，按 RSSI 最强副本统一下发一次 RX1+RX2。
+     * 80ms 远小于 JOIN_ACCEPT_DELAY1(5s)，不影响设备接收窗口。
+     */
+    private function flushJoinBuffer(): void
+    {
+        $now = microtime(true);
+        foreach ($this->joinBuf as $micKey => $e) {
+            if ($e['scheduled']) {
+                if ($now - $e['firstSeen'] > 10) {
+                    unset($this->joinBuf[$micKey]); // 已下发，过期清理
+                }
+                continue;
+            }
+            if ($now - $e['firstSeen'] < 0.08) {
+                continue; // 仍在收集重复副本（镜像频率等），稍后再下发
+            }
+            $region = $e['region'];
+            $joinAccept = $e['joinAccept'];
+            $gwEui = $e['gwEui'];
+            $peer = $e['peer'];
+            $tmst = $e['bestTmst'];
+            $freq = $e['bestFreq'];
+            $datr = $e['bestDatr'];
+
+            // RX1：设备在其上行频点监听（取 RSSI 最强副本的频点，避开镜像频率）
+            $dlTmstRx1 = $tmst + $region->getJoinAcceptDelay1() * 1000;
+            $this->log(sprintf(
+                "JOIN DOWNLINK RX1: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f RX1datr=%s (dedup rssi=%d)",
+                $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $freq, $datr, $e['bestRssi']
+            ));
+            $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx1, $freq, $datr, false);
+
+            // RX2 fallback：固定频点 869.525 / SF12BW125
+            // 关键：SX130x 仅单 TX 路径。若 RX1 下行空口时长 ≥ RX1→RX2 间隔(1s)，RX2(tmst+6s) 会与
+            // RX1 发射尾部(约 tmst+5s+airtime)重叠，网关虽把 RX2 判 COLLISION_PACKET 不发射，但重叠调度会
+            // 破坏 RX1 尾部（含 MIC 末 4 字节）→ 设备收到 RX1 但 MIC 校验失败 → JOIN FAILED。
+            // 因此下行空口 ≥ 间隔时只发 RX1（设备在主窗口即入网，RX2 为冗余兜底，跳过不影响）。
+            $dlGapUs = ($region->getJoinAcceptDelay2() - $region->getJoinAcceptDelay1()) * 1000; // RX1→RX2 间隔：延时为 ms，转 µs = (6000-5000)*1000 = 1,000,000 µs
+            $jaAirtimeUs = $this->uplinkAirtimeUs($joinAccept, $datr, $region);
+            if ($jaAirtimeUs > $dlGapUs - 20000) {
+                $this->log(sprintf(
+                    "JOIN DOWNLINK RX2: SKIPPED (airtime=%.0fus >= gap=%.0fus, 避免与 RX1 发射尾部冲突导致 MIC 损坏)",
+                    $jaAirtimeUs, $dlGapUs
+                ));
+            } else {
+                $dlTmstRx2 = $tmst + $region->getJoinAcceptDelay2() * 1000;
+                $rx2Freq = $region->getRx2Frequency() / 1e6;
+                $rx2Datr = $region->drToDatr($region->getRx2DataRate());
+                $this->log(sprintf(
+                    "JOIN DOWNLINK RX2: dl_tmst_rx2=%d RX2freq=%.3f RX2datr=%s",
+                    $dlTmstRx2, $rx2Freq, $rx2Datr
+                ));
+                $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx2, $rx2Freq, $rx2Datr, false);
+            }
+
+            $this->joinBuf[$micKey]['scheduled'] = true;
+        }
     }
 
     private function enqueueDownlink(string $gwEui, string $peer, string $phy, int $tmst, float $freq, string $datr, bool $imme): void
@@ -470,23 +636,32 @@ class NetworkServer
         foreach ($this->gateways[$gwEui]['pending'] as $item) {
             $txpk = [
                 'imme' => $item['imme'],
-                'tmst' => $item['imme'] ? 0 : $item['tmst'],
+                'tmst' => $item['imme'] ? 0 : ($item['tmst'] & 0xFFFFFFFF),
                 'freq' => $item['freq'],
                 'rfch' => 0,
-                'powe' => 14,
+                // 下行功率：与 ChirpStack EU868 get_downlink_tx_power_eirp() 对齐
+                // RX1 频段(863~869.2MHz) = 16dBm；RX2 频段(869.4~869.65MHz) = 29dBm
+                'powe' => ($item['freq'] >= 869400000 && $item['freq'] <= 869650000) ? 29 : 16,
                 'modu' => 'LORA',
                 'datr' => $item['datr'],
                 'codr' => '4/5',
-                'fdev' => 0,
+                'ipol' => true,   // LoRaWAN 下行必须用反转 IQ（与 TTN/ChirpStack 一致）
                 'size' => strlen($item['phy']),
-                'ncrc' => true,
                 'data' => base64_encode($item['phy']),
             ];
             $json = json_encode(['txpk' => $txpk]);
-            // Semtech UDP PULL_RESP 协议：version(0x01) + token(0x0000) + id(0x03) + JSON
-            $pkt = "\x01" . "\x00\x00" . "\x03" . $json;
+            // Semtech UDP PULL_RESP 协议：version + token + id(0x03) + JSON
+            // ★ 关键：version 必须回显网关自身使用的协议版本（现代 lora_pkt_fwd 为 0x02，见其 PROTOCOL_VERSION）。
+            // 若写死 0x01，包转发器会在 parse_pull_resp 里因「协议版本不匹配」直接丢弃下行：网关不发射、不回 TX_ACK，
+            // 设备表现为 JOIN FAILED。ChirpStack 正常正是因为它用了 0x02。token 仅作关联 ID，网关不校验其值。
+            $ver = $this->gateways[$gwEui]['version'] ?? "\x01";
+            $tok = $this->gateways[$gwEui]['pull_token'] ?? "\x00\x00";
+            $pkt = $ver . $tok . "\x03" . $json;
             @stream_socket_sendto($this->sock, $pkt, 0, $peer);
-            $this->log("PULL_RESP sent to $gwEui (tmst={$item['tmst']}, " . bin2hex($item['phy']) . ")");
+            $this->log(sprintf(
+                "PULL_RESP sent gw=%s peer=%s tmst=%d freq=%.3f datr=%s imme=%d phy=%s txpk=%s",
+                $gwEui, $peer, $item['tmst'], $item['freq'], $item['datr'], $item['imme'] ? 1 : 0, bin2hex($item['phy']), $json
+            ));
         }
         $this->gateways[$gwEui]['pending'] = [];
     }
@@ -495,7 +670,7 @@ class NetworkServer
 
     private function log(string $msg): void
     {
-        $line = '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";
+        $line = '[' . date('Y-m-d H:i:s') . '.' . sprintf('%03d', (int)(microtime(true) * 1000) % 1000) . '] ' . $msg . "\n";
         fwrite(STDOUT, $line);
         if (is_dir(ELW_LOG_DIR)) {
             file_put_contents(ELW_LOG_DIR . '/ns.log', $line, FILE_APPEND | LOCK_EX);

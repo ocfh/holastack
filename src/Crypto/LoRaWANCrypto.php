@@ -29,22 +29,33 @@ class LoRaWANCrypto
         return substr(AES::cmac($appKey, $plaintextWithoutMic), 0, 4);
     }
 
-    /** 解密 Join Accept 负载（AES-128 ECB，逐 16 字节块）。 */
+    /**
+     * 解密 Join Accept 负载（设备端收到后解密，或离线验证）。
+     * ★ 与 encryptJoinAccept 互逆：NS 用 ecbDecrypt 加密，设备用 ecbEncrypt 解密。
+     *   固件 soft-se.c:SecureElementProcessJoinAccept 调 SecureElementAesEncrypt (= lorawan_aes_encrypt = AES encrypt)。
+     */
     public static function decryptJoinAccept(string $appKey, string $encrypted): string
     {
         $out = '';
         for ($i = 0; $i < strlen($encrypted); $i += 16) {
-            $out .= AES::ecbDecrypt($appKey, substr($encrypted, $i, 16));
+            $out .= AES::ecbEncrypt($appKey, substr($encrypted, $i, 16));
         }
         return $out;
     }
 
-    /** 加密 Join Accept 负载（服务器下发前）。 */
+    /**
+     * 加密 Join Accept 负载（服务器下发前）。
+     * ★ LoRaWAN 规范规定：NS 用 AES decrypt 加密，设备用 AES encrypt 解密（互逆）。
+     *   固件 soft-se.c:SecureElementProcessJoinAccept 调 SecureElementAesEncrypt -> lorawan_aes_encrypt。
+     *   ChirpStack phy_payload.rs:encrypt_join_accept_payload 用 cipher.decrypt_block。
+     *   holastack 此前用 ecbEncrypt（与设备同方向），导致设备 encrypt(encrypt(plaintext)) ≠ plaintext，MIC 必败。
+     *   修正：改用 ecbDecrypt（AES decrypt）加密，与 ChirpStack / 固件一致。
+     */
     public static function encryptJoinAccept(string $appKey, string $plaintext): string
     {
         $out = '';
         for ($i = 0; $i < strlen($plaintext); $i += 16) {
-            $out .= AES::ecbEncrypt($appKey, substr($plaintext, $i, 16));
+            $out .= AES::ecbDecrypt($appKey, substr($plaintext, $i, 16));
         }
         return $out;
     }
