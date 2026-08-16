@@ -288,8 +288,10 @@ function renderPage(): string
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
   header{display:flex;align-items:center;gap:18px;padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--line)}
   header h1{font-size:16px;margin:0;color:var(--acc)}
+  nav{display:flex;flex-wrap:wrap;gap:4px}
   nav a{color:var(--mut);text-decoration:none;padding:6px 12px;border-radius:6px}
   nav a.active,nav a:hover{color:var(--txt);background:#243049}
+  .hamburger{display:none;border:1px solid var(--line);background:#0d1320;color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer}
   .spacer{flex:1}
   .who{color:var(--mut);font-size:12px}
   main{padding:22px;max-width:1100px;margin:0 auto}
@@ -335,18 +337,37 @@ function renderPage(): string
   .log-who{color:var(--mut);font-size:11px} .log-time{color:var(--mut);font-size:11px;margin-left:auto}
   .log-msg{margin-top:6px;font-size:13px;color:var(--txt);word-break:break-word;white-space:pre-wrap}
   .log-empty{padding:20px;text-align:center;color:var(--mut);font-size:13px}
-  @media (max-width:760px){.ring-card{flex-direction:column;text-align:center}.ring-legend{width:100%}.msg-bar{flex-direction:column;align-items:flex-start;gap:12px}.msg-split{margin-left:0}.log-cols{flex-direction:column}}
+  @media (max-width:760px){
+    .ring-card{flex-direction:column;text-align:center}.ring-legend{width:100%}.msg-bar{flex-direction:column;align-items:flex-start;gap:12px}.msg-split{margin-left:0}.log-cols{flex-direction:column}
+    /* 移动端：导航折叠为汉堡菜单 */
+    .hamburger{display:block}
+    nav#mainNav{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;flex-direction:column;gap:2px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(0,0,0,.4)}
+    nav#mainNav.open{display:flex}
+    nav#mainNav a{padding:11px 12px;border-radius:8px}
+    header{gap:12px;position:relative}
+    .who{display:none}
+    /* 控件与小屏堆叠 */
+    .row{align-items:stretch}
+    .row>div, .row>div[style*="flex:0 0"]{flex:1 1 100%!important;max-width:100%}
+    .row select, .row input{width:100%}
+    /* 表格横向滚动，避免溢出 */
+    table{display:block;overflow-x:auto;white-space:nowrap;width:100%}
+    main{padding:14px}
+    .loracalc .grid{grid-template-columns:1fr}
+  }
 </style>
 </head>
 <body>
 <header class="hidden" id="topbar">
   <h1>holastack</h1>
-  <nav>
+  <button class="hamburger" id="navToggle" aria-label="菜单" onclick="toggleNav()">☰</button>
+  <nav id="mainNav">
     <a href="#dashboard" class="nav" data-v="dashboard">概览</a>
     <a href="#applications" class="nav" data-v="applications">应用</a>
     <a href="#devices" class="nav" data-v="devices">设备</a>
     <a href="#gateways" class="nav" data-v="gateways">网关</a>
     <a href="#uplinks" class="nav" data-v="uplinks">上行</a>
+    <a href="#downlinks" class="nav" data-v="downlinks">下行</a>
     <a href="#events" class="nav" data-v="events">日志</a>
     <a href="#device-profiles" class="nav" data-v="device-profiles">设备模板</a>
     <a href="#tenants" class="nav" data-v="tenants">租户</a>
@@ -377,7 +398,7 @@ function renderPage(): string
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 
 <script>
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, mcDetail:null};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, mcDetail:null};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -446,6 +467,7 @@ function nav(v){
   if (v==='devices') return viewDevices();
   if (v==='gateways') return viewGateways();
   if (v==='uplinks') return viewUplinks();
+  if (v==='downlinks') return viewDownlinks();
   if (v==='events') return viewEvents();
   if (v==='device-profiles') return viewDeviceProfiles();
   if (v==='tenants') return viewTenants();
@@ -455,10 +477,12 @@ function nav(v){
   if (v==='users') return viewUsers();
   if (v==='loracalc') return viewLoraCalc();
 }
-document.querySelectorAll('.nav').forEach(a=>a.onclick=()=>nav(a.dataset.v));
+document.querySelectorAll('.nav').forEach(a=>a.onclick=()=>{ nav(a.dataset.v); closeNav(); });
+function toggleNav(){ document.getElementById('mainNav').classList.toggle('open'); }
+function closeNav(){ document.getElementById('mainNav').classList.remove('open'); }
 
 // 自动刷新：只读的实时视图（概览/网关/上行/日志）每 5 秒刷新；模态框打开时暂停，避免打断编辑
-const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','events'];
+const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','downlinks','events'];
 setInterval(()=>{
   if (document.getElementById('modal').classList.contains('show')) return; // 弹窗打开时暂停
   if (AUTO_REFRESH_VIEWS.includes(state.view)) nav(state.view);
@@ -629,6 +653,81 @@ async function showRaw(id){
   const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
   let j={}; try { j = u.raw_json ? JSON.parse(u.raw_json) : {}; } catch(e){}
   openModal(`<h3>原始 JSON #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+
+// ----------------------- 下行日志模块 -----------------------
+const DL_STATUS = {
+  pending:    {label:'待发送', cls:'pending'},
+  scheduled:  {label:'已调度', cls:'pending'},
+  sent:       {label:'已发送', cls:'ok'},
+  acknowledged:{label:'已确认', cls:'ok'},
+  failed:     {label:'失败',   cls:'err'},
+  timeout:    {label:'超时',   cls:'err'},
+  error:      {label:'错误',   cls:'err'}
+};
+async function viewDownlinks(){
+  const qs = [
+    state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '',
+    state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''
+  ].filter(Boolean).join('&');
+  const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
+  const [dr, ar] = await Promise.all([api('GET','/api/devices'), api('GET','/api/applications')]);
+  const devs = dr.data||[], apps = ar.data||[];
+  state.apps = apps;
+  const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
+  const devName = id => { const d = devs.find(x=>x.id===id); return d ? (d.name+' (#'+id+')') : ('#'+id); };
+  const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.dlDevFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
+  const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.dlAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
+  const rows = state.dls.map(d=>{
+    const st = DL_STATUS[d.status] || {label:d.status||'-', cls:''};
+    const sent = d.sent_at ? new Date(d.sent_at*1000).toLocaleString() : '—';
+    const ack = d.acknowledged_at ? new Date(d.acknowledged_at*1000).toLocaleString() : '—';
+    return `<tr><td>${d.id}</td>
+      <td class="muted"><span class="pill" style="margin:0">${esc(appName(d.app_id))}</span></td>
+      <td class="muted">${esc(devName(d.dev_id))}</td>
+      <td>${d.port}</td><td>${d.confirmed?'✓':'-'}</td>
+      <td><code>${hex(d.payload_hex)}</code></td>
+      <td><span class="tag ${st.cls}">${st.label}</span></td>
+      <td class="muted">${sent}</td><td class="muted">${d.transmissions||0}</td>
+      <td class="muted">${ack}</td>
+      <td><button class="btn ghost" onclick="showDownlinkRaw(${d.id})">JSON</button></td></tr>`;
+  }).join('')||`<tr><td colspan="11" class="muted">暂无下行</td></tr>`;
+  document.getElementById('view').innerHTML = `<h2>下行消息（下发给设备的 LoRa 帧）</h2>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
+      <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;viewDownlinks()">${appOpts}</select></div>
+      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;viewDownlinks()">${devOpts}</select></div>
+      <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';viewDownlinks()">重置</button>
+    </div>
+    <p class="muted">每 5 秒自动刷新。点“JSON”查看下行记录的结构化（格式化）与解析展示（含 payload 解码）。</p>
+    <table><thead><tr><th>ID</th><th>应用</th><th>设备</th><th>FPort</th><th>确认</th><th>负载</th><th>状态</th><th>发送时间</th><th>重传</th><th>确认时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function showDownlinkRaw(id){
+  const d=(state.dls||[]).find(x=>x.id===id); if(!d)return;
+  // 解析 payload_hex -> 字节数组 + 可打印 ASCII
+  let bytes=[], ascii='';
+  const hexStr = (d.payload_hex||'').replace(/\s+/g,'');
+  for (let i=0;i<hexStr.length;i+=2){ const b=parseInt(hexStr.substr(i,2),16); bytes.push(b); ascii += (b>=32&&b<127)?String.fromCharCode(b):'.'; }
+  const parsed = {
+    id: d.id, app_id: d.app_id, dev_id: d.dev_id,
+    port: d.port, confirmed: !!d.confirmed, fcnt: d.fcnt,
+    status: d.status, transmissions: d.transmissions||0,
+    created_at: d.created_at ? new Date(d.created_at*1000).toISOString() : null,
+    sent_at: d.sent_at ? new Date(d.sent_at*1000).toISOString() : null,
+    acknowledged_at: d.acknowledged_at ? new Date(d.acknowledged_at*1000).toISOString() : null,
+    payload_hex: d.payload_hex||'',
+    payload_bytes: bytes,
+    payload_ascii: ascii
+  };
+  const pretty = esc(JSON.stringify(parsed, null, 2));
+  const hexRows = bytes.length ? bytes.map((b,i)=>`<span class="mono">${hexStr.substr(i*2,2).toUpperCase()}</span>`).join(' ') : '(空)';
+  openModal(`<h3>下行 JSON #${id}</h3>
+    <p class="muted" style="margin:4px 0 10px">格式化结构（payload 已解析为字节数组与 ASCII）</p>
+    <pre>${pretty}</pre>
+    <h4 style="margin:16px 0 6px">Payload 十六进制字节</h4>
+    <div class="mono" style="line-height:1.9">${hexRows}</div>
+    <h4 style="margin:14px 0 6px">ASCII</h4>
+    <div class="mono">${esc(ascii)||'(不可打印)'}</div>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
 async function viewEvents(){
