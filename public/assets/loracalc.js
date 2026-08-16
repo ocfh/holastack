@@ -531,6 +531,16 @@
       view.innerHTML = Lc_TEMPLATE;
       Lc_applyRegion('p'); Lc_pSyncN(); Lc_pCalc();
       Lc_lRegionChange(); Lc_lSyncN(); Lc_lCalc();
+      // 实时计算：监听容器内任意输入/下拉变化，按前缀分流到对应计算函数。
+      // 这样改参数即时出结果，无需点击「计算」按钮（按钮仍保留作为手动触发）。
+      const root = view.querySelector('.loracalc');
+      const Lc_onChange = (e) => {
+        const id = (e.target && e.target.id) || '';
+        if (id.charAt(0) === 'p') Lc_pCalc();
+        else if (id.charAt(0) === 'l') Lc_lCalc();
+      };
+      root.addEventListener('input', Lc_onChange);
+      root.addEventListener('change', Lc_onChange);
     };
     // 关键修复：模板内联的 onclick/onchange（onclick="Lc_switchTab('phy')" 等）
     // 在全局作用域执行，而本模块所有函数都封装在 IIFE 内。若不挂到 window，
