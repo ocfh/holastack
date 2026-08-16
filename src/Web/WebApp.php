@@ -4,6 +4,12 @@ namespace holastack\Web;
 use holastack\DB\Database;
 use holastack\Region\Region;
 use holastack\Auth\Auth;
+use holastack\Storage\DeviceProfile;
+use holastack\Storage\Tenant;
+use holastack\Auth\ApiKey;
+use holastack\Integration\Integration;
+use holastack\Core\Multicast;
+use holastack\Core\LoRaWANVersion;
 
 /**
  * Web 管理后台业务逻辑（设备 / 应用 / 网关 / 上行 / 下行 / 用户 / 密码）。
@@ -75,6 +81,9 @@ class WebApp
         if (!in_array(strtoupper($region), Region::supported(), true)) {
             return ['error' => 'unsupported region: ' . $region];
         }
+        $dpId = (int) ($p['device_profile_id'] ?? 0);
+        $dp = DeviceProfile::getOrDefault($dpId);
+        $macVersion = LoRaWANVersion::value($dp['mac_version'] ?? '1.0.3');
         if ($activation === 'OTAA') {
             $appKey = strtolower(preg_replace('/[^0-9a-f]/', '', $p['app_key'] ?? ''));
             if (strlen($appKey) !== 32) {
@@ -84,10 +93,12 @@ class WebApp
             if (strlen($joinEui) !== 16) {
                 return ['error' => 'join_eui must be 16 hex chars'];
             }
+            // 1.1 设备需要 NwkKey（与 AppKey 分离）；缺省回退到 AppKey，保证 1.0.x 存量兼容
+            $nwkKey = strtolower(preg_replace('/[^0-9a-f]/', '', $p['nwk_key'] ?? $appKey));
             Database::execute(
-                "INSERT INTO devices (app_id, name, dev_eui, join_eui, activation, app_key, region, class, status, created_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?)",
-                [$appId, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, 'pending', time()]
+                "INSERT INTO devices (app_id, name, dev_eui, join_eui, activation, app_key, nwk_key, region, class, device_profile_id, mac_version, status, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [$appId, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
             );
         } else { // ABP
             $devAddr = strtolower(preg_replace('/[^0-9a-f]/', '', $p['dev_addr'] ?? ''));
@@ -97,9 +108,9 @@ class WebApp
                 return ['error' => 'ABP requires dev_addr(8), nwk_s_key(32), app_s_key(32) hex'];
             }
             Database::execute(
-                "INSERT INTO devices (app_id, name, dev_eui, dev_addr, activation, nwk_s_key, app_s_key, region, class, status, created_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                [$appId, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, 'active', time()]
+                "INSERT INTO devices (app_id, name, dev_eui, dev_addr, activation, nwk_s_key, app_s_key, region, class, device_profile_id, mac_version, status, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [$appId, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'active', time()]
             );
         }
         return ['id' => Database::lastInsertId()];
@@ -141,13 +152,25 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listDownlinks(?int $devId = null, int $limit = 200): array
+    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200): array
     {
         $limit = (int) $limit;
+        $sql = "SELECT * FROM downlinks";
+        $params = [];
+        $where = [];
         if ($devId) {
-            return Database::fetchAll("SELECT * FROM downlinks WHERE dev_id=? ORDER BY id DESC LIMIT $limit", [$devId]);
+            $where[] = "dev_id=?";
+            $params[] = $devId;
         }
-        return Database::fetchAll("SELECT * FROM downlinks ORDER BY id DESC LIMIT $limit");
+        if ($appId) {
+            $where[] = "app_id=?";
+            $params[] = $appId;
+        }
+        if ($where) {
+            $sql .= " WHERE " . implode(" AND ", $where);
+        }
+        $sql .= " ORDER BY id DESC LIMIT $limit";
+        return Database::fetchAll($sql, $params);
     }
 
     public static function listEvents(?int $devId = null, ?string $gwId = null, int $limit = 200): array
@@ -247,6 +270,14 @@ class WebApp
         $region = $p['region'] ?? $device['region'];
         $setParts = ['name=?', 'class=?', 'region=?'];
         $params = [$name, $class, $region];
+        if (array_key_exists('device_profile_id', $p)) {
+            $setParts[] = 'device_profile_id=?';
+            $params[] = (int) $p['device_profile_id'];
+            // 设备模板决定 MAC 版本（1.0.x / 1.1），切换模板时同步更新 mac_version
+            $dp = DeviceProfile::getOrDefault((int) $p['device_profile_id']);
+            $setParts[] = 'mac_version=?';
+            $params[] = LoRaWANVersion::value($dp['mac_version'] ?? '1.0.3');
+        }
 
         if ($device['activation'] === 'ABP') {
             $devAddr = strtolower(preg_replace('/[^0-9a-f]/', '', $p['dev_addr'] ?? $device['dev_addr']));
@@ -410,14 +441,229 @@ class WebApp
         $ups = Database::fetch("SELECT COUNT(*) c FROM uplinks")['c'];
         $dls = Database::fetch("SELECT COUNT(*) c FROM downlinks")['c'];
         $gwsOnline = Database::fetch("SELECT COUNT(*) c FROM gateways WHERE last_seen >= ?", [time() - self::GW_OFFLINE_TIMEOUT])['c'];
+        // 设备健康分布：在线 = 已激活且在离线超时窗口内最近上报；其余算离线（含未激活/pending）
+        $devsOnline = Database::fetch(
+            "SELECT COUNT(*) c FROM devices WHERE status='active' AND last_seen >= ?",
+            [time() - self::DEV_OFFLINE_TIMEOUT]
+        )['c'];
+        $devsOffline = max(0, (int)$devs - (int)$devsOnline);
+        // 最近 5 条设备/网关日志（events 表：dev_id>0 为设备事件，gateway_id!='' 为网关事件）
+        $deviceLogs = Database::fetchAll(
+            "SELECT id, type, level, dev_id, message, created_at FROM events WHERE dev_id > 0 ORDER BY id DESC LIMIT 5"
+        );
+        $gatewayLogs = Database::fetchAll(
+            "SELECT id, type, level, gateway_id, message, created_at FROM events WHERE gateway_id != '' ORDER BY id DESC LIMIT 5"
+        );
+        $gwsOffline = max(0, (int)$gws - (int)$gwsOnline);
         return [
             'applications' => $apps, 'devices' => $devs, 'gateways' => $gws,
-            'gateways_online' => (int) $gwsOnline, 'uplinks' => $ups, 'downlinks' => $dls,
+            'gateways_online' => (int) $gwsOnline, 'gateways_offline' => $gwsOffline,
+            'uplinks' => $ups, 'downlinks' => $dls,
+            'devices_online' => (int)$devsOnline, 'devices_offline' => $devsOffline,
+            'device_logs' => $deviceLogs, 'gateway_logs' => $gatewayLogs,
         ];
     }
 
     public static function regions(): array
     {
         return Region::supported();
+    }
+
+    // ---------------- 设备配置模板（Device Profile） ----------------
+
+    public static function listDeviceProfiles(): array
+    {
+        return DeviceProfile::list();
+    }
+    public static function getDeviceProfile(int $id): ?array
+    {
+        return DeviceProfile::get($id);
+    }
+    public static function createDeviceProfile(array $p): array
+    {
+        return DeviceProfile::create($p);
+    }
+    public static function updateDeviceProfile(int $id, array $p): array
+    {
+        return DeviceProfile::update($id, $p);
+    }
+    public static function deleteDeviceProfile(int $id): array
+    {
+        return DeviceProfile::delete($id);
+    }
+
+    // ---------------- 租户（Tenant，多租户隔离基础） ----------------
+
+    public static function listTenants(): array
+    {
+        return Tenant::list();
+    }
+    public static function createTenant(array $p): array
+    {
+        return Tenant::create($p);
+    }
+    public static function updateTenant(int $id, array $p): array
+    {
+        return Tenant::update($id, $p);
+    }
+    public static function deleteTenant(int $id): array
+    {
+        return Tenant::delete($id);
+    }
+
+    // ---------------- 应用级 API Key ----------------
+
+    public static function listApiKeys(int $applicationId): array
+    {
+        return ApiKey::list($applicationId);
+    }
+    public static function createApiKey(int $applicationId, array $p): array
+    {
+        return ApiKey::create($applicationId, $p['name'] ?? '');
+    }
+    public static function deleteApiKey(int $id): array
+    {
+        return ApiKey::delete($id);
+    }
+
+    // ---------------- 集成（Integrations） ----------------
+
+    public static function listIntegrations(int $applicationId): array
+    {
+        return Integration::list($applicationId);
+    }
+    public static function createIntegration(array $p): array
+    {
+        return Integration::create($p);
+    }
+    public static function updateIntegration(int $id, array $p): array
+    {
+        return Integration::update($id, $p);
+    }
+    public static function deleteIntegration(int $id): array
+    {
+        return Integration::delete($id);
+    }
+
+    // ---------------- 组播组（Multicast Group） ----------------
+
+    public static function listMulticastGroups(?int $appId = null): array
+    {
+        if ($appId) {
+            return Database::fetchAll("SELECT * FROM multicast_groups WHERE application_id=? ORDER BY id DESC", [$appId]);
+        }
+        return Database::fetchAll("SELECT * FROM multicast_groups ORDER BY id DESC");
+    }
+    public static function getMulticastGroup(int $id): ?array
+    {
+        return Database::fetch("SELECT * FROM multicast_groups WHERE id=?", [$id]);
+    }
+    public static function createMulticastGroup(array $p): array
+    {
+        $appId = (int) ($p['application_id'] ?? 0);
+        if ($appId <= 0) {
+            return ['error' => 'application_id required'];
+        }
+        $region = $p['region'] ?? ELW_DEFAULT_REGION;
+        if (!in_array(strtoupper($region), Region::supported(), true)) {
+            return ['error' => 'unsupported region: ' . $region];
+        }
+        $sess = Multicast::generateSession();
+        $mcAddr = strtolower(preg_replace('/[^0-9a-f]/', '', $p['mc_addr'] ?? $sess['mc_addr']));
+        $mcNwk = strtolower(preg_replace('/[^0-9a-f]/', '', $p['mc_nwk_s_key'] ?? $sess['mc_nwk_s_key']));
+        $mcApp = strtolower(preg_replace('/[^0-9a-f]/', '', $p['mc_app_s_key'] ?? $sess['mc_app_s_key']));
+        if (strlen($mcAddr) !== 8 || strlen($mcNwk) !== 32 || strlen($mcApp) !== 32) {
+            return ['error' => 'multicast keys must be mc_addr(8)/mc_nwk_s_key(32)/mc_app_s_key(32) hex'];
+        }
+        $type = strtoupper($p['group_type'] ?? 'C');
+        if (!in_array($type, ['A', 'B', 'C'], true)) {
+            $type = 'C';
+        }
+        Database::execute(
+            "INSERT INTO multicast_groups (name, application_id, region, group_type, mc_addr, mc_nwk_s_key, mc_app_s_key, f_cnt, dr, frequency, class_b_ping_slot_periodicity, class_c_scheduling_type, created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                $p['name'] ?? 'Multicast', $appId, $region, $type, $mcAddr, $mcNwk, $mcApp,
+                0, (int) ($p['dr'] ?? 0), (int) ($p['frequency'] ?? 0),
+                (int) ($p['class_b_ping_slot_periodicity'] ?? 0),
+                $p['class_c_scheduling_type'] ?? 'DELAY', time(),
+            ]
+        );
+        return ['id' => Database::lastInsertId()];
+    }
+    public static function updateMulticastGroup(int $id, array $p): array
+    {
+        $g = self::getMulticastGroup($id);
+        if (!$g) {
+            return ['error' => 'group not found'];
+        }
+        $set = [];
+        $params = [];
+        foreach (['name', 'region', 'group_type', 'dr', 'frequency', 'class_b_ping_slot_periodicity', 'class_c_scheduling_type'] as $c) {
+            if (array_key_exists($c, $p)) {
+                $set[] = "$c=?";
+                $params[] = $p[$c];
+            }
+        }
+        if (empty($set)) {
+            return ['id' => $id];
+        }
+        $params[] = $id;
+        Database::execute("UPDATE multicast_groups SET " . implode(',', $set) . " WHERE id=?", $params);
+        return ['id' => $id];
+    }
+    public static function deleteMulticastGroup(int $id): array
+    {
+        Database::execute("DELETE FROM multicast_group_devices WHERE multicast_group_id=?", [$id]);
+        Database::execute("DELETE FROM multicast_group_gateways WHERE multicast_group_id=?", [$id]);
+        Database::execute("DELETE FROM multicast_queue WHERE multicast_group_id=?", [$id]);
+        Database::execute("DELETE FROM multicast_groups WHERE id=?", [$id]);
+        return ['ok' => true];
+    }
+    public static function enqueueMulticast(int $groupId, int $port, string $payloadHex, int $expiresAt = 0): array
+    {
+        $g = self::getMulticastGroup($groupId);
+        if (!$g) {
+            return ['error' => 'group not found'];
+        }
+        if ($port < 1 || $port > 223) {
+            return ['error' => 'port must be 1..223'];
+        }
+        if (!ctype_xdigit($payloadHex) || strlen($payloadHex) % 2 !== 0) {
+            return ['error' => 'payload must be even-length hex'];
+        }
+        Database::execute(
+            "INSERT INTO multicast_queue (multicast_group_id, f_port, payload_hex, f_cnt, created_at, expires_at) VALUES (?,?,?,?,?,?)",
+            [$groupId, $port, strtolower($payloadHex), (int) $g['f_cnt'], time(), $expiresAt]
+        );
+        return ['id' => Database::lastInsertId(), 'status' => 'queued'];
+    }
+    public static function multicastDevices(int $groupId): array
+    {
+        return Multicast::groupDevices($groupId);
+    }
+    public static function multicastGateways(int $groupId): array
+    {
+        return Multicast::groupGateways($groupId);
+    }
+    public static function addMulticastDevice(int $groupId, string $devEui): array
+    {
+        Multicast::addDevice($groupId, $devEui);
+        return ['ok' => true];
+    }
+    public static function removeMulticastDevice(int $groupId, string $devEui): array
+    {
+        Multicast::removeDevice($groupId, $devEui);
+        return ['ok' => true];
+    }
+    public static function addMulticastGateway(int $groupId, string $gwId): array
+    {
+        Multicast::addGateway($groupId, $gwId);
+        return ['ok' => true];
+    }
+    public static function removeMulticastGateway(int $groupId, string $gwId): array
+    {
+        Multicast::removeGateway($groupId, $gwId);
+        return ['ok' => true];
     }
 }

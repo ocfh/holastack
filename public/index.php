@@ -107,7 +107,8 @@ function handleApi(string $method, string $path): array
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
     $isDownlink = ($resource === 'devices' && ($segs[2] ?? '') === 'downlink');
     $isPwChange = ($resource === 'users' && ($segs[1] ?? '') === 'password');
-    $needsAdmin = $isWrite && !$isDownlink && !$isPwChange;
+    $isMulticastEnqueue = ($resource === 'multicast-groups' && ($segs[2] ?? '') === 'enqueue');
+    $needsAdmin = $isWrite && !$isDownlink && !$isPwChange && !$isMulticastEnqueue;
     Auth::guardApi($needsAdmin ? Auth::ROLE_ADMIN : Auth::ROLE_OPERATOR);
 
     switch ($resource) {
@@ -154,10 +155,12 @@ function handleApi(string $method, string $path): array
             return ['data' => WebApp::listGateways()];
         case 'uplinks':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
-            return ['data' => WebApp::listUplinks($devId)];
+            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
+            return ['data' => WebApp::listUplinks($devId, $appId)];
         case 'downlinks':
-            $devId = isset($segs[1]) ? (int) $segs[1] : null;
-            return ['data' => WebApp::listDownlinks($devId)];
+            $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
+            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
+            return ['data' => WebApp::listDownlinks($devId, $appId)];
         case 'events':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $gwId = isset($get['gw_id']) ? trim($get['gw_id']) : null;
@@ -182,6 +185,89 @@ function handleApi(string $method, string $path): array
                 return ['id' => $id];
             }
             return ['data' => WebApp::listUsers()];
+        case 'device-profiles':
+            if (isset($segs[1]) && $method === 'PUT') {
+                return WebApp::updateDeviceProfile((int) $segs[1], $body);
+            }
+            if (isset($segs[1]) && $method === 'DELETE') {
+                return WebApp::deleteDeviceProfile((int) $segs[1]);
+            }
+            if ($method === 'POST') {
+                return WebApp::createDeviceProfile($body);
+            }
+            return ['data' => WebApp::listDeviceProfiles()];
+        case 'api-keys':
+            if (isset($segs[1]) && $method === 'DELETE') {
+                return WebApp::deleteApiKey((int) $segs[1]);
+            }
+            if ($method === 'POST') {
+                return WebApp::createApiKey((int) ($body['application_id'] ?? 0), $body);
+            }
+            $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
+            return ['data' => WebApp::listApiKeys($appId)];
+        case 'integrations':
+            if (isset($segs[1]) && $method === 'PUT') {
+                return WebApp::updateIntegration((int) $segs[1], $body);
+            }
+            if (isset($segs[1]) && $method === 'DELETE') {
+                return WebApp::deleteIntegration((int) $segs[1]);
+            }
+            if ($method === 'POST') {
+                return WebApp::createIntegration($body);
+            }
+            $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
+            return ['data' => WebApp::listIntegrations($appId)];
+        case 'multicast-groups':
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'enqueue' && $method === 'POST') {
+                return WebApp::enqueueMulticast((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '');
+            }
+            if (isset($segs[1]) && $method === 'GET' && !isset($segs[2])) {
+                return WebApp::getMulticastGroup((int) $segs[1]);
+            }
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'devices') {
+                if ($method === 'GET') {
+                    return WebApp::multicastDevices((int) $segs[1]);
+                }
+                if ($method === 'POST') {
+                    return WebApp::addMulticastDevice((int) $segs[1], $body['dev_eui'] ?? '');
+                }
+                if ($method === 'DELETE') {
+                    return WebApp::removeMulticastDevice((int) $segs[1], $body['dev_eui'] ?? '');
+                }
+            }
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'gateways') {
+                if ($method === 'GET') {
+                    return WebApp::multicastGateways((int) $segs[1]);
+                }
+                if ($method === 'POST') {
+                    return WebApp::addMulticastGateway((int) $segs[1], $body['gw_id'] ?? '');
+                }
+                if ($method === 'DELETE') {
+                    return WebApp::removeMulticastGateway((int) $segs[1], $body['gw_id'] ?? '');
+                }
+            }
+            if (isset($segs[1]) && $method === 'PUT') {
+                return WebApp::updateMulticastGroup((int) $segs[1], $body);
+            }
+            if (isset($segs[1]) && $method === 'DELETE') {
+                return WebApp::deleteMulticastGroup((int) $segs[1]);
+            }
+            if ($method === 'POST') {
+                return WebApp::createMulticastGroup($body);
+            }
+            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
+            return ['data' => WebApp::listMulticastGroups($appId)];
+        case 'tenants':
+            if (isset($segs[1]) && $method === 'PUT') {
+                return WebApp::updateTenant((int) $segs[1], $body);
+            }
+            if (isset($segs[1]) && $method === 'DELETE') {
+                return WebApp::deleteTenant((int) $segs[1]);
+            }
+            if ($method === 'POST') {
+                return WebApp::createTenant($body);
+            }
+            return ['data' => WebApp::listTenants()];
         default:
             return ['error' => 'unknown endpoint'];
     }
@@ -228,6 +314,28 @@ function renderPage(): string
   #login{display:flex;align-items:center;justify-content:center;min-height:100vh}
   #login.hidden{display:none}
   #login .box{width:min(380px,92vw)}
+  /* ===== 概览页增强：三环形图 / 消息总览 / 日志两栏 ===== */
+  .rings{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px}
+  .ring-card{flex:1 1 200px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:18px}
+  .ring{width:140px;height:140px;flex:0 0 auto}
+  .ring-legend{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
+  .hl-row{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-radius:9px;background:#161d2c}
+  .hl-row b{font-size:17px} .hl-row .pct{color:var(--mut);font-size:12px;font-weight:400}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .hl-online .dot{background:var(--ok)} .hl-offline .dot{background:var(--err)}
+  .msg-bar{display:flex;align-items:center;gap:26px;background:linear-gradient(135deg,#1a2233,#22304a);border:1px solid var(--line);border-radius:12px;padding:18px 26px;margin-bottom:16px}
+  .msg-num{font-size:36px;font-weight:700;color:var(--acc);line-height:1} .msg-lbl{color:var(--mut);margin-left:10px;font-size:13px}
+  .msg-split{display:flex;gap:26px;margin-left:auto;color:var(--mut);font-size:13px}
+  .msg-split b{color:var(--txt)} .msg-split .up{color:var(--ok)} .msg-split .down{color:var(--acc)}
+  .log-cols{display:flex;gap:16px}
+  .log-col{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .log-col h3{margin:0 0 10px;font-size:15px;color:var(--txt)}
+  .log-row{padding:10px 2px;border-bottom:1px solid var(--line)} .log-row:last-child{border-bottom:0}
+  .log-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .log-who{color:var(--mut);font-size:11px} .log-time{color:var(--mut);font-size:11px;margin-left:auto}
+  .log-msg{margin-top:6px;font-size:13px;color:var(--txt);word-break:break-word;white-space:pre-wrap}
+  .log-empty{padding:20px;text-align:center;color:var(--mut);font-size:13px}
+  @media (max-width:760px){.ring-card{flex-direction:column;text-align:center}.ring-legend{width:100%}.msg-bar{flex-direction:column;align-items:flex-start;gap:12px}.msg-split{margin-left:0}.log-cols{flex-direction:column}}
 </style>
 </head>
 <body>
@@ -240,7 +348,13 @@ function renderPage(): string
     <a href="#gateways" class="nav" data-v="gateways">网关</a>
     <a href="#uplinks" class="nav" data-v="uplinks">上行</a>
     <a href="#events" class="nav" data-v="events">日志</a>
+    <a href="#device-profiles" class="nav" data-v="device-profiles">设备模板</a>
+    <a href="#tenants" class="nav" data-v="tenants">租户</a>
+    <a href="#integrations" class="nav" data-v="integrations">集成</a>
+    <a href="#api-keys" class="nav" data-v="api-keys">API Keys</a>
+    <a href="#multicast-groups" class="nav" data-v="multicast-groups">组播</a>
     <a href="#users" class="nav" data-v="users" id="navUsers">用户</a>
+    <a href="#loracalc" class="nav" data-v="loracalc">LoRa 计算器</a>
   </nav>
   <div class="spacer"></div>
   <span class="who" id="who"></span>
@@ -263,7 +377,7 @@ function renderPage(): string
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 
 <script>
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', evsDevFilter:'', evsGwFilter:''};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, mcDetail:null};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -333,7 +447,13 @@ function nav(v){
   if (v==='gateways') return viewGateways();
   if (v==='uplinks') return viewUplinks();
   if (v==='events') return viewEvents();
+  if (v==='device-profiles') return viewDeviceProfiles();
+  if (v==='tenants') return viewTenants();
+  if (v==='integrations') return viewIntegrations();
+  if (v==='api-keys') return viewApiKeys();
+  if (v==='multicast-groups') return viewMulticastGroups();
   if (v==='users') return viewUsers();
+  if (v==='loracalc') return viewLoraCalc();
 }
 document.querySelectorAll('.nav').forEach(a=>a.onclick=()=>nav(a.dataset.v));
 
@@ -346,14 +466,77 @@ setInterval(()=>{
 
 async function viewDashboard(){
   const s = await api('GET','/api/stats'); state.stats = s;
+  const devTotal = s.devices|0, devOn = s.devices_online|0, devOff = s.devices_offline|0;
+  const gwTotal = s.gateways|0, gwOn = s.gateways_online|0, gwOff = s.gateways_offline|0;
+  const appTotal = s.applications|0;
+  const msgTotal = (s.uplinks|0) + (s.downlinks|0);
+  const devLogs = s.device_logs||[], gwLogs = s.gateway_logs||[];
   document.getElementById('view').innerHTML = `
-    <div class="cards">
-      <div class="card"><div class="n">${s.applications}</div><div class="l">应用</div></div>
-      <div class="card"><div class="n">${s.devices}</div><div class="l">设备</div></div>
-      <div class="card"><div class="n">${s.gateways}</div><div class="l">网关</div></div>
-      <div class="card"><div class="n">${s.uplinks}</div><div class="l">上行消息</div></div>
+    <h2>概览</h2>
+    <div class="rings">
+      ${dashRingCard('设备', devTotal, devOn, devOff, true)}
+      ${dashRingCard('网关', gwTotal, gwOn, gwOff, true)}
+      ${dashRingCard('应用', appTotal, 0, 0, false)}
     </div>
-    <p class="muted">网络服务器监听 UDP 端口由 ELW_GW_UDP_PORT 配置（默认 1700）。先创建应用，再创建设备（OTAA 或 ABP，Class A/B/C），然后用网关连接并发送数据。</p>`;
+
+    <div class="msg-bar">
+      <div class="msg-main"><span class="msg-num">${msgTotal}</span><span class="msg-lbl">消息总数</span></div>
+      <div class="msg-split">
+        <div><span class="up">▲</span> 上行 <b>${s.uplinks|0}</b></div>
+        <div><span class="down">▼</span> 下行 <b>${s.downlinks|0}</b></div>
+      </div>
+    </div>
+
+    <div class="log-cols">
+      <div class="log-col">
+        <h3>最近设备日志</h3>
+        ${devLogs.length? devLogs.map(e=>dashLogRow(e,'dev #'+(e.dev_id||''))).join('') : '<div class="log-empty">暂无设备日志</div>'}
+      </div>
+      <div class="log-col">
+        <h3>最近网关日志</h3>
+        ${gwLogs.length? gwLogs.map(e=>dashLogRow(e,'网关 '+esc(e.gateway_id||''))).join('') : '<div class="log-empty">暂无网关日志</div>'}
+      </div>
+    </div>
+
+    <p class="muted" style="margin-top:16px">网络服务器监听 UDP 端口由 ELW_GW_UDP_PORT 配置（默认 1700）。先创建应用，再创建设备（OTAA 或 ABP，Class A/B/C），然后用网关连接并发送数据。本页每 5 秒自动刷新。</p>`;
+}
+/* 环形图卡片：split=true 时按 online(绿)/offline(红) 分段；否则整圈 accent 色显示总数。 */
+function dashRingCard(title, total, online, offline, split){
+  const r=70, cx=90, cy=90, sw=18, C=2*Math.PI*r;
+  let arcs;
+  if(!total){
+    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#2b3650" stroke-width="${sw}"/>`;
+  } else if(split){
+    const onLen = C*online/total, offLen = C*offline/total;
+    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#2b3650" stroke-width="${sw}"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#36d399" stroke-width="${sw}" stroke-dasharray="${onLen.toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f87272" stroke-width="${sw}" stroke-dasharray="${offLen.toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-onLen).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+  } else {
+    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#3da9fc" stroke-width="${sw}"/>`;
+  }
+  let legend;
+  if(split){
+    legend = `
+      <div class="hl-row hl-online"><span><span class="dot"></span>在线</span><b>${online} <span class="pct">(${total?Math.round(online/total*100):0}%)</span></b></div>
+      <div class="hl-row hl-offline"><span><span class="dot"></span>离线</span><b>${offline} <span class="pct">(${total?Math.round(offline/total*100):0}%)</span></b></div>`;
+  } else {
+    legend = `<div class="hl-row"><span>应用总数</span><b>${total}</b></div>`;
+  }
+  return `<div class="ring-card">
+    <svg viewBox="0 0 180 180" class="ring">${arcs}
+      <text x="${cx}" y="${cy-2}" text-anchor="middle" fill="#e6ecf5" font-size="32" font-weight="700">${total}</text>
+      <text x="${cx}" y="${cy+18}" text-anchor="middle" fill="#8b97ad" font-size="12">${title}</text>
+    </svg>
+    <div class="ring-legend">${legend}</div>
+  </div>`;
+}
+function dashLogRow(ev, who){
+  const lvl = (ev.level==='error')?'err':((ev.level==='warn'||ev.level==='warning')?'pending':'ok');
+  const t = ev.created_at? new Date(ev.created_at*1000).toLocaleString() : '-';
+  return `<div class="log-row">
+    <div class="log-top"><span class="tag">${esc(ev.type)}</span><span class="tag ${lvl}">${esc(ev.level)}</span><span class="log-who">${esc(who)}</span><span class="log-time">${esc(t)}</span></div>
+    <div class="log-msg">${esc(ev.message||'')}</div>
+  </div>`;
 }
 async function viewApplications(){
   const r = await api('GET','/api/applications'); state.apps = r.data||[];
@@ -412,10 +595,19 @@ async function viewGateways(){
 }
 
 async function viewUplinks(){
-  const r = await api('GET','/api/uplinks' + (state.upsFilter ? '?dev_id='+state.upsFilter : '')); state.ups = r.data||[];
-  const dr = await api('GET','/api/devices'); const devs = dr.data||[];
-  const opts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
+  const qs = [
+    state.upsFilter ? ('dev_id='+state.upsFilter) : '',
+    state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''
+  ].filter(Boolean).join('&');
+  const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
+  const [dr, ar] = await Promise.all([api('GET','/api/devices'), api('GET','/api/applications')]);
+  const devs = dr.data||[], apps = ar.data||[];
+  state.apps = apps;
+  const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
+  const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
+  const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.upsAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
   const rows = state.ups.map(u=>`<tr><td>${u.id}</td>
+    <td class="muted"><span class="pill" style="margin:0">${esc(appName(u.app_id))}</span></td>
     <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(u.dev_addr)}</a></td>
     <td>${u.fcnt}</td><td>${u.port}</td><td>${u.confirmed?'✓':'-'}</td>
     <td><code>${hex(u.decrypted_hex)}</code></td>
@@ -423,11 +615,15 @@ async function viewUplinks(){
     <td class="muted">${u.gateway_id||'-'}</td>
     <td class="muted">${u.rssi} / ${u.snr}</td>
     <td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td>
-    <td><button class="btn ghost" onclick="showRaw(${u.id})">JSON</button></td></tr>`).join('')||`<tr><td colspan="11" class="muted">暂无上行</td></tr>`;
+    <td><button class="btn ghost" onclick="showRaw(${u.id})">JSON</button></td></tr>`).join('')||`<tr><td colspan="12" class="muted">暂无上行</td></tr>`;
   document.getElementById('view').innerHTML = `<h2>上行消息（收到的 LoRa 帧）</h2>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 340px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;viewUplinks()">${opts}</select></div></div>
-    <p class="muted">每 5 秒自动刷新。phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“JSON”查看网关上报元数据。</p>
-    <table><thead><tr><th>ID</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
+      <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;viewUplinks()">${appOpts}</select></div>
+      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;viewUplinks()">${devOpts}</select></div>
+      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';viewUplinks()">重置</button>
+    </div>
+    <p class="muted">每 5 秒自动刷新。应用维度已在每行“应用”标签中区分；phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“JSON”查看网关上报元数据。</p>
+    <table><thead><tr><th>ID</th><th>应用</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function showRaw(id){
   const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
@@ -535,26 +731,28 @@ async function editApplication(id){ const r = await api('GET','/api/applications
 async function saveAppEdit(id){ const r = await api('PUT',`/api/applications/${id}`,{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
 async function delApplication(id){ if(!confirm('确认删除该应用及其下所有设备？'))return; const r = await api('DELETE',`/api/applications/${id}`); if(r.error){alert(r.error);return;} viewApplications(); }
 
-function newDevice(appId){ const regions=regionOptions("");
+async function newDevice(appId){ const regions=regionOptions(""); const dps=await dpOptions(0);
   openModal(`<h3>新建设备 (应用 #${appId})</h3><label>名称</label><input id="m_name"><label>DevEUI (16 hex)</label><input id="m_dev_eui"><label>激活方式</label><select id="m_act" onchange="toggleAct()"><option value="OTAA">OTAA</option><option value="ABP">ABP</option></select>
     <div id="otaa"><label>JoinEUI (16 hex)</label><input id="m_join_eui"><label>AppKey (32 hex)</label><input id="m_app_key"></div>
     <div id="abp" class="hidden"><label>DevAddr (8 hex)</label><input id="m_dev_addr"><label>NwkSKey (32 hex)</label><input id="m_nwk"><label>AppSKey (32 hex)</label><input id="m_app"></div>
     <label>Class</label><select id="m_class"><option>A</option><option>B</option><option>C</option></select>
     <label>区域</label><select id="m_region">${regions}</select>
+    <label>设备模板 (Device Profile，可选)</label><select id="m_dp">${dps}</select>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveDevice(${appId})">保存</button></div>`); }
 function toggleAct(){ const a=v('m_act')==='OTAA'; document.getElementById('otaa').classList.toggle('hidden',!a); document.getElementById('abp').classList.toggle('hidden',a); }
-async function saveDevice(appId){ const act=v('m_act'); const body={app_id:appId,name:v('m_name'),dev_eui:v('m_dev_eui'),activation:act,region:v('m_region'),class:v('m_class')};
+async function saveDevice(appId){ const act=v('m_act'); const body={app_id:appId,name:v('m_name'),dev_eui:v('m_dev_eui'),activation:act,region:v('m_region'),class:v('m_class'),device_profile_id:+v('m_dp')};
   if(act==='OTAA'){ body.join_eui=v('m_join_eui'); body.app_key=v('m_app_key'); } else { body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
   const r = await api('POST','/api/devices',body); if(r.error){alert(r.error);return;} closeModal(); viewDevices(); }
 async function editDevice(id){ const r = await api('GET','/api/devices'); const d=(r.data||[]).find(x=>x.id===id); if(!d)return;
-  const otaa=d.activation==='OTAA';
+  const otaa=d.activation==='OTAA'; const dps=await dpOptions(d.device_profile_id||0);
   openModal(`<h3>编辑设备 #${id}</h3><label>名称</label><input id="m_name" value="${esc(d.name)}">
     <label>激活方式</label><input value="${d.activation}" disabled>
     <label>Class</label><select id="m_class"><option ${d.class==='A'?'selected':''}>A</option><option ${d.class==='B'?'selected':''}>B</option><option ${d.class==='C'?'selected':''}>C</option></select>
     <label>区域</label><select id="m_region">${regionOptions(d.region)}</select>
+    <label>设备模板 (Device Profile，可选)</label><select id="m_dp">${dps}</select>
     ${otaa?`<label>DevEUI (16 hex，留空不改)</label><input id="m_dev_eui" value="${esc(d.dev_eui)}" placeholder="留空保持不变"><label>JoinEUI (16 hex，留空不改)</label><input id="m_join_eui" value="${esc(d.join_eui)}" placeholder="留空保持不变"><label>AppKey (32 hex，留空不改)</label><input id="m_app_key" placeholder="留空保持不变">`:`<label>DevAddr (8 hex)</label><input id="m_dev_addr" value="${esc(d.dev_addr)}"><label>NwkSKey (32 hex)</label><input id="m_nwk" value="${esc(d.nwk_s_key)}"><label>AppSKey (32 hex)</label><input id="m_app" value="${esc(d.app_s_key)}"`}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveDeviceEdit(${id})">保存</button></div>`); }
-async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class'),region:v('m_region')};
+async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class'),region:v('m_region'),device_profile_id:+v('m_dp')};
   if(document.getElementById('m_app_key')) body.app_key=v('m_app_key');
   if(document.getElementById('m_dev_eui')) body.dev_eui=v('m_dev_eui');
   if(document.getElementById('m_join_eui')) body.join_eui=v('m_join_eui');
@@ -580,6 +778,297 @@ function newUser(){ openModal(`<h3>新建用户</h3><label>用户名</label><inp
 async function saveUser(){ const r = await api('POST','/api/users',{username:v('m_user'),password:v('m_pass'),role:v('m_role')}); if(r.error){alert(r.error);return;} closeModal(); viewUsers(); }
 async function delUser(id){ if(!confirm('确认删除该用户？'))return; const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(r.error);return;} viewUsers(); }
 
+// 设备模板下拉（含“默认模板”）
+async function dpOptions(sel){
+  if(!state.dps.length){ const r=await api('GET','/api/device-profiles'); state.dps=r.data||[]; }
+  return `<option value="0" ${(sel==0||sel===''||sel==null)?'selected':''}>默认模板</option>`+(state.dps||[]).map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
+}
+
+// ================= 设备模板（Device Profile） =================
+async function viewDeviceProfiles(){
+  const r = await api('GET','/api/device-profiles'); state.dps = r.data||[];
+  const rows = state.dps.map(d=>{
+    const cls = []; if(d.supports_class_b) cls.push('B'); if(d.supports_class_c) cls.push('C');
+    return `<tr><td>${d.id}</td><td>${esc(d.name)}</td><td class="muted">${esc(d.region)}</td>
+      <td class="muted">${esc(d.mac_version)}</td><td class="muted">${esc(d.adr_algorithm)}</td>
+      <td class="muted">${esc(d.payload_codec_runtime)}</td><td class="muted">${cls.join('/')||'A'}</td>
+      <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">编辑</button> <button class="btn danger" onclick="delDeviceProfile(${d.id})">删除</button>`)}</td></tr>`;
+  }).join('')||`<tr><td colspan="8" class="muted">暂无设备模板</td></tr>`;
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板（Device Profile）</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
+    <p class="muted">设备模板集中描述 MAC 版本、区域参数、ADR 算法、编解码器与 Class B/C 能力；创建设备时引用之。删除模板后引用它的设备回退到默认模板。</p>
+    <table><thead><tr><th>ID</th><th>名称</th><th>区域</th><th>MAC</th><th>ADR</th><th>编解码</th><th>Class</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------------- 租户（Tenant） ----------------
+async function viewTenants(){
+  const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
+  const rows = state.tenants.map(t=>`<tr><td>${t.id}</td><td>${esc(t.name)}</td><td class="muted">${esc(t.description||'')}</td>
+    <td class="muted">${t.can_have_gateways?'是':'否'}</td><td class="muted">${t.private_gateways_limit||0}</td>
+    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${t.id})">编辑</button> <button class="btn danger" onclick="delTenant(${t.id})">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无租户</td></tr>`;
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>租户（Tenant）</h2>${adminBtn('<button onclick="newTenant()">+ 新建租户</button>')}</div>
+    <p class="muted">多租户隔离基础：应用 / 设备 / 网关 / 设备模板 / 组播组 / API Key / 集成 均按 tenant_id 归属。删除租户会将其下资源回退到「默认租户」而非物理删除。</p>
+    <table><thead><tr><th>ID</th><th>名称</th><th>描述</th><th>可拥有网关</th><th>私有网关上限</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function tenantForm(t){
+  t = t||{};
+  return `<label>名称</label><input id="t_name" value="${esc(t.name||'')}">
+  <label>描述</label><input id="t_desc" value="${esc(t.description||'')}">
+  <div class="row">
+    <div><label>可拥有网关</label><select id="t_gw">${(t.can_have_gateways?'<option value="1" selected>是</option><option value="0">否</option>':'<option value="1">是</option><option value="0" selected>否</option>')}</select></div>
+    <div><label>私有网关上限</label><input id="t_limit" value="${t.private_gateways_limit||0}"></div>
+  </div>`;
+}
+function newTenant(){
+  openModal(`<h3>新建租户</h3>${tenantForm()}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveTenant(0)">保存</button></div>`);
+}
+async function saveTenant(id){
+  const body={ name:v('t_name'), description:v('t_desc'), can_have_gateways:+v('t_gw'), private_gateways_limit:+v('t_limit') };
+  const r = id ? await api('PUT',`/api/tenants/${id}`,body) : await api('POST','/api/tenants',body);
+  if(r.error){alert(r.error);return;} closeModal(); viewTenants();
+}
+async function editTenant(id){
+  const t = state.tenants.find(x=>x.id==id)||{};
+  openModal(`<h3>编辑租户</h3>${tenantForm(t)}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveTenant(${id})">保存</button></div>`);
+}
+async function delTenant(id){
+  if(!confirm('删除租户？其下资源将回退到默认租户。')) return;
+  const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(r.error);return;} viewTenants();
+}
+function deviceProfileForm(d){
+  d = d||{};
+  const regions=regionOptions(d.region||"");
+  const codec = (sel)=>['NONE','CAYENNE_LPP','JS'].map(c=>`<option value="${c}" ${c===sel?'selected':''}>${c}</option>`).join('');
+  const yesno=(v)=>`<option value="1" ${v?'selected':''}>是</option><option value="0" ${v?'':'selected'}>否</option>`;
+  return `<label>名称</label><input id="m_name" value="${esc(d.name||'')}">
+  <label>描述</label><input id="m_desc" value="${esc(d.description||'')}">
+  <div class="row">
+    <div><label>区域</label><select id="m_region">${regions}</select></div>
+    <div><label>MAC 版本</label><input id="m_mac" value="${esc(d.mac_version||'1.0.4')}"></div>
+    <div><label>区域参数版本</label><input id="m_reg" value="${esc(d.reg_params_revision||'RP002-1.0.3')}"></div>
+  </div>
+  <div class="row">
+    <div><label>ADR 算法</label><input id="m_adr" value="${esc(d.adr_algorithm||'default')}"></div>
+    <div><label>编解码运行时</label><select id="m_codec">${codec(d.payload_codec_runtime||'NONE')}</select></div>
+  </div>
+  <label>编解码脚本（JS / Cayenne 说明；纯 PHP 环境不支持 JS 运行时，仅 NONE/CAYENNE_LPP 生效）</label><textarea id="m_script">${esc(d.payload_codec_script||'')}</textarea>
+  <div class="row">
+    <div><label>支持 OTAA</label><select id="m_otaa">${yesno(d.supports_otaa)}</select></div>
+    <div><label>支持 Class B</label><select id="m_cb">${yesno(d.supports_class_b)}</select></div>
+    <div><label>支持 Class C</label><select id="m_cc">${yesno(d.supports_class_c)}</select></div>
+  </div>
+  <div class="row">
+    <div><label>激活清空队列</label><select id="m_flush">${yesno(d.flush_queue_on_activate)}</select></div>
+    <div><label>上行间隔(s,0=不限)</label><input id="m_upl" value="${d.uplink_interval||0}"></div>
+    <div><label>状态查询间隔(s,0=关)</label><input id="m_streq" value="${d.device_status_req_interval||0}"></div>
+  </div>
+  <div class="row">
+    <div><label>ClassB Ping 周期</label><input id="m_bpp" value="${d.class_b_ping_slot_periodicity||0}"></div>
+    <div><label>ClassB Ping DR</label><input id="m_bpd" value="${d.class_b_ping_slot_dr||0}"></div>
+    <div><label>ClassB Ping 频率</label><input id="m_bpf" value="${d.class_b_ping_slot_freq||0}"></div>
+  </div>
+  <div class="row">
+    <div><label>ClassC 超时(s)</label><input id="m_cto" value="${d.class_c_timeout||0}"></div>
+    <div><label>ABP RX1 Delay</label><input id="m_ard" value="${d.abp_rx1_delay||1}"></div>
+    <div><label>ABP RX1 DR Offset</label><input id="m_ardo" value="${d.abp_rx1_dr_offset||0}"></div>
+  </div>
+  <div class="row">
+    <div><label>ABP RX2 DR</label><input id="m_ar2d" value="${d.abp_rx2_dr||0}"></div>
+    <div><label>ABP RX2 频率</label><input id="m_ar2f" value="${d.abp_rx2_freq||0}"></div>
+    <div><label>允许漫游</label><select id="m_roam">${yesno(d.allow_roaming)}</select></div>
+  </div>`;
+}
+function newDeviceProfile(){
+  openModal(`<h3>新建设备模板</h3>${deviceProfileForm()}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveDeviceProfile(0)">保存</button></div>`);
+}
+async function saveDeviceProfile(id){
+  const body={
+    name:v('m_name'), description:v('m_desc'), region:v('m_region'),
+    mac_version:v('m_mac'), reg_params_revision:v('m_reg'), adr_algorithm:v('m_adr'),
+    payload_codec_runtime:v('m_codec'), payload_codec_script:v('m_script'),
+    supports_otaa:+v('m_otaa'), supports_class_b:+v('m_cb'), supports_class_c:+v('m_cc'),
+    flush_queue_on_activate:+v('m_flush'), uplink_interval:+v('m_upl'), device_status_req_interval:+v('m_streq'),
+    class_b_ping_slot_periodicity:+v('m_bpp'), class_b_ping_slot_dr:+v('m_bpd'), class_b_ping_slot_freq:+v('m_bpf'),
+    class_c_timeout:+v('m_cto'), abp_rx1_delay:+v('m_ard'), abp_rx1_dr_offset:+v('m_ardo'),
+    abp_rx2_dr:+v('m_ar2d'), abp_rx2_freq:+v('m_ar2f'), allow_roaming:+v('m_roam')
+  };
+  const r = id ? await api('PUT',`/api/device-profiles/${id}`,body) : await api('POST','/api/device-profiles',body);
+  if(r.error){alert(r.error);return;} closeModal(); viewDeviceProfiles();
+}
+async function editDeviceProfile(id){
+  const r = await api('GET','/api/device-profiles'); const d=(r.data||[]).find(x=>x.id===id); if(!d)return;
+  openModal(`<h3>编辑模板 #${id}</h3>${deviceProfileForm(d)}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveDeviceProfile(${id})">保存</button></div>`);
+}
+async function delDeviceProfile(id){ if(!confirm('确认删除该模板？引用该模板的设备将回退到默认模板。'))return; const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(r.error);return;} viewDeviceProfiles(); }
+
+// ================= 应用 API Key =================
+async function viewApiKeys(){
+  if(!state.apps.length){ const ra=await api('GET','/api/applications'); state.apps=ra.data||[]; }
+  const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
+  let rows=`<tr><td colspan="5" class="muted">请先在上方选择应用</td></tr>`;
+  if(state.appSel){
+    const r=await api('GET','/api/api-keys?app_id='+state.appSel); const ks=r.data||[];
+    rows=ks.map(k=>`<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
+      <td>${adminBtn(`<button class="btn danger" onclick="delApiKey(${k.id})">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="5" class="muted">该应用暂无 API Key</td></tr>`;
+  }
+  document.getElementById('view').innerHTML=`<h2>应用 API Key</h2>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;viewApiKeys()">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 Key</button>'):''}</div>
+   <p class="muted">API Key 用于第三方以 Key 而非用户令牌调用应用级接口；明文仅在创建时展示一次，库内仅存 bcrypt 哈希。</p>
+   <table><thead><tr><th>ID</th><th>名称</th><th>Token(预览)</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function newApiKey(){
+  if(!state.appSel){alert('请先选择应用');return;}
+  openModal(`<h3>新建 API Key (应用 #${state.appSel})</h3><label>名称</label><input id="m_name">
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveApiKey()">保存</button></div>`);
+}
+async function saveApiKey(){
+  const r=await api('POST','/api/api-keys',{application_id:+state.appSel,name:v('m_name')});
+  if(r.error){alert(r.error);return;}
+  const token=r.token||'';
+  openModal(`<h3>API Key 已创建</h3><p class="muted">请立即复制保存，关闭后将无法再查看明文：</p>
+   <label>Token</label><input id="m_tok" value="${esc(token)}" readonly onclick="this.select()">
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button onclick="(navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('m_tok').value));closeModal();viewApiKeys()">我已复制，关闭</button></div>`);
+}
+async function delApiKey(id){ if(!confirm('确认删除该 API Key？'))return; const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(r.error);return;} viewApiKeys(); }
+
+// ================= 集成（Integrations） =================
+async function viewIntegrations(){
+  if(!state.apps.length){ const ra=await api('GET','/api/applications'); state.apps=ra.data||[]; }
+  const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
+  let rows=`<tr><td colspan="5" class="muted">请先在上方选择应用</td></tr>`;
+  if(state.appSel){
+    const r=await api('GET','/api/integrations?app_id='+state.appSel); const its=r.data||[];
+    rows=its.map(it=>{
+      let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
+      const summary = it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
+      return `<tr><td><span class="tag">${it.kind}</span></td>
+        <td><span class="tag ${it.enabled?'ok':'off'}">${it.enabled?'启用':'停用'}</span></td>
+        <td class="muted">${esc(summary)}</td>
+        <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
+        <td>${adminBtn(`<button class="btn ghost" onclick="toggleIntegration(${it.id},${it.enabled?0:1})">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="delIntegration(${it.id})">删除</button>`)}</td></tr>`;
+    }).join('')||`<tr><td colspan="5" class="muted">该应用暂无集成</td></tr>`;
+  }
+  document.getElementById('view').innerHTML=`<h2>集成（Integrations）</h2>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.appSel=this.value;viewIntegrations()">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newIntegration()">+ 新建集成</button>'):''}</div>
+   <p class="muted">每条上行/遥测/状态事件都会分发到应用所有启用的集成。与「应用级 callback_url」(遗留 Webhook) 独立、可共存。</p>
+   <table><thead><tr><th>类型</th><th>状态</th><th>配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function newIntegration(){
+  if(!state.appSel){alert('请先选择应用');return;}
+  const httpFields=`<div id="f_http"><label>HTTP URL</label><input id="m_url" placeholder="https://example.com/uplink"><label>Headers (JSON, 可选)</label><input id="m_headers" placeholder='{"X-Api-Key":"..."}'></div>`;
+  const influxFields=`<div id="f_influx" class="hidden"><label>InfluxDB Endpoint</label><input id="m_endpoint" placeholder="http://localhost:8086/api/v2/write"><label>Measurement (可选)</label><input id="m_measurement" placeholder="device_uplink"><label>Token (可选)</label><input id="m_token" placeholder="Token xxx"></div>`;
+  const mqttFields=`<div id="f_mqtt" class="hidden"><label>Server</label><input id="m_server" placeholder="tcp://127.0.0.1:1883"><label>Topic 模板</label><input id="m_topic" placeholder="application/{app_id}/device/{dev_eui}/up"><label>QoS</label><select id="m_qos"><option>0</option><option>1</option></select><label>用户名(可选)</label><input id="m_user"><label>密码(可选)</label><input id="m_pass" type="password"></div>`;
+  const awsFields=`<div id="f_aws" class="hidden"><label>AWS Region</label><input id="m_aws_region" placeholder="eu-west-1"><label>Access Key ID</label><input id="m_aws_key"><label>Secret Access Key</label><input id="m_aws_secret" type="password"><label>Topic ARN</label><input id="m_aws_topic" placeholder="arn:aws:sns:eu-west-1:123456789012:my-topic"></div>`;
+  const azureFields=`<div id="f_azure" class="hidden"><label>Connection String</label><input id="m_az_conn" placeholder="Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=..."><label>Publish Mode</label><select id="m_az_mode"><option value="topic">topic</option><option value="queue">queue</option></select><label>Topic/Queue Name</label><input id="m_az_name"></div>`;
+  const gcpFields=`<div id="f_gcp" class="hidden"><label>Project ID</label><input id="m_gcp_project"><label>Topic Name</label><input id="m_gcp_topic"><label>Credentials JSON (服务账号)</label><textarea id="m_gcp_cred" placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'></textarea><label>或 Credentials 文件</label><input id="m_gcp_credfile" placeholder="/path/to/sa.json"></div>`;
+  const amqpFields=`<div id="f_amqp" class="hidden"><label>AMQP URL</label><input id="m_amqp_url" placeholder="amqp://user:pass@host:5672"><label>Exchange</label><input id="m_amqp_exchange" placeholder="amq.topic"><label>Routing Key 模板</label><input id="m_amqp_rk" placeholder="application.{app_id}.device.{dev_eui}.event.{event}"></div>`;
+  const kafkaFields=`<div id="f_kafka" class="hidden"><label>Brokers</label><input id="m_kafka_brokers" placeholder="host1:9092,host2:9092"><label>Topic</label><input id="m_kafka_topic"><label>TLS</label><select id="m_kafka_tls"><option value="0">否</option><option value="1">是</option></select><label>SASL 用户名(可选)</label><input id="m_kafka_user"><label>SASL 密码(可选)</label><input id="m_kafka_pass" type="password"></div>`;
+  openModal(`<h3>新建集成 (应用 #${state.appSel})</h3>
+   <label>类型</label><select id="m_kind" onchange="toggleIntFields()"><option value="HTTP">HTTP</option><option value="INFLUX_DB">InfluxDB</option><option value="MQTT_GLOBAL">MQTT</option><option value="AWS_SNS">AWS SNS</option><option value="AZURE_SERVICE_BUS">Azure Service Bus</option><option value="GCP_PUBSUB">GCP Pub/Sub</option><option value="AMQP">AMQP (RabbitMQ)</option><option value="KAFKA">Kafka</option></select>
+   <label>启用</label><select id="m_enabled"><option value="1" selected>是</option><option value="0">否</option></select>
+   ${httpFields}${influxFields}${mqttFields}${awsFields}${azureFields}${gcpFields}${amqpFields}${kafkaFields}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveIntegration()">保存</button></div>`);
+}
+function toggleIntFields(){
+  const k=v('m_kind');
+  const map={HTTP:'f_http',INFLUX_DB:'f_influx',MQTT_GLOBAL:'f_mqtt',AWS_SNS:'f_aws',AZURE_SERVICE_BUS:'f_azure',GCP_PUBSUB:'f_gcp',AMQP:'f_amqp',KAFKA:'f_kafka'};
+  for(const id of ['f_http','f_influx','f_mqtt','f_aws','f_azure','f_gcp','f_amqp','f_kafka']){
+    document.getElementById(id).classList.toggle('hidden', map[k]!==id);
+  }
+}
+async function saveIntegration(){
+  const kind=v('m_kind'); let config={};
+  if(kind==='HTTP'){ config={url:v('m_url')}; const h=v('m_headers'); if(h){try{config.headers=JSON.parse(h)}catch(e){alert('Headers 不是合法 JSON');return;}} }
+  else if(kind==='INFLUX_DB'){ config={endpoint:v('m_endpoint'),measurement:v('m_measurement'),token:v('m_token')}; }
+  else if(kind==='MQTT_GLOBAL'){ config={server:v('m_server'),topic:v('m_topic'),qos:+v('m_qos'),username:v('m_user'),password:v('m_pass')}; }
+  else if(kind==='AWS_SNS'){ config={aws_region:v('m_aws_region'),aws_access_key_id:v('m_aws_key'),aws_secret_access_key:v('m_aws_secret'),topic_arn:v('m_aws_topic')}; }
+  else if(kind==='AZURE_SERVICE_BUS'){ config={connection_string:v('m_az_conn'),publish_mode:v('m_az_mode'),publish_name:v('m_az_name')}; }
+  else if(kind==='GCP_PUBSUB'){ config={project_id:v('m_gcp_project'),topic_name:v('m_gcp_topic'),credentials_json:v('m_gcp_cred')||'',credentials_file:v('m_gcp_credfile')||''}; }
+  else if(kind==='AMQP'){ config={url:v('m_amqp_url'),exchange:v('m_amqp_exchange'),routing_key_template:v('m_amqp_rk')}; }
+  else if(kind==='KAFKA'){ config={brokers:v('m_kafka_brokers'),topic:v('m_kafka_topic'),tls:+v('m_kafka_tls'),username:v('m_kafka_user'),password:v('m_kafka_pass')}; }
+  const body={application_id:+state.appSel, kind, enabled:+v('m_enabled'), config};
+  const r=await api('POST','/api/integrations',body); if(r.error){alert(r.error);return;} closeModal(); viewIntegrations();
+}
+async function toggleIntegration(id,enabled){ const r=await api('PUT',`/api/integrations/${id}`,{enabled}); if(r.error){alert(r.error);return;} viewIntegrations(); }
+async function delIntegration(id){ if(!confirm('确认删除该集成？'))return; const r=await api('DELETE',`/api/integrations/${id}`); if(r.error){alert(r.error);return;} viewIntegrations(); }
+
+// ================= 组播组（Multicast Group） =================
+async function viewMulticastGroups(){
+  if(!state.apps.length){ const ra=await api('GET','/api/applications'); state.apps=ra.data||[]; }
+  const opts=`<option value="">全部应用</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
+  let q=[]; if(state.appSel) q.push('app_id='+state.appSel);
+  const r=await api('GET','/api/multicast-groups'+(q.length?'?'+q.join('&'):'')); const ms=r.data||[];
+  const appName=(id)=>{const a=(state.apps||[]).find(x=>x.id===id);return a?esc(a.name):('#'+id);};
+  const rows=ms.map(m=>`<tr><td>${m.id}</td><td>${esc(m.name)}</td><td class="muted">${appName(m.application_id)}</td>
+     <td class="muted">${esc(m.region)}</td><td><span class="tag ${m.group_type}">${m.group_type}</span></td>
+     <td class="muted"><code>${esc(m.mc_addr)}</code></td><td class="muted">DR${m.dr}</td><td class="muted">${m.f_cnt}</td>
+     <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">编辑</button> <button class="btn danger" onclick="delMulticast(${m.id})">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
+  document.getElementById('view').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2>组播组（Multicast Group）</h2>${adminBtn('<button onclick="newMulticast()">+ 新建组播组</button>')}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;viewMulticastGroups()">${opts}</select></div></div>
+   <p class="muted">组播使用组级会话密钥下发，不经过单设备会话；NS 调度线程每秒检查队列并发往组内（或为空时全部）网关。</p>
+   <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>区域</th><th>类型</th><th>MC Addr</th><th>DR</th><th>FCnt</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function multicastForm(m){
+  m=m||{}; const regions=regionOptions(m.region||"");
+  const type=(s)=>['A','B','C'].map(t=>`<option value="${t}" ${t===s?'selected':''}>${t}</option>`).join('');
+  const sched=(s)=>['DELAY','FIXED'].map(t=>`<option value="${t}" ${t===s?'selected':''}>${t}</option>`).join('');
+  const appOpts=(state.apps||[]).map(a=>`<option value="${a.id}" ${String(a.id)===String(m.application_id||state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
+  return `<label>名称</label><input id="m_name" value="${esc(m.name||'')}">
+   <div class="row"><div><label>应用</label><select id="m_app">${appOpts}</select></div>
+     <div><label>区域</label><select id="m_region">${regions}</select></div>
+     <div><label>组类型</label><select id="m_type">${type(m.group_type||'C')}</select></div></div>
+   <div class="row"><div><label>MC Addr (8 hex)</label><input id="m_mcaddr" value="${esc(m.mc_addr||'')}"></div>
+     <div><label>MC NwkSKey (32 hex)</label><input id="m_mcnwk" value="${esc(m.mc_nwk_s_key||'')}"></div>
+     <div><label>MC AppSKey (32 hex)</label><input id="m_mcapp" value="${esc(m.mc_app_s_key||'')}"></div></div>
+   <div style="margin-bottom:8px"><button class="btn ghost" type="button" onclick="genMc()">随机生成组播密钥</button></div>
+   <div class="row"><div><label>DR</label><input id="m_dr" value="${m.dr||0}"></div>
+     <div><label>频率 (Hz,0=区域默认)</label><input id="m_freq" value="${m.frequency||0}"></div>
+     <div><label>ClassB Ping 周期</label><input id="m_bpp" value="${m.class_b_ping_slot_periodicity||0}"></div></div>
+   <div class="row"><div><label>ClassC 调度类型</label><select id="m_sched">${sched(m.class_c_scheduling_type||'DELAY')}</select></div></div>`;
+}
+function genMc(){ document.getElementById('m_mcaddr').value=randHex(8); document.getElementById('m_mcnwk').value=randHex(32); document.getElementById('m_mcapp').value=randHex(32); }
+function newMulticast(){ if(!state.apps.length){alert('请先创建应用');return;} openModal(`<h3>新建组播组</h3>${multicastForm()}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveMulticast(0)">保存</button></div>`); }
+async function saveMulticast(id){
+  const body={name:v('m_name'),application_id:+v('m_app'),region:v('m_region'),group_type:v('m_type'),
+    mc_addr:v('m_mcaddr'),mc_nwk_s_key:v('m_mcnwk'),mc_app_s_key:v('m_mcapp'),
+    dr:+v('m_dr'),frequency:+v('m_freq'),class_b_ping_slot_periodicity:+v('m_bpp'),class_c_scheduling_type:v('m_sched')};
+  const r= id?await api('PUT',`/api/multicast-groups/${id}`,body):await api('POST','/api/multicast-groups',body);
+  if(r.error){alert(r.error);return;} closeModal(); viewMulticastGroups();
+}
+async function editMulticast(id){ const r=await api('GET',`/api/multicast-groups/${id}`); const m=r; if(!m||m.error){alert('未找到');return;}
+  openModal(`<h3>编辑组播组 #${id}</h3>${multicastForm(m)}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="saveMulticast(${id})">保存</button></div>`); }
+async function delMulticast(id){ if(!confirm('确认删除该组播组及其设备/网关/队列？'))return; const r=await api('DELETE',`/api/multicast-groups/${id}`); if(r.error){alert(r.error);return;} viewMulticastGroups(); }
+async function mcDetail(id){
+  const g = await api('GET',`/api/multicast-groups/${id}`);
+  const devs = await api('GET',`/api/multicast-groups/${id}/devices`);
+  const gws = await api('GET',`/api/multicast-groups/${id}/gateways`);
+  state.mcDetail = {id, g, devs:(devs.data||[]).map(x=>x.dev_eui), gws:(gws.data||[]).map(x=>x.gw_id)};
+  const devList=(state.mcDetail.devs.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="rmMcDev(${id},'${esc(e)}')">移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无设备</td></tr>`;
+  const gwList=(state.mcDetail.gws.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="rmMcGw(${id},'${esc(e)}')">移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无网关（为空则广播到全部网关）</td></tr>`;
+  openModal(`<h3>组播组 #${id} ${esc(g.name||'')}</h3>
+   <p class="muted">MC Addr: <code>${esc(g.mc_addr||'')}</code> · 类型 ${g.group_type} · DR${g.dr} · f_cnt ${g.f_cnt} · 应用 #${g.application_id}</p>
+   <h4 style="margin-top:6px">下发数据</h4>
+   <div class="row"><div style="flex:0 0 120px"><label>端口 (1..223)</label><input id="m_port" value="10"></div><div style="flex:2"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"></div></div>
+   <button onclick="enqueueMc(${id})">加入下发队列</button>
+   <h4 style="margin-top:14px">设备（仅用于展示/管理，不参与单播）</h4>
+   <div class="row"><div><input id="m_mcdev" placeholder="DevEUI 16 hex"></div><button onclick="addMcDev(${id})">添加设备</button></div>
+   <table style="margin-top:8px"><thead><tr><th>DevEUI</th><th></th></tr></thead><tbody>${devList}</tbody></table>
+   <h4 style="margin-top:14px">网关（空=全部网关）</h4>
+   <div class="row"><div><input id="m_mcgw" placeholder="Gateway ID"></div><button onclick="addMcGw(${id})">添加网关</button></div>
+   <table style="margin-top:8px"><thead><tr><th>GatewayID</th><th></th></tr></thead><tbody>${gwList}</tbody></table>
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+async function enqueueMc(id){ const r=await api('POST',`/api/multicast-groups/${id}/enqueue`,{port:+v('m_port'),payload:v('m_payload')}); if(r.error){alert(r.error);return;} closeModal(); alert('已加入组播下发队列（NS 调度线程将按队列发送）。'); }
+async function addMcDev(id){ const e=v('m_mcdev'); if(!e){alert('请输入 DevEUI');return;} const r=await api('POST',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
+async function rmMcDev(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
+async function addMcGw(id){ const e=v('m_mcgw'); if(!e){alert('请输入 Gateway ID');return;} const r=await api('POST',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
+async function rmMcGw(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
+
 function openModal(html){ document.getElementById('modalBox').innerHTML=html; document.getElementById('modal').classList.add('show'); }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
 document.getElementById('modal').onclick=e=>{ if(e.target.id==='modal') closeModal(); };
@@ -587,6 +1076,7 @@ function v(id){ return document.getElementById(id).value.trim(); }
 
 boot();
 </script>
+<script src="/assets/loracalc.js"></script>
 </body>
 </html>
 HTML;

@@ -301,5 +301,39 @@ class Region
     public function getJoinAcceptDelay2(): int { return (int) $this->cfg['join_accept_delay2']; }
     public function getMaxUlDr(): int { return (int) $this->cfg['max_ul_dr']; }
     public function getCfList() { return $this->cfg['cf_list']; }
+
+    /**
+     * 区域允许的最大「LoRa 125kHz」数据速率索引（用于 ADR 引擎的上限裁剪）。
+     * 仅取 bw==125 且 sf>0 的 DR，与 ChirpStack lrwn region.get_enabled_uplink_data_rates 过滤一致。
+     */
+    public function getMaxLoraDr(): int
+    {
+        $max = 0;
+        foreach ($this->cfg['data_rates'] as $dr => $d) {
+            if ((int) ($d['sf'] ?? 0) > 0 && (int) ($d['bw'] ?? 0) === 125) {
+                $max = max($max, (int) $dr);
+            }
+        }
+        return $max;
+    }
+
+    /**
+     * LoRa 解调门限（demodulation floor，单位 dB）——用于 ADR 余量计算与 LinkCheck 应答。
+     * 取自 LoRa 物理层灵敏度规格（同 ChirpStack lrwn region required_snr_for_dr）。
+     * DR 值按 data_rates 中的 sf 反推；FSK / 未知返回 0。
+     */
+    public function requiredSnrForDr(int $dr): float
+    {
+        $d = $this->cfg['data_rates'][$dr] ?? null;
+        if (!$d) {
+            return 0.0;
+        }
+        $sf = $d['sf'];
+        $map = [
+            12 => -20.0, 11 => -17.5, 10 => -15.0, 9 => -12.5, 8 => -10.0,
+            7 => -7.5, 6 => -7.5, 5 => -5.0,
+        ];
+        return $map[$sf] ?? 0.0;
+    }
 }
 
