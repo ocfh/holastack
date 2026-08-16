@@ -340,11 +340,6 @@ class Integration
         return $pos === false ? $resp : substr($resp, $pos + 4);
     }
 
-    private static function httpPost(string $url, array $body, array $headers, callable $log): void
-    {
-        self::httpPostRaw($url, json_encode($body, JSON_UNESCAPED_UNICODE), $headers, $log);
-    }
-
     /** 通用 HTTP(S) POST（非阻塞式发送，失败仅记录）。 */
     private static function httpPostRaw(string $url, string $body, array $headers, callable $log): void
     {

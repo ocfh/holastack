@@ -33,7 +33,12 @@ class DeviceProfile
                 return $dp;
             }
         }
-        // 默认模板：宽松的 OTAA + Class A/B/C 支持
+        // 优先使用数据库中真实存在的「默认模板」（EU868），否则回退到内置默认参数
+        $def = self::getDefault();
+        if ($def) {
+            return $def;
+        }
+        // 内置默认模板：宽松的 OTAA + Class A/B/C 支持（仅当库中尚无「默认模板」时回退）
         return [
             'id' => 0, 'name' => '默认模板', 'region' => ELW_DEFAULT_REGION,
             'mac_version' => '1.0.4', 'reg_params_revision' => 'RP002-1.0.3',
@@ -45,6 +50,36 @@ class DeviceProfile
             'class_c_timeout' => 0, 'abp_rx1_delay' => 1, 'abp_rx1_dr_offset' => 0, 'abp_rx2_dr' => 0, 'abp_rx2_freq' => 0,
             'allow_roaming' => 0,
         ];
+    }
+
+    /** 返回数据库中名为「默认模板」的配置（无则 null）。 */
+    public static function getDefault(): ?array
+    {
+        return Database::fetch("SELECT * FROM device_profiles WHERE name=? ORDER BY id ASC LIMIT 1", ['默认模板']);
+    }
+
+    /** 若不存在名为「默认模板」的配置，则插入一条 EU868 默认模板（供未指定模板的新建设备回退）。幂等。 */
+    public static function ensureDefault(): void
+    {
+        if (self::getDefault()) {
+            return;
+        }
+        $cols = self::columns();
+        $cols['name'] = '默认模板';
+        $cols['region'] = 'EU868';
+        $cols['created_at'] = time();
+        $set = [];
+        $vals = [];
+        $params = [];
+        foreach ($cols as $c => $def) {
+            $set[] = $c;
+            $vals[] = '?';
+            $params[] = self::cast($c, $def);
+        }
+        Database::execute(
+            "INSERT INTO device_profiles (" . implode(',', $set) . ") VALUES (" . implode(',', $vals) . ")",
+            $params
+        );
     }
 
     public static function create(array $p): array

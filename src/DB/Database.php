@@ -2,6 +2,7 @@
 namespace holastack\DB;
 
 use PDO;
+use holastack\Storage\DeviceProfile;
 
 /**
  * 极简 PDO 数据库封装（单例）。
@@ -89,7 +90,11 @@ class Database
         // 去除 SQLite 不支持的 COMMENT 行（MySQL 文件内已用 -- 注释处理，这里仅按语句拆分）
         $pdo = self::pdo();
         if ($type === 'sqlite') {
-            $pdo->exec($sql);
+            try {
+                $pdo->exec($sql);
+            } catch (\Throwable $e) {
+                error_log('migrate sqlite failed: ' . $e->getMessage());
+            }
             // 兼容已存在的旧库：补齐新增列（SQLite 不支持 IF NOT EXISTS）
             foreach ([
                 ['devices', 'last_gw_id', 'TEXT DEFAULT \'\''],
@@ -148,12 +153,20 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, dev_id INTEGER NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INTEGER PRIMARY KEY AUTOINCREMENT, deployment_id INTEGER NOT NULL, frag_index INTEGER NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server TEXT DEFAULT \'\', async_timeout INTEGER NOT NULL DEFAULT 250, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)');
+            // 兜底：确保后期模块表存在（防止旧库升级时漏建；与 schema 文件定义一致）
+            $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INTEGER PRIMARY KEY AUTOINCREMENT, application_id INTEGER NOT NULL, tenant_id INTEGER DEFAULT 0, kind TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', group_type TEXT NOT NULL DEFAULT \'C\', mc_addr TEXT DEFAULT \'\', mc_nwk_s_key TEXT DEFAULT \'\', mc_app_s_key TEXT DEFAULT \'\', f_cnt INTEGER NOT NULL DEFAULT 0, dr INTEGER NOT NULL DEFAULT 0, frequency INTEGER NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INTEGER NOT NULL DEFAULT 0, class_c_scheduling_type TEXT NOT NULL DEFAULT \'DELAY\', created_at INTEGER NOT NULL)');
             self::ensureColumn('uplinks', 'phy_payload', 'TEXT DEFAULT \'\'');
         } else {
-            // MySQL：按 ; 拆分执行
+            // MySQL：按 ; 拆分执行（单条 DDL 失败仅记录日志，不中断整库迁移，确保后续兜底 CREATE 仍能执行）
             foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
-                if ($stmt !== '') {
+                if ($stmt === '') {
+                    continue;
+                }
+                try {
                     $pdo->exec($stmt);
+                } catch (\Throwable $e) {
+                    error_log('migrate mysql stmt failed: ' . $e->getMessage() . ' | ' . substr($stmt, 0, 160));
                 }
             }
             // 兜底：确保令牌表 / 事件表存在
@@ -177,6 +190,9 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, dev_id INT NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INT AUTO_INCREMENT PRIMARY KEY, deployment_id INT NOT NULL, frag_index INT NOT NULL, data TEXT NOT NULL, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server VARCHAR(255) DEFAULT \'\', async_timeout INT NOT NULL DEFAULT 250, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL)');
+            // 兜底：确保后期模块表存在（防止旧库升级时漏建；与 schema 文件定义一致）
+            $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INT AUTO_INCREMENT PRIMARY KEY, application_id INT NOT NULL, tenant_id INT DEFAULT 0, kind VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL DEFAULT 1, config_json TEXT, created_at INT NOT NULL, INDEX idx_integrations_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', group_type VARCHAR(8) NOT NULL DEFAULT \'C\', mc_addr VARCHAR(16) DEFAULT \'\', mc_nwk_s_key VARCHAR(64) DEFAULT \'\', mc_app_s_key VARCHAR(64) DEFAULT \'\', f_cnt INT NOT NULL DEFAULT 0, dr INT NOT NULL DEFAULT 0, frequency INT NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INT NOT NULL DEFAULT 0, class_c_scheduling_type VARCHAR(8) NOT NULL DEFAULT \'DELAY\', created_at INT NOT NULL, INDEX idx_mg_app (application_id))');
             foreach ([
                 ['devices', 'last_seen', 'INT DEFAULT 0'],
                 ['devices', 'device_profile_id', 'INT DEFAULT 0'],
@@ -219,5 +235,7 @@ class Database
                 }
             }
         }
+        // 确保存在一条 EU868「默认模板」，供未指定设备模板的设备回退（幂等）
+        DeviceProfile::ensureDefault();
     }
 }
