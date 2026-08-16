@@ -184,8 +184,16 @@ CREATE TABLE IF NOT EXISTS api_keys (
     name VARCHAR(128) NOT NULL,
     api_key VARCHAR(64) NOT NULL UNIQUE,
     application_id INT NOT NULL,
-    created_at INT NOT NULL,
+    created_at INT NOT NULL DEFAULT 0,
     INDEX idx_api_keys_app (application_id)
+);
+
+-- ---- 站点设置（键值存储，仅 admin 可写） ----
+CREATE TABLE IF NOT EXISTS settings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    skey VARCHAR(64) NOT NULL UNIQUE,
+    svalue TEXT,
+    updated_at INT NOT NULL DEFAULT 0
 );
 
 -- ---- ChirpStack-port: 集成配置（HTTP/MQTT/InfluxDB/...） ----

@@ -132,6 +132,7 @@ class Database
                 ['api_keys', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['integrations', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['multicast_groups', 'tenant_id', 'INTEGER DEFAULT 0'],
+                ['api_keys', 'created_at', 'INTEGER DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }

@@ -9,6 +9,7 @@
  */
 require __DIR__ . '/../bootstrap.php';
 use holastack\Web\WebApp;
+use holastack\Web\Setting;
 use holastack\Auth\Auth;
 use holastack\Auth\ApiKey;
 use holastack\DB\Database;
@@ -110,6 +111,10 @@ function handleApi(string $method, string $path): array
         }
         return ['user' => $u];
     }
+    // 公开设置：登录页无需鉴权即可读取（仅返回白名单内的安全字段）
+    if ($resource === 'public-settings') {
+        return ['data' => Setting::getPublic()];
+    }
 
     // 其余需登录；写操作（创建/更新/删除）需 admin，下行入队 operator 即可
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
@@ -124,6 +129,13 @@ function handleApi(string $method, string $path): array
             return WebApp::getStats();
         case 'regions':
             return ['regions' => WebApp::regions()];
+        case 'settings':
+            Auth::guardApi(Auth::ROLE_ADMIN);
+            if ($method === 'POST') {
+                Setting::setMany($body);
+                return ['ok' => true, 'data' => Setting::getAll()];
+            }
+            return ['data' => Setting::getAll()];
         case 'applications':
             if (isset($segs[1]) && $method === 'PUT') {
                 return WebApp::updateApplication((int) $segs[1], $body);
@@ -442,12 +454,24 @@ function renderPage(): string
   :root{--bg:#0f1420;--panel:#1a2233;--line:#2b3650;--txt:#e6ecf5;--mut:#8b97ad;--acc:#3da9fc;--ok:#36d399;--warn:#fbbd23;--err:#f87272}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-  header{display:flex;align-items:center;gap:18px;padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--line)}
-  header h1{font-size:16px;margin:0;color:var(--acc)}
-  nav{display:flex;flex-wrap:wrap;gap:4px}
-  nav a{color:var(--mut);text-decoration:none;padding:6px 12px;border-radius:6px}
-  nav a.active,nav a:hover{color:var(--txt);background:#243049}
-  .hamburger{display:none;border:1px solid var(--line);background:#0d1320;color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:relative}
+  header h1{font-size:15px;margin:0;color:var(--acc);flex:0 0 auto}
+  #brand img{height:22px;vertical-align:middle}
+  /* 桌面端：分类二级菜单（缩小尺寸） */
+  .desk-nav{display:flex;gap:2px;align-items:center}
+  .navgrp{position:relative}
+  .navgrp-btn{background:none;border:none;color:var(--mut);padding:7px 11px;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;display:flex;align-items:center;gap:4px}
+  .navgrp-btn:hover,.navgrp.open .navgrp-btn{color:var(--txt);background:#243049}
+  .navgrp .caret{font-size:10px;opacity:.7}
+  .navsub{display:none;position:absolute;top:100%;left:0;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.4);padding:6px;z-index:60;flex-direction:column}
+  .navgrp.open .navsub{display:flex}
+  .navsub a{padding:8px 10px;border-radius:6px;color:var(--mut);text-decoration:none;white-space:nowrap;font-size:13px}
+  .navsub a:hover,.navsub a.active{color:var(--txt);background:#243049}
+  /* 移动端面板容器（双列分类）初始隐藏 */
+  .mobile-panel{display:none}
+  .login-logo{text-align:center;margin-bottom:14px}
+  .login-logo img{height:56px}
+  .hamburger{display:none;border:1px solid var(--line);background:#0d1320;color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer;flex:0 0 auto}
   .spacer{flex:1}
   .who{color:var(--mut);font-size:12px}
   main{padding:22px;max-width:1100px;margin:0 auto}
@@ -493,13 +517,22 @@ function renderPage(): string
   .log-who{color:var(--mut);font-size:11px} .log-time{color:var(--mut);font-size:11px;margin-left:auto}
   .log-msg{margin-top:6px;font-size:13px;color:var(--txt);word-break:break-word;white-space:pre-wrap}
   .log-empty{padding:20px;text-align:center;color:var(--mut);font-size:13px}
+  @media (max-width:860px){
+    /* 窄屏：桌面分类菜单隐藏，改用汉堡 + 双列分类面板 */
+    .desk-nav{display:none}
+    .hamburger{display:block}
+    header{gap:10px;position:relative}
+    .who{display:none}
+    .mobile-panel{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(0,0,0,.4);padding:14px;max-height:82vh;overflow:auto}
+    .mobile-panel.open{display:block}
+    .mp-group{margin-bottom:14px}
+    .mp-glabel{font-size:12px;color:var(--acc);font-weight:600;margin-bottom:6px;padding-left:2px}
+    .mp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .mp-grid a{display:block;padding:12px 10px;border-radius:8px;background:#161d2c;color:var(--txt);text-decoration:none;font-size:14px;border:1px solid var(--line)}
+    .mp-grid a.active{background:#243049;border-color:var(--acc)}
+  }
   @media (max-width:760px){
     .ring-card{flex-direction:column;text-align:center}.ring-legend{width:100%}.msg-bar{flex-direction:column;align-items:flex-start;gap:12px}.msg-split{margin-left:0}.log-cols{flex-direction:column}
-    /* 移动端：导航折叠为汉堡菜单 */
-    .hamburger{display:block}
-    nav#mainNav{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;flex-direction:column;gap:2px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(0,0,0,.4)}
-    nav#mainNav.open{display:flex}
-    nav#mainNav a{padding:11px 12px;border-radius:8px}
     header{gap:12px;position:relative}
     .who{display:none}
     /* 控件与小屏堆叠 */
@@ -515,33 +548,19 @@ function renderPage(): string
 </head>
 <body>
 <header class="hidden" id="topbar">
-  <h1>holastack</h1>
-  <button class="hamburger" id="navToggle" aria-label="菜单" onclick="toggleNav()">☰</button>
-  <nav id="mainNav">
-    <a href="#dashboard" class="nav" data-v="dashboard">概览</a>
-    <a href="#applications" class="nav" data-v="applications">应用</a>
-    <a href="#devices" class="nav" data-v="devices">设备</a>
-    <a href="#gateways" class="nav" data-v="gateways">网关</a>
-    <a href="#uplinks" class="nav" data-v="uplinks">上行</a>
-    <a href="#downlinks" class="nav" data-v="downlinks">下行</a>
-    <a href="#events" class="nav" data-v="events">日志</a>
-    <a href="#device-profiles" class="nav" data-v="device-profiles">设备模板</a>
-    <a href="#tenants" class="nav" data-v="tenants">租户</a>
-    <a href="#integrations" class="nav" data-v="integrations">集成</a>
-    <a href="#api-keys" class="nav" data-v="api-keys">API Keys</a>
-    <a href="#multicast-groups" class="nav" data-v="multicast-groups">组播</a>
-    <a href="#users" class="nav" data-v="users" id="navUsers">用户</a>
-    <a href="#loracalc" class="nav" data-v="loracalc">LoRa 计算器</a>
-    <a href="#apidocs" class="nav" data-v="apidocs">API 文档</a>
-  </nav>
+  <h1 id="brand">holastack</h1>
+  <nav id="deskNav" class="desk-nav"></nav>
   <div class="spacer"></div>
   <span class="who" id="who"></span>
   <button class="ghost" onclick="changePw()">修改密码</button>
   <button class="ghost" onclick="logout()">退出</button>
+  <button class="hamburger" id="navToggle" aria-label="菜单" onclick="toggleNav()">☰</button>
+  <div id="mobilePanel" class="mobile-panel"></div>
 </header>
 
 <div id="login" class="hidden">
   <div class="box">
+    <div id="loginLogo" class="login-logo"></div>
     <h3>登录</h3>
     <label>用户名</label><input id="l_user">
     <label>密码</label><input id="l_pass" type="password">
@@ -579,11 +598,72 @@ function renderShell(){
   document.getElementById('topbar').classList.remove('hidden');
   document.getElementById('view').classList.remove('hidden');
   document.getElementById('who').textContent = state.user.username;
-  document.getElementById('navUsers').style.display = (state.user.role === 'admin') ? '' : 'none';
+  renderNav();
   nav('dashboard');
 }
 const isAdmin = () => state.user && state.user.role === 'admin';
 const adminBtn = (html) => isAdmin() ? html : '';
+
+// 导航按功能分类；桌面端渲染为二级下拉，移动端渲染为双列分类面板。
+const NAV_GROUPS = [
+  { label:'监控', items:[
+    {v:'dashboard', text:'概览'},
+    {v:'uplinks', text:'上行'},
+    {v:'downlinks', text:'下行'},
+    {v:'events', text:'日志'},
+  ]},
+  { label:'设备', items:[
+    {v:'applications', text:'应用'},
+    {v:'devices', text:'设备'},
+    {v:'gateways', text:'网关'},
+    {v:'device-profiles', text:'设备模板'},
+    {v:'multicast-groups', text:'组播'},
+  ]},
+  { label:'工具', items:[
+    {v:'integrations', text:'集成'},
+    {v:'api-keys', text:'API Keys'},
+    {v:'loracalc', text:'LoRa 计算器'},
+    {v:'apidocs', text:'API 文档'},
+  ]},
+  { label:'管理', admin:true, items:[
+    {v:'tenants', text:'租户'},
+    {v:'users', text:'用户'},
+    {v:'settings', text:'设置'},
+  ]},
+];
+
+function renderNav(){
+  const desk = document.getElementById('deskNav');
+  const mob = document.getElementById('mobilePanel');
+  if (!desk || !mob) return;
+  const groups = NAV_GROUPS.filter(g => !g.admin || isAdmin());
+  desk.innerHTML = groups.map(g => {
+    const sub = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${it.text}</a>`).join('');
+    return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${g.label}<span class="caret">▾</span></button><div class="navsub">${sub}</div></div>`;
+  }).join('');
+  mob.innerHTML = groups.map(g => {
+    const grid = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${it.text}</a>`).join('');
+    return `<div class="mp-group"><div class="mp-glabel">${g.label}</div><div class="mp-grid">${grid}</div></div>`;
+  }).join('');
+  bindNavLinks();
+  document.querySelectorAll('.nav').forEach(a => a.classList.toggle('active', a.dataset.v === state.view));
+}
+function bindNavLinks(){
+  document.querySelectorAll('.nav').forEach(a => a.onclick = () => { nav(a.dataset.v); closeNav(); closeGrps(); });
+}
+function toggleGrp(btn){
+  const grp = btn.parentElement;
+  const wasOpen = grp.classList.contains('open');
+  closeGrps();
+  if (!wasOpen) grp.classList.add('open');
+}
+function closeGrps(){
+  document.querySelectorAll('.navgrp.open').forEach(g => g.classList.remove('open'));
+}
+// 点击页面其他区域时收起已展开的分类下拉
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.navgrp')) closeGrps();
+});
 
 async function doLogin(){
   const u = document.getElementById('l_user').value.trim();
@@ -618,6 +698,7 @@ const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 
 function nav(v){
   state.view = v;
+  closeNav(); closeGrps();
   document.querySelectorAll('.nav').forEach(a=>a.classList.toggle('active', a.dataset.v===v));
   if (v==='dashboard') return viewDashboard();
   if (v==='applications') return viewApplications();
@@ -634,10 +715,10 @@ function nav(v){
   if (v==='users') return viewUsers();
   if (v==='loracalc') return viewLoraCalc();
   if (v==='apidocs') return viewApiDocs();
+  if (v==='settings') return viewSettings();
 }
-document.querySelectorAll('.nav').forEach(a=>a.onclick=()=>{ nav(a.dataset.v); closeNav(); });
-function toggleNav(){ document.getElementById('mainNav').classList.toggle('open'); }
-function closeNav(){ document.getElementById('mainNav').classList.remove('open'); }
+function toggleNav(){ document.getElementById('mobilePanel').classList.toggle('open'); }
+function closeNav(){ document.getElementById('mobilePanel').classList.remove('open'); }
 
 // 自动刷新：只读的实时视图（概览/网关/上行/日志）每 5 秒刷新；模态框打开时暂停，避免打断编辑
 const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','downlinks','events'];
@@ -933,6 +1014,57 @@ async function viewUsers(){
      <td><button class="btn danger" onclick="delUser(${u.id})">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`).join('')||`<tr><td colspan="5" class="muted">暂无用户</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户</h2><button onclick="newUser()">+ 新建用户</button></div>
     <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ================= 站点设置（仅 admin） =================
+async function viewSettings(){
+  if (!isAdmin()) { nav('dashboard'); return; }
+  const r = await api('GET','/api/settings'); const s = r.data||{};
+  const val = (k) => esc(s[k] || '');
+  document.getElementById('view').innerHTML = `<h2>站点设置</h2>
+   <p class="muted">仅管理员可配置；网站名称、顶部图标与登录页 LOGO 会实时生效，所有配置持久化存入数据库。</p>
+   <div class="card" style="max-width:680px">
+     <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="holastack">
+     <label>顶部图标 URL（可选，留空则显示文字名称）</label><input id="st_logo" value="${val('site_logo_url')}" placeholder="https://example.com/logo.png">
+     <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
+     <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="holastack">
+     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+       <button class="ghost" onclick="nav('dashboard')">取消</button>
+       <button onclick="saveSettings()">保存</button>
+     </div>
+   </div>`;
+}
+async function saveSettings(){
+  const body = {
+    site_name: v('st_name'),
+    site_logo_url: v('st_logo'),
+    login_logo_url: v('st_login_img'),
+    login_logo_text: v('st_login_text'),
+  };
+  const r = await api('POST','/api/settings', body);
+  if (r.error) { alert(r.error); return; }
+  await applyPublicSettings();
+  alert('设置已保存');
+  nav('dashboard');
+}
+// 拉取公开设置并应用到顶栏品牌、登录页 LOGO、页面标题（无需登录即可读取）
+async function applyPublicSettings(){
+  try {
+    const r = await fetch('/api/public-settings');
+    const d = (await r.json()).data || {};
+    const brand = document.getElementById('brand');
+    if (brand) {
+      if (d.site_logo_url) brand.innerHTML = `<img src="${esc(d.site_logo_url)}" alt="logo">`;
+      else brand.textContent = d.site_name || 'holastack';
+    }
+    const ll = document.getElementById('loginLogo');
+    if (ll) {
+      if (d.login_logo_url) ll.innerHTML = `<img src="${esc(d.login_logo_url)}" alt="logo">`;
+      else if (d.login_logo_text) ll.innerHTML = `<div style="font-size:24px;font-weight:700;color:var(--txt)">${esc(d.login_logo_text)}</div>`;
+      else ll.innerHTML = '';
+    }
+    if (d.site_name) document.title = d.site_name;
+  } catch(e) {}
 }
 async function changePw(){
   let targetSel = '';
@@ -1332,6 +1464,7 @@ document.getElementById('modal').onclick=e=>{ if(e.target.id==='modal') closeMod
 function v(id){ return document.getElementById(id).value.trim(); }
 
 boot();
+applyPublicSettings();
 </script>
 <script src="/assets/loracalc.js"></script>
 <script src="/assets/apidocs.js"></script>

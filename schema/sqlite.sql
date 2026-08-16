@@ -180,7 +180,16 @@ CREATE TABLE IF NOT EXISTS api_keys (
     tenant_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     api_key TEXT NOT NULL UNIQUE,
-    application_id INTEGER NOT NULL
+    application_id INTEGER NOT NULL,
+    created_at INTEGER DEFAULT 0
+);
+
+-- ---- 站点设置（键值存储，仅 admin 可写） ----
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skey TEXT NOT NULL UNIQUE,
+    svalue TEXT,
+    updated_at INTEGER DEFAULT 0
 );
 
 -- ---- ChirpStack-port: 集成配置 ----

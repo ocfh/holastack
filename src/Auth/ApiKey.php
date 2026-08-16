@@ -27,11 +27,12 @@ class ApiKey
         }
         $token = self::generateToken();
         $hash = password_hash($token, PASSWORD_DEFAULT);
+        $now = time();
         Database::execute(
-            "INSERT INTO api_keys (name, api_key, application_id) VALUES (?,?,?)",
-            [$name, $hash, $applicationId]
+            "INSERT INTO api_keys (name, api_key, application_id, created_at) VALUES (?,?,?,?)",
+            [$name, $hash, $applicationId, $now]
         );
-        return ['id' => Database::lastInsertId(), 'token' => $token, 'name' => $name];
+        return ['id' => Database::lastInsertId(), 'token' => $token, 'name' => $name, 'created_at' => $now];
     }
 
     /** 校验 API Key 明文，返回对应 application_id（无效返回 0）。 */
