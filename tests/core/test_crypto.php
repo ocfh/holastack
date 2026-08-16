@@ -3,7 +3,7 @@
  * 密码学自测：使用权威测试向量验证 AES-128 ECB / CMAC / LoRaWAN MIC / 加解密。
  * 运行：php tests/test_crypto.php
  */
-require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../../bootstrap.php';
 use holastack\Crypto\AES;
 use holastack\Crypto\LoRaWANCrypto;
 use holastack\Core\Frame;

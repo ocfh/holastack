@@ -8,7 +8,7 @@
  * 运行前需先启动 NS：php bin/server.php
  * 运行：php tests/simulate_gateway.php
  */
-require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../../bootstrap.php';
 use holastack\Crypto\LoRaWANCrypto;
 use holastack\Core\Frame;
 use holastack\DB\Database;

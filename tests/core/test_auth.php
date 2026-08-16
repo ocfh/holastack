@@ -6,7 +6,7 @@
  *  - 角色判断（admin / operator）
  * 运行：php tests/test_auth.php
  */
-require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../../bootstrap.php';
 use holastack\DB\Database;
 use holastack\Auth\Auth;
 
