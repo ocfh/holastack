@@ -37,6 +37,9 @@ class ApiKey
     /** 校验 API Key 明文，返回对应 application_id（无效返回 0）。 */
     public static function validate(string $token): int
     {
+        if ($token === '' || $token === null) {
+            return 0;
+        }
         $rows = Database::fetchAll("SELECT id, api_key, application_id FROM api_keys");
         foreach ($rows as $r) {
             if (password_verify($token, $r['api_key'])) {
@@ -44,6 +47,19 @@ class ApiKey
             }
         }
         return 0;
+    }
+
+    /** 从请求中提取 API Key：仅认 Authorization: Bearer 与 ?api_key=（不接收登录令牌 X-Elw-Token）。 */
+    public static function tokenFromRequest(): ?string
+    {
+        $h = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        if (is_string($h) && preg_match('/Bearer\s+(\S+)/i', $h, $m)) {
+            return $m[1];
+        }
+        if (isset($_GET['api_key']) && is_string($_GET['api_key']) && $_GET['api_key'] !== '') {
+            return $_GET['api_key'];
+        }
+        return null;
     }
 
     public static function list(int $applicationId): array

@@ -10,6 +10,7 @@
 require __DIR__ . '/../bootstrap.php';
 use holastack\Web\WebApp;
 use holastack\Auth\Auth;
+use holastack\Auth\ApiKey;
 use holastack\DB\Database;
 use holastack\Install\Installer;
 
@@ -42,6 +43,13 @@ if ($path === '/install') {
 
 // 已安装：确保表结构存在（含 auth_tokens 等新增表，对已存在库兜底）
 Database::migrate();
+
+// ---- 应用级开放 API（/v1/，使用应用 API Key 鉴权，作用域限定到该 Key 所属应用）----
+if (strpos($path, '/v1/') === 0) {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(handleAppApi($method, $path), JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 // ---- API 路由 ----
 if (strpos($path, '/api/') === 0) {
@@ -273,6 +281,154 @@ function handleApi(string $method, string $path): array
     }
 }
 
+/**
+ * 应用级开放 API（/v1/）：使用「应用 API Key」鉴权，所有数据作用域限定到该 Key 所属应用。
+ * 鉴权头：Authorization: Bearer <API_KEY>  或  ?api_key=<API_KEY>
+ * 设备响应已剥离 app_key / nwk_s_key / app_s_key 等敏感密钥。
+ */
+function handleAppApi(string $method, string $path): array
+{
+    $segs = explode('/', trim($path, '/'));
+    array_shift($segs); // 去掉 'v1'
+    $sub = $segs[0] ?? '';
+    $body = in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true) ? getJsonBody() : [];
+    $get = $_GET;
+
+    // ---- 鉴权：API Key -> application_id ----
+    $token = ApiKey::tokenFromRequest();
+    $appId = $token ? ApiKey::validate($token) : 0;
+    if (!$appId) {
+        http_response_code(401);
+        return ['error' => 'invalid_api_key', 'message' => '请在请求头携带 Authorization: Bearer <API_KEY> 或使用 ?api_key=<API_KEY>'];
+    }
+    $app = WebApp::getApplication($appId);
+    if (!$app) {
+        http_response_code(401);
+        return ['error' => 'application_not_found'];
+    }
+
+    // 仅保留应用公开字段（不泄露密钥）
+    $deviceView = static function (array $d): array {
+        $lastSeen = max((int) ($d['last_seen'] ?? 0), (int) ($d['created_at'] ?? 0));
+        $online = ($d['status'] === 'active' && $lastSeen >= time() - WebApp::DEV_OFFLINE_TIMEOUT) ? 'online' : 'offline';
+        return [
+            'id' => (int) $d['id'],
+            'name' => $d['name'],
+            'dev_eui' => $d['dev_eui'] ?? '',
+            'dev_addr' => $d['dev_addr'] ?? '',
+            'activation' => $d['activation'] ?? '',
+            'class' => $d['class'] ?? 'A',
+            'region' => $d['region'] ?? '',
+            'status' => $d['status'] ?? '',
+            'online' => $online,
+            'last_seen' => $lastSeen ? date('Y-m-d H:i:s', $lastSeen) : '-',
+            'created_at' => (int) ($d['created_at'] ?? 0),
+        ];
+    };
+    $resolveDevice = static function (string $devEui) use ($appId): ?array {
+        $devEui = strtolower(preg_replace('/[^0-9a-f]/', '', $devEui));
+        if ($devEui === '') {
+            return null;
+        }
+        return Database::fetch("SELECT * FROM devices WHERE dev_eui=? AND app_id=?", [$devEui, $appId]);
+    };
+    $limitOf = static function (string $key) use ($get): int {
+        $n = (int) ($get[$key] ?? 50);
+        return max(1, min($n, 500));
+    };
+
+    switch ($sub) {
+        case '':
+            return [
+                'service' => 'holastack application API',
+                'version' => 'v1',
+                'auth' => 'Authorization: Bearer <API_KEY> 或 ?api_key=<API_KEY>',
+                'endpoints' => [
+                    'GET    /v1/info',
+                    'GET    /v1/devices',
+                    'GET    /v1/devices/{dev_eui}',
+                    'GET    /v1/devices/{dev_eui}/uplinks',
+                    'GET    /v1/uplinks',
+                    'GET    /v1/downlinks',
+                    'POST   /v1/devices/{dev_eui}/downlink',
+                ],
+            ];
+
+        case 'info':
+            $devCount = Database::fetch("SELECT COUNT(*) c FROM devices WHERE app_id=?", [$appId])['c'];
+            $upCount = Database::fetch("SELECT COUNT(*) c FROM uplinks WHERE app_id=?", [$appId])['c'];
+            $dlCount = Database::fetch("SELECT COUNT(*) c FROM downlinks WHERE app_id=?", [$appId])['c'];
+            return [
+                'application' => [
+                    'id' => (int) $app['id'],
+                    'name' => $app['name'],
+                    'app_eui' => $app['app_eui'] ?? '',
+                    'description' => $app['description'] ?? '',
+                ],
+                'counts' => [
+                    'devices' => (int) $devCount,
+                    'uplinks' => (int) $upCount,
+                    'downlinks' => (int) $dlCount,
+                ],
+            ];
+
+        case 'devices':
+            // /v1/devices/{dev_eui}[/uplinks|/downlink]
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $dev = $resolveDevice($segs[1]);
+                if (!$dev) {
+                    http_response_code(404);
+                    return ['error' => 'device_not_found'];
+                }
+                $sub2 = $segs[2] ?? '';
+                if ($sub2 === 'uplinks' && $method === 'GET') {
+                    return ['data' => WebApp::listUplinks($dev['id'], null, $limitOf('limit'))];
+                }
+                if ($sub2 === 'downlink' && $method === 'POST') {
+                    $port = (int) ($body['port'] ?? 0);
+                    $payload = (string) ($body['payload'] ?? '');
+                    $confirmed = !empty($body['confirmed']);
+                    $r = WebApp::enqueueDownlink($dev['id'], $port, $payload, $confirmed);
+                    if (isset($r['error'])) {
+                        http_response_code(400);
+                        return $r;
+                    }
+                    http_response_code(201);
+                    return $r;
+                }
+                // 单设备详情
+                $up = Database::fetch("SELECT COUNT(*) c FROM uplinks WHERE dev_id=?", [$dev['id']])['c'];
+                $dl = Database::fetch("SELECT COUNT(*) c FROM downlinks WHERE dev_id=?", [$dev['id']])['c'];
+                return ['device' => $deviceView($dev), 'counts' => ['uplinks' => (int) $up, 'downlinks' => (int) $dl]];
+            }
+            return ['data' => array_map($deviceView, WebApp::listDevices($appId))];
+
+        case 'uplinks':
+            $devId = 0;
+            if (!empty($get['dev_eui'])) {
+                $d = $resolveDevice((string) $get['dev_eui']);
+                if ($d) {
+                    $devId = $d['id'];
+                }
+            }
+            return ['data' => WebApp::listUplinks($devId ?: null, $appId, $limitOf('limit'))];
+
+        case 'downlinks':
+            $devId = 0;
+            if (!empty($get['dev_eui'])) {
+                $d = $resolveDevice((string) $get['dev_eui']);
+                if ($d) {
+                    $devId = $d['id'];
+                }
+            }
+            return ['data' => WebApp::listDownlinks($devId ?: null, $appId, $limitOf('limit'))];
+
+        default:
+            http_response_code(404);
+            return ['error' => 'not_found', 'message' => "未知端点：/$sub"];
+    }
+}
+
 function renderPage(): string
 {
     return <<<'HTML'
@@ -376,6 +532,7 @@ function renderPage(): string
     <a href="#multicast-groups" class="nav" data-v="multicast-groups">组播</a>
     <a href="#users" class="nav" data-v="users" id="navUsers">用户</a>
     <a href="#loracalc" class="nav" data-v="loracalc">LoRa 计算器</a>
+    <a href="#apidocs" class="nav" data-v="apidocs">API 文档</a>
   </nav>
   <div class="spacer"></div>
   <span class="who" id="who"></span>
@@ -476,6 +633,7 @@ function nav(v){
   if (v==='multicast-groups') return viewMulticastGroups();
   if (v==='users') return viewUsers();
   if (v==='loracalc') return viewLoraCalc();
+  if (v==='apidocs') return viewApiDocs();
 }
 document.querySelectorAll('.nav').forEach(a=>a.onclick=()=>{ nav(a.dataset.v); closeNav(); });
 function toggleNav(){ document.getElementById('mainNav').classList.toggle('open'); }
@@ -1176,6 +1334,7 @@ function v(id){ return document.getElementById(id).value.trim(); }
 boot();
 </script>
 <script src="/assets/loracalc.js"></script>
+<script src="/assets/apidocs.js"></script>
 </body>
 </html>
 HTML;
