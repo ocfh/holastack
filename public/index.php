@@ -464,7 +464,35 @@ function renderPage(): string
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>holastack</title>
 <style>
-  :root{--bg:#0f1420;--panel:#1a2233;--line:#2b3650;--txt:#e6ecf5;--mut:#8b97ad;--acc:#3da9fc;--ok:#36d399;--warn:#fbbd23;--err:#f87272}
+  /* ===== 主题变量：深色（默认） ===== */
+  :root, [data-theme="dark"]{
+    --bg:#0f1420; --panel:#1a2233; --line:#2b3650; --txt:#e6ecf5; --mut:#8b97ad;
+    --acc:#3da9fc; --ok:#36d399; --warn:#fbbd23; --err:#f87272;
+    /* 派生色（硬编码色替换） */
+    --bg-deep:#0d1320;    /* input / pre 背景 */
+    --bg-hover:#1f2740;   /* tr:hover */
+    --bg-subtle:#161d2c;  /* th / hl-row */
+    --bg-chip:#243049;    /* ghost btn / chip */
+    --shadow-rgba:0,0,0;  /* 用于 rgba(N,N,N,.4) 的 RGB 分量 */
+    --txt-on-acc:#04121f; /* 按钮文字色 */
+    --tag-ok-bg:#103a2a; --tag-pending-bg:#3a3410; --tag-err-bg:#3a1620; --tag-off-bg:#2a2f3d;
+    --tag-a-bg:#10304a; --tag-b-bg:#2a2a10; --tag-c-bg:#103a2a;
+    --err-box-bg:#3a1620; --err-box-border:#5a2230; --err-box-txt:#ffd7d7;
+  }
+  /* ===== 主题变量：浅色 ===== */
+  [data-theme="light"]{
+    --bg:#f4f6fa; --panel:#ffffff; --line:#d0d6e0; --txt:#1a2332; --mut:#6a7588;
+    --acc:#1a73e8; --ok:#1a9e5c; --warn:#c4810c; --err:#d63636;
+    --bg-deep:#eef1f6;
+    --bg-hover:#f0f3f8;
+    --bg-subtle:#f7f9fc;
+    --bg-chip:#e8edf4;
+    --shadow-rgba:0,0,0;
+    --txt-on-acc:#ffffff;
+    --tag-ok-bg:#d4f0dd; --tag-pending-bg:#fcf0d0; --tag-err-bg:#f9dada; --tag-off-bg:#e8ebef;
+    --tag-a-bg:#d8e8fa; --tag-b-bg:#f5f0d0; --tag-c-bg:#d4f0dd;
+    --err-box-bg:#fce4e4; --err-box-border:#f0b0b0; --err-box-txt:#8b2020;
+  }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
   header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:relative}
@@ -474,17 +502,17 @@ function renderPage(): string
   .desk-nav{display:flex;gap:2px;align-items:center}
   .navgrp{position:relative}
   .navgrp-btn{background:none;border:none;color:var(--mut);padding:7px 11px;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;display:flex;align-items:center;gap:4px}
-  .navgrp-btn:hover,.navgrp.open .navgrp-btn{color:var(--txt);background:#243049}
+  .navgrp-btn:hover,.navgrp.open .navgrp-btn{color:var(--txt);background:var(--bg-chip)}
   .navgrp .caret{font-size:10px;opacity:.7}
-  .navsub{display:none;position:absolute;top:100%;left:0;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.4);padding:6px;z-index:60;flex-direction:column}
+  .navsub{display:none;position:absolute;top:100%;left:0;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 20px rgba(var(--shadow-rgba),.12);padding:6px;z-index:60;flex-direction:column}
   .navgrp.open .navsub{display:flex}
   .navsub a{padding:8px 10px;border-radius:6px;color:var(--mut);text-decoration:none;white-space:nowrap;font-size:13px}
-  .navsub a:hover,.navsub a.active{color:var(--txt);background:#243049}
+  .navsub a:hover,.navsub a.active{color:var(--txt);background:var(--bg-chip)}
   /* 移动端面板容器（双列分类）初始隐藏 */
   .mobile-panel{display:none}
   .login-logo{text-align:center;margin-bottom:14px}
   .login-logo img{height:56px}
-  .hamburger{display:none;border:1px solid var(--line);background:#0d1320;color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer;flex:0 0 auto}
+  .hamburger{display:none;border:1px solid var(--line);background:var(--bg-deep);color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer;flex:0 0 auto}
   .spacer{flex:1}
   .who{color:var(--mut);font-size:12px}
   main{padding:22px;max-width:1100px;margin:0 auto}
@@ -493,19 +521,19 @@ function renderPage(): string
   .card .n{font-size:26px;font-weight:700;color:var(--acc)} .card .l{color:var(--mut);font-size:12px}
   table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:10px;overflow:hidden}
   th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px}
-  th{color:var(--mut);font-weight:600;background:#161d2c} tr:hover td{background:#1f2740}
-  button,.btn{background:var(--acc);color:#04121f;border:0;padding:8px 14px;border-radius:7px;cursor:pointer;font-weight:600}
-  button.ghost{background:#243049;color:var(--txt)} button.danger{background:#3a1620;color:var(--err)}
-  input,select,textarea{background:#0d1320;color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;font-family:inherit}
+  th{color:var(--mut);font-weight:600;background:var(--bg-subtle)} tr:hover td{background:var(--bg-hover)}
+  button,.btn{background:var(--acc);color:var(--txt-on-acc);border:0;padding:8px 14px;border-radius:7px;cursor:pointer;font-weight:600}
+  button.ghost{background:var(--bg-chip);color:var(--txt)} button.danger{background:var(--tag-err-bg);color:var(--err)}
+  input,select,textarea{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;font-family:inherit}
   label{display:block;color:var(--mut);margin:10px 0 4px;font-size:12px}
   .row{display:flex;gap:12px;flex-wrap:wrap} .row>div{flex:1;min-width:200px}
-  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
+  .modal{position:fixed;inset:0;background:rgba(var(--shadow-rgba),.55);display:none;align-items:center;justify-content:center}
   .modal.show{display:flex} .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;width:min(560px,92vw);max-height:88vh;overflow:auto}
   .box h3{margin:0 0 8px}
-  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:#243049;color:var(--mut)}
-  .tag.ok{background:#103a2a;color:var(--ok)} .tag.pending{background:#3a3410;color:var(--warn)} .tag.err{background:#3a1620;color:var(--err)} .tag.off{background:#2a2f3d;color:var(--mut)}
-  .tag.A{background:#10304a;color:var(--acc)} .tag.B{background:#2a2a10;color:var(--warn)} .tag.C{background:#103a2a;color:var(--ok)}
-  .muted{color:var(--mut)} pre{background:#0d1320;padding:10px;border-radius:8px;overflow:auto;font-size:12px} .hidden{display:none}
+  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:var(--bg-chip);color:var(--mut)}
+  .tag.ok{background:var(--tag-ok-bg);color:var(--ok)} .tag.pending{background:var(--tag-pending-bg);color:var(--warn)} .tag.err{background:var(--tag-err-bg);color:var(--err)} .tag.off{background:var(--tag-off-bg);color:var(--mut)}
+  .tag.A{background:var(--tag-a-bg);color:var(--acc)} .tag.B{background:var(--tag-b-bg);color:var(--warn)} .tag.C{background:var(--tag-c-bg);color:var(--ok)}
+  .muted{color:var(--mut)} pre{background:var(--bg-deep);padding:10px;border-radius:8px;overflow:auto;font-size:12px} .hidden{display:none}
   #login{display:flex;align-items:center;justify-content:center;min-height:100vh}
   #login.hidden{display:none}
   #login .box{width:min(380px,92vw)}
@@ -514,11 +542,11 @@ function renderPage(): string
   .ring-card{flex:1 1 200px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:18px}
   .ring{width:140px;height:140px;flex:0 0 auto}
   .ring-legend{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
-  .hl-row{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-radius:9px;background:#161d2c}
+  .hl-row{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-radius:9px;background:var(--bg-subtle)}
   .hl-row b{font-size:17px} .hl-row .pct{color:var(--mut);font-size:12px;font-weight:400}
   .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
   .hl-online .dot{background:var(--ok)} .hl-offline .dot{background:var(--err)}
-  .msg-bar{display:flex;align-items:center;gap:26px;background:linear-gradient(135deg,#1a2233,#22304a);border:1px solid var(--line);border-radius:12px;padding:18px 26px;margin-bottom:16px}
+  .msg-bar{display:flex;align-items:center;gap:26px;background:var(--bg-subtle);border:1px solid var(--line);border-radius:12px;padding:18px 26px;margin-bottom:16px}
   .msg-num{font-size:36px;font-weight:700;color:var(--acc);line-height:1} .msg-lbl{color:var(--mut);margin-left:10px;font-size:13px}
   .msg-split{display:flex;gap:26px;margin-left:auto;color:var(--mut);font-size:13px}
   .msg-split b{color:var(--txt)} .msg-split .up{color:var(--ok)} .msg-split .down{color:var(--acc)}
@@ -536,13 +564,13 @@ function renderPage(): string
     .hamburger{display:block}
     header{gap:10px;position:relative}
     .who{display:none}
-    .mobile-panel{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(0,0,0,.4);padding:14px;max-height:82vh;overflow:auto}
+    .mobile-panel{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(var(--shadow-rgba),.12);padding:14px;max-height:82vh;overflow:auto}
     .mobile-panel.open{display:block}
     .mp-group{margin-bottom:14px}
     .mp-glabel{font-size:12px;color:var(--acc);font-weight:600;margin-bottom:6px;padding-left:2px}
     .mp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-    .mp-grid a{display:block;padding:12px 10px;border-radius:8px;background:#161d2c;color:var(--txt);text-decoration:none;font-size:14px;border:1px solid var(--line)}
-    .mp-grid a.active{background:#243049;border-color:var(--acc)}
+    .mp-grid a{display:block;padding:12px 10px;border-radius:8px;background:var(--bg-subtle);color:var(--txt);text-decoration:none;font-size:14px;border:1px solid var(--line)}
+    .mp-grid a.active{background:var(--bg-chip);border-color:var(--acc)}
   }
   @media (max-width:760px){
     .ring-card{flex-direction:column;text-align:center}.ring-legend{width:100%}.msg-bar{flex-direction:column;align-items:flex-start;gap:12px}.msg-split{margin-left:0}.log-cols{flex-direction:column}
@@ -558,19 +586,30 @@ function renderPage(): string
     .loracalc .grid{grid-template-columns:1fr}
   }
   /* ===== 页面切换加载遮罩 ===== */
-  #loader{position:fixed;inset:0;background:rgba(15,20,32,.6);display:none;align-items:center;justify-content:center;z-index:200}
+  #loader{position:fixed;inset:0;background:rgba(var(--shadow-rgba),.3);display:none;align-items:center;justify-content:center;z-index:200}
   #loader.show{display:flex}
-  #loader .spinner{width:44px;height:44px;border:4px solid rgba(255,255,255,.15);border-top-color:var(--acc);border-radius:50%;animation:elw-spin .8s linear infinite}
+  #loader .spinner{width:44px;height:44px;border:4px solid rgba(var(--shadow-rgba),.12);border-top-color:var(--acc);border-radius:50%;animation:elw-spin .8s linear infinite}
   #loader .lbl{position:absolute;margin-top:74px;color:var(--mut);font-size:13px}
   @keyframes elw-spin{to{transform:rotate(360deg)}}
-  .err-box{background:#3a1620;border:1px solid var(--err);color:#ffd7d7;padding:14px 16px;border-radius:10px;margin:8px 0}
+  .err-box{background:var(--err-box-bg);border:1px solid var(--err-box-border);color:var(--err-box-txt);padding:14px 16px;border-radius:10px;margin:8px 0}
 </style>
+<script>
+// 防止主题闪烁（FOUC）：在首次渲染前从 localStorage 或系统偏好读取并设置 data-theme
+(function(){
+  var saved = localStorage.getItem('elw_theme');
+  if(!saved){
+    saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  document.documentElement.setAttribute('data-theme', saved);
+})();
+</script>
 </head>
 <body>
 <header class="hidden" id="topbar">
   <h1 id="brand">holastack</h1>
   <nav id="deskNav" class="desk-nav"></nav>
   <div class="spacer"></div>
+  <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 10px;font-size:16px;line-height:1">🌙</button>
   <span class="who" id="who"></span>
   <button class="ghost" onclick="changePw()">修改密码</button>
   <button class="ghost" onclick="logout()">退出</button>
@@ -595,6 +634,30 @@ function renderPage(): string
 <div id="loader"><div class="spinner"></div><div class="lbl">加载中…</div></div>
 
 <script>
+// ===== 主题切换 =====
+function getTheme(){ return document.documentElement.getAttribute('data-theme') || 'dark'; }
+function toggleTheme(){
+  var next = getTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('elw_theme', next);
+  updateThemeIcon(next);
+  // 重新渲染当前页：环形图(SVG 硬编码色需重建)、loracalc(注入的 style 需刷新)、apidocs
+  rerenderForTheme();
+}
+function rerenderForTheme(){
+  var v = state.view;
+  if (v === 'dashboard' && typeof viewDashboard === 'function') return viewDashboard();
+  if (v === 'loracalc' && typeof viewLoraCalc === 'function') return viewLoraCalc();
+  if (v === 'apidocs' && typeof viewApiDocs === 'function') return viewApiDocs();
+  // 其他页面纯 CSS 驱动，无需重建 DOM
+}
+function updateThemeIcon(t){
+  var btn = document.getElementById('themeToggle');
+  if(btn) btn.textContent = (t === 'dark' ? '🌙' : '☀️');
+}
+// 页面加载时同步按钮图标
+updateThemeIcon(getTheme());
+
 let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null};
 
 async function boot(){
@@ -812,16 +875,24 @@ async function viewDashboard(){
 /* 环形图卡片：split=true 时按 online(绿)/offline(红) 分段；否则整圈 accent 色显示总数。 */
 function dashRingCard(title, total, online, offline, split){
   const r=70, cx=90, cy=90, sw=18, C=2*Math.PI*r;
+  // 从 CSS 变量取色，确保主题切换即时生效
+  const cs = getComputedStyle(document.documentElement);
+  const cLine = cs.getPropertyValue('--line').trim() || '#2b3650';
+  const cTxt  = cs.getPropertyValue('--txt').trim() || '#e6ecf5';
+  const cMut  = cs.getPropertyValue('--mut').trim() || '#8b97ad';
+  const cOk   = cs.getPropertyValue('--ok').trim() || '#36d399';
+  const cErr  = cs.getPropertyValue('--err').trim() || '#f87272';
+  const cAcc  = cs.getPropertyValue('--acc').trim() || '#3da9fc';
   let arcs;
   if(!total){
-    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#2b3650" stroke-width="${sw}"/>`;
+    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${cLine}" stroke-width="${sw}"/>`;
   } else if(split){
     const onLen = C*online/total, offLen = C*offline/total;
-    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#2b3650" stroke-width="${sw}"/>
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#36d399" stroke-width="${sw}" stroke-dasharray="${onLen.toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f87272" stroke-width="${sw}" stroke-dasharray="${offLen.toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-onLen).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
+    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${cLine}" stroke-width="${sw}"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${cOk}" stroke-width="${sw}" stroke-dasharray="${onLen.toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${cErr}" stroke-width="${sw}" stroke-dasharray="${offLen.toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-onLen).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/>`;
   } else {
-    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#3da9fc" stroke-width="${sw}"/>`;
+    arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${cAcc}" stroke-width="${sw}"/>`;
   }
   let legend;
   if(split){
@@ -833,8 +904,8 @@ function dashRingCard(title, total, online, offline, split){
   }
   return `<div class="ring-card">
     <svg viewBox="0 0 180 180" class="ring">${arcs}
-      <text x="${cx}" y="${cy-2}" text-anchor="middle" fill="#e6ecf5" font-size="32" font-weight="700">${total}</text>
-      <text x="${cx}" y="${cy+18}" text-anchor="middle" fill="#8b97ad" font-size="12">${title}</text>
+      <text x="${cx}" y="${cy-2}" text-anchor="middle" fill="${cTxt}" font-size="32" font-weight="700">${total}</text>
+      <text x="${cx}" y="${cy+18}" text-anchor="middle" fill="${cMut}" font-size="12">${title}</text>
     </svg>
     <div class="ring-legend">${legend}</div>
   </div>`;

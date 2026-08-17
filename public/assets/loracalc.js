@@ -230,12 +230,12 @@
 
   // ----------------------- 样式（首次注入 head，作用域 .loracalc） -----------------------
   const Lc_CSS = `
-.loracalc{--panel2:#161d2c}
+.loracalc{--panel2:var(--bg-subtle)}
 .loracalc *{box-sizing:border-box}
 .loracalc a{color:var(--acc);text-decoration:none}
 .loracalc .tabs{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
 .loracalc .tab{background:var(--panel);border:1px solid var(--line);color:var(--mut);padding:9px 16px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px}
-.loracalc .tab.active{background:var(--acc);color:#04121f;border-color:var(--acc)}
+.loracalc .tab.active{background:var(--acc);color:var(--txt-on-acc);border-color:var(--acc)}
 .loracalc .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
 @media (max-width:860px){ .loracalc .grid{grid-template-columns:1fr} }
 .loracalc .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
@@ -244,32 +244,34 @@
 .loracalc fieldset{border:1px solid var(--line);border-radius:10px;margin:0 0 14px;padding:12px 14px}
 .loracalc legend{color:var(--acc);font-size:12px;padding:0 6px;font-weight:600}
 .loracalc label{display:block;color:var(--mut);margin:10px 0 4px;font-size:12px}
-.loracalc input,.loracalc select,.loracalc textarea{background:#0d1320;color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%;font-family:inherit;font-size:14px}
+.loracalc input,.loracalc select,.loracalc textarea{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%;font-family:inherit;font-size:14px}
 .loracalc .row{display:flex;gap:12px;flex-wrap:wrap}
 .loracalc .row>div{flex:1;min-width:110px}
 .loracalc .check{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
 .loracalc .check input{width:auto}
 .loracalc .check label{margin:0;color:var(--txt);font-size:13px}
-.loracalc button.calc{background:var(--acc);color:#04121f;border:0;padding:11px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:14px;width:100%;margin-top:6px}
+.loracalc button.calc{background:var(--acc);color:var(--txt-on-acc);border:0;padding:11px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:14px;width:100%;margin-top:6px}
 .loracalc .results{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:520px){ .loracalc .results{grid-template-columns:1fr} }
 .loracalc .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
 .loracalc .stat .k{color:var(--mut);font-size:12px;margin-bottom:6px}
 .loracalc .stat .v{font-size:21px;font-weight:700;color:var(--acc);word-break:break-all}
 .loracalc .stat .u{font-size:12px;color:var(--mut);margin-left:4px;font-weight:400}
-.loracalc .stat.big{grid-column:1 / -1;background:linear-gradient(135deg,#13233a,#0f1a2c)}
+.loracalc .stat.big{grid-column:1 / -1;background:var(--bg-subtle)}
 .loracalc .stat.big .v{font-size:28px;color:var(--ok)}
 .loracalc .stat.warnv .v{color:var(--warn)}
 .loracalc .note{color:var(--mut);font-size:12px;line-height:1.7;margin-top:14px}
-.loracalc .note code{background:#0d1320;padding:1px 5px;border-radius:4px;color:var(--warn)}
-.loracalc .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;background:#243049;color:var(--mut);margin-right:6px}
+.loracalc .note code{background:var(--bg-deep);padding:1px 5px;border-radius:4px;color:var(--warn)}
+.loracalc .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;background:var(--bg-chip);color:var(--mut);margin-right:6px}
 .loracalc .foot{color:var(--mut);font-size:12px;text-align:center;margin-top:18px}
 .loracalc .hidden{display:none}
-.loracalc kbd{background:#0d1320;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:11px}
+.loracalc kbd{background:var(--bg-deep);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:11px}
 `;
   let Lc_cssInjected = false;
   function Lc_ensureCss() {
-    if (Lc_cssInjected) return;
+    // 已注入则移除旧的再重新注入（主题切换后 CSS 变量值可能被浏览器缓存）
+    const existing = document.getElementById('lc-style');
+    if (existing) existing.remove();
     const s = document.createElement('style');
     s.id = 'lc-style';
     s.textContent = Lc_CSS;

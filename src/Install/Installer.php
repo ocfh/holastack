@@ -212,18 +212,21 @@ HTML
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>holastack 安装</title>
 <style>
-:root{--bg:#0f1420;--panel:#1a2233;--line:#2b3650;--txt:#e6ecf5;--mut:#8b97ad;--acc:#3da9fc;--ok:#36d399;--err:#f87272}
+:root,[data-theme="dark"]{--bg:#0f1420;--panel:#1a2233;--line:#2b3650;--txt:#e6ecf5;--mut:#8b97ad;--acc:#3da9fc;--ok:#36d399;--err:#f87272;--bg-deep:#0d1320;--bg-subtle:#161d2c;--bg-chip:#243049;--txt-on-acc:#04121f;--err-box-bg:#3a1620;--err-box-border:#5a2230;--shadow-rgb:0,0,0}
+[data-theme="light"]{--bg:#f4f6fa;--panel:#ffffff;--line:#d0d6e0;--txt:#1a2332;--mut:#6a7588;--acc:#1a73e8;--ok:#1a9e5c;--err:#d63636;--bg-deep:#eef1f6;--bg-subtle:#f7f9fc;--bg-chip:#e8edf4;--txt-on-acc:#ffffff;--err-box-bg:#fce4e4;--err-box-border:#f0b0b0;--shadow-rgb:0,0,0}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 main{max-width:560px;margin:40px auto;padding:24px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
 h2{margin-top:0;color:var(--acc)}.muted{color:var(--mut)}
 label{display:block;color:var(--mut);margin:12px 0 4px;font-size:12px}
-input{background:#0d1320;color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%}
+input{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%}
 .row{display:flex;gap:12px}.row>div{flex:1}fieldset{border:1px solid var(--line);border-radius:10px;margin-top:16px;padding:8px 16px}
 legend{color:var(--acc);padding:0 6px}.btn,.err{padding:8px 14px;border-radius:7px}
-.btn{background:var(--acc);color:#04121f;border:0;font-weight:600;text-decoration:none;display:inline-block}
-.err{background:#3a1620;color:var(--err);margin:8px 0;border:1px solid #5a2230}
-a.btn{color:#04121f}
-</style></head>
+.btn{background:var(--acc);color:var(--txt-on-acc);border:0;font-weight:600;text-decoration:none;display:inline-block}
+.err{background:var(--err-box-bg);color:var(--err);margin:8px 0;border:1px solid var(--err-box-border)}
+a.btn{color:var(--txt-on-acc)}
+</style>
+<script>(function(){var s=localStorage.getItem('elw_theme');if(!s){s=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',s);})();</script>
+</head>
 <body><main>$body</main></body></html>
 HTML;
     }

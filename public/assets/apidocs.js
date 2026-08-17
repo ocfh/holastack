@@ -304,30 +304,31 @@
 
   // ----------------------------- 样式注入 -----------------------------
   function Ad_ensureCss() {
-    if (document.getElementById('ad-css')) return;
+    var existing = document.getElementById('ad-css');
+    if (existing) existing.remove();
     var css = [
       '.apidocs{display:flex;gap:18px;align-items:flex-start;margin-top:8px}',
       '.ad-side{width:280px;flex:0 0 280px;position:sticky;top:14px;max-height:calc(100vh - 120px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 6px}',
       '.ad-side h4{margin:14px 10px 6px;color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.5px}',
       '.ad-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:transparent;border:0;color:var(--txt);padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px}',
-      '.ad-item:hover{background:#243049}',
-      '.ad-item.active{background:#243049;color:#fff}',
+      '.ad-item:hover{background:var(--bg-chip)}',
+      '.ad-item.active{background:var(--bg-chip);color:var(--txt)}',
       '.ad-method{font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;flex:0 0 auto;min-width:44px;text-align:center}',
-      '.m-get{background:#10304a;color:var(--acc)} .m-post{background:#103a2a;color:var(--ok)} .m-put{background:#3a3410;color:var(--warn)} .m-del{background:#3a1620;color:var(--err)}',
+      '.m-get{background:var(--tag-a-bg);color:var(--acc)} .m-post{background:var(--tag-c-bg);color:var(--ok)} .m-put{background:var(--tag-pending-bg);color:var(--warn)} .m-del{background:var(--tag-err-bg);color:var(--err)}',
       '.ad-main{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px}',
       '.ad-main h2{font-size:18px}',
-      '.ad-path{font-family:monospace;background:#0d1320;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;position:relative}',
+      '.ad-path{font-family:monospace;background:var(--bg-deep);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:10px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;position:relative}',
       '.ad-path code{color:var(--acc);font-size:13px;word-break:break-all}',
       '.ad-sec{margin:18px 0}',
       '.ad-sec h3{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:0 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}',
       '.ad-tbl{width:100%;border-collapse:collapse;font-size:13px}',
       '.ad-tbl th,.ad-tbl td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}',
-      '.ad-tbl th{color:var(--mut);font-weight:600;background:#161d2c;font-size:12px}',
+      '.ad-tbl th{color:var(--mut);font-weight:600;background:var(--bg-subtle);font-size:12px}',
       '.ad-tbl code{font-size:12px;color:var(--acc)}',
-      '.ad-req{position:relative;background:#0d1320;border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font-size:12px;font-family:monospace;white-space:pre;line-height:1.5}',
-      '.ad-req code{font-family:inherit;color:#cfe3ff;white-space:pre}',
-      '.ad-copy{position:absolute;top:8px;right:8px;background:#243049;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px}',
-      '.ad-copy:hover{background:#2e3a55}',
+      '.ad-req{position:relative;background:var(--bg-deep);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font-size:12px;font-family:monospace;white-space:pre;line-height:1.5}',
+      '.ad-req code{font-family:inherit;color:var(--acc);white-space:pre}',
+      '.ad-copy{position:absolute;top:8px;right:8px;background:var(--bg-chip);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px}',
+      '.ad-copy:hover{background:var(--bg-hover)}',
       '.ad-note{color:var(--mut);line-height:1.6}',
       '@media(max-width:860px){.apidocs{flex-direction:column}.ad-side{width:100%;flex:none;position:static;max-height:none}.ad-main{padding:16px}}'
     ].join('\n');
