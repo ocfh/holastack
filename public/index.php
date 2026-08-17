@@ -1082,8 +1082,10 @@ async function viewUplinks(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
   const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
+  // 设备下拉随应用筛选联动（后端 listDevices 支持 app_id）
+  const devQ = [tq, state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
-    api('GET','/api/devices' + (tq ? '?'+tq : '')),
+    api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
     api('GET','/api/applications' + (tq ? '?'+tq : '')),
     tenantFilterHtml()
   ]);
@@ -1131,8 +1133,10 @@ async function viewDownlinks(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
   const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
+  // 设备下拉随应用筛选联动
+  const devQ = [tq, state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
-    api('GET','/api/devices' + (tq ? '?'+tq : '')),
+    api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
     api('GET','/api/applications' + (tq ? '?'+tq : '')),
     tenantFilterHtml()
   ]);

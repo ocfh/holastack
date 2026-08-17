@@ -92,10 +92,10 @@ class WebApp
 
     // ================= 演示（operator）模拟数据 =================
 
-    private static function demoDevices(): array
+    private static function demoDevices(?int $appId = null): array
     {
         $now = time();
-        return [
+        $rows = [
             ['id' => 1, 'name' => '温湿度计-01', 'dev_eui' => '70b3d57e00000001', 'dev_addr' => '01a2b3c4',
              'app_id' => 1, 'application_id' => 1, 'activation' => 'OTAA', 'class' => 'A', 'status' => 'active',
              'created_at' => $now - 86400 * 30, 'last_seen' => $now - 60, 'battery' => 82, 'margin' => 9,
@@ -113,6 +113,10 @@ class WebApp
              'created_at' => $now - 86400 * 5, 'last_seen' => $now - 86400 * 2, 'battery' => 0, 'margin' => '',
              'latitude' => 0, 'longitude' => 0, 'online' => 'offline', 'last_seen_fmt' => date('Y-m-d H:i:s', $now - 86400 * 2)],
         ];
+        if ($appId !== null && $appId > 0) {
+            $rows = array_values(array_filter($rows, static fn($d) => (int) $d['app_id'] === (int) $appId));
+        }
+        return $rows;
     }
 
     private static function demoApplications(): array
@@ -156,10 +160,10 @@ class WebApp
         ];
     }
 
-    private static function demoMulticastGroups(): array
+    private static function demoMulticastGroups(?int $appId = null): array
     {
         $now = time();
-        return [
+        $rows = [
             ['id' => 1, 'tenant_id' => 0, 'application_id' => 1, 'name' => '楼宇播报组', 'region' => 'EU868',
              'group_type' => 'C', 'mc_addr' => '01020304', 'mc_nwk_s_key' => 'aabbccddeeff00112233445566778899',
              'mc_app_s_key' => '99887766554433221100ffeeddccbbaa', 'dr' => 0, 'frequency' => 868100000,
@@ -169,6 +173,10 @@ class WebApp
              'mc_app_s_key' => 'ffeeddccbbaa00998877665544332211', 'dr' => 1, 'frequency' => 868300000,
              'f_cnt' => 512, 'created_at' => $now - 86400 * 8],
         ];
+        if ($appId !== null && $appId > 0) {
+            $rows = array_values(array_filter($rows, static fn($m) => (int) $m['application_id'] === (int) $appId));
+        }
+        return $rows;
     }
 
     private static function demoStats(): array
@@ -206,9 +214,15 @@ class WebApp
         ];
     }
 
-    private static function demoUplinks(int $n = 30): array
+    private static function demoUplinks(int $n = 30, ?int $devId = null, ?int $appId = null): array
     {
-        $devs = self::demoDevices();
+        $devs = self::demoDevices($appId);
+        if ($devId !== null && $devId > 0) {
+            $devs = array_values(array_filter($devs, static fn($d) => (int) $d['id'] === (int) $devId));
+        }
+        if (!$devs) {
+            return [];
+        }
         $gws = self::demoGateways();
         $now = time();
         $out = [];
@@ -217,23 +231,44 @@ class WebApp
             $t = $now - $i * mt_rand(5, 90);
             $b1 = mt_rand(0, 255);
             $b2 = mt_rand(0, 255);
+            $g = $gws[array_rand($gws)];
+            $fcnt = mt_rand(1000, 99999);
+            $port = (mt_rand(1, 4) === 1 ? 2 : 10);
+            $rssi = mt_rand(-112, -62);
+            $snr = mt_rand(-15, 110) / 10;
+            $data = sprintf('%02x%02x', $b1, $b2);
+            $tmst = $t * 1000000 + mt_rand(0, 999999);
             $out[] = [
-                'id' => 100000 + $i, 'app_id' => 1, 'dev_id' => $d['id'], 'dev_addr' => $d['dev_addr'],
-                'fcnt' => mt_rand(1000, 99999), 'port' => (mt_rand(1, 4) === 1 ? 2 : 10),
+                'id' => 100000 + $i, 'app_id' => $d['app_id'], 'dev_id' => $d['id'], 'dev_addr' => $d['dev_addr'],
+                'fcnt' => $fcnt, 'port' => $port,
                 'confirmed' => 0,
-                'decrypted_hex' => sprintf('%02x%02x', $b1, $b2),
-                'phy_payload' => '40' . $d['dev_addr'] . '0000' . sprintf('%02x%02x', $b1, $b2),
-                'gateway_id' => $gws[array_rand($gws)]['gw_id'],
-                'rssi' => mt_rand(-112, -62), 'snr' => mt_rand(-15, 110) / 10,
-                'received_at' => $t, 'raw_json' => '',
+                'decrypted_hex' => $data,
+                'phy_payload' => '40' . $d['dev_addr'] . sprintf('%04x', $fcnt) . $data,
+                'gateway_id' => $g['gw_id'],
+                'rssi' => $rssi, 'snr' => $snr,
+                'received_at' => $t,
+                'raw_json' => json_encode([
+                    'rxpk' => [[
+                        'tmst' => $tmst, 'time' => gmdate('Y-m-d\TH:i:s.u\Z', $t), 'freq' => 868100000,
+                        'chan' => 0, 'rfch' => 0, 'stat' => 1, 'modu' => 'LORA',
+                        'datr' => 'SF12BW125', 'codr' => '4/5', 'lsnr' => $snr, 'rssi' => $rssi,
+                        'size' => strlen($data) / 2, 'data' => $data,
+                    ]],
+                ], JSON_UNESCAPED_SLASHES),
             ];
         }
         return $out;
     }
 
-    private static function demoDownlinks(int $n = 20): array
+    private static function demoDownlinks(int $n = 20, ?int $devId = null, ?int $appId = null): array
     {
-        $devs = self::demoDevices();
+        $devs = self::demoDevices($appId);
+        if ($devId !== null && $devId > 0) {
+            $devs = array_values(array_filter($devs, static fn($d) => (int) $d['id'] === (int) $devId));
+        }
+        if (!$devs) {
+            return [];
+        }
         $now = time();
         $statuses = ['sent', 'sent', 'acknowledged', 'pending', 'failed'];
         $out = [];
@@ -241,7 +276,7 @@ class WebApp
             $d = $devs[array_rand($devs)];
             $t = $now - $i * mt_rand(10, 200);
             $out[] = [
-                'id' => 80000 + $i, 'app_id' => 1, 'dev_id' => $d['id'],
+                'id' => 80000 + $i, 'app_id' => $d['app_id'], 'dev_id' => $d['id'],
                 'port' => mt_rand(1, 3) === 1 ? 2 : 10, 'confirmed' => (mt_rand(1, 3) === 1),
                 'payload_hex' => sprintf('%02x%02x%02x%02x', mt_rand(0, 255), mt_rand(0, 255), mt_rand(0, 255), mt_rand(0, 255)),
                 'status' => $statuses[array_rand($statuses)], 'transmissions' => mt_rand(1, 3),
@@ -251,10 +286,22 @@ class WebApp
         return $out;
     }
 
-    private static function demoEvents(int $n = 25): array
+    private static function demoEvents(int $n = 25, ?int $devId = null, ?string $gwId = null): array
     {
         $gws = self::demoGateways();
+        if ($gwId !== null && $gwId !== '') {
+            $gws = array_values(array_filter($gws, static fn($g) => $g['gw_id'] === $gwId));
+            if (!$gws) {
+                return [];
+            }
+        }
         $devs = self::demoDevices();
+        if ($devId !== null && $devId > 0) {
+            $devs = array_values(array_filter($devs, static fn($d) => (int) $d['id'] === (int) $devId));
+            if (!$devs) {
+                return [];
+            }
+        }
         $now = time();
         $pool = [
             ['UPLINK', 'info', '上行数据帧'],
@@ -265,16 +312,28 @@ class WebApp
             ['ERROR', 'error', 'MIC 校验失败，丢弃数据帧'],
             ['PUSH_ACK', 'info', 'PUSH_ACK 已应答'],
         ];
+        // 按设备筛选时只生成设备类事件（网关事件 dev_id=0 会污染筛选结果）
+        if ($devId !== null && $devId > 0) {
+            $pool = array_values(array_filter($pool, static fn($p) => !in_array($p[0], ['GW_ONLINE', 'GW_OFFLINE', 'PUSH_ACK'], true)));
+        }
         $out = [];
         for ($i = 0; $i < $n; $i++) {
             [$type, $level, $msg] = $pool[array_rand($pool)];
             $isGw = in_array($type, ['GW_ONLINE', 'GW_OFFLINE', 'PUSH_ACK'], true);
+            $g = $gws[array_rand($gws)];
+            $d = $devs[array_rand($devs)];
+            $created = $now - $i * mt_rand(3, 120);
             $out[] = [
                 'id' => 60000 + $i, 'type' => $type, 'level' => $level,
-                'gateway_id' => $isGw ? $gws[array_rand($gws)]['gw_id'] : '',
-                'dev_id' => $isGw ? 0 : $devs[array_rand($devs)]['id'],
-                'app_id' => 1, 'message' => $msg, 'created_at' => $now - $i * mt_rand(3, 120),
-                'raw_json' => '',
+                'gateway_id' => $isGw ? $g['gw_id'] : $g['gw_id'],
+                'dev_id' => $isGw ? 0 : $d['id'],
+                'app_id' => $isGw ? 1 : $d['app_id'],
+                'message' => $msg, 'created_at' => $created,
+                'raw_json' => json_encode([
+                    'event' => $type, 'level' => $level, 'message' => $msg,
+                    'gateway_id' => $g['gw_id'], 'dev_id' => $isGw ? null : $d['id'],
+                    'created_at' => gmdate('Y-m-d\TH:i:s\Z', $created),
+                ], JSON_UNESCAPED_SLASHES),
             ];
         }
         return $out;
@@ -329,7 +388,7 @@ class WebApp
     public static function listDevices(?int $appId = null, ?int $tenantId = null): array
     {
         if (self::scope()['demo']) {
-            return self::demoDevices();
+            return self::demoDevices($appId);
         }
         $tid = self::effectiveTenant($tenantId);
         if ($appId) {
@@ -456,7 +515,7 @@ class WebApp
     public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null): array
     {
         if (self::scope()['demo']) {
-            return self::demoUplinks($limit > 50 ? 30 : max(1, $limit));
+            return self::demoUplinks($limit > 50 ? 30 : max(1, $limit), $devId, $appId);
         }
         $limit = (int) $limit;
         $sql = "SELECT * FROM uplinks";
@@ -487,7 +546,7 @@ class WebApp
     public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null): array
     {
         if (self::scope()['demo']) {
-            return self::demoDownlinks($limit > 50 ? 20 : max(1, $limit));
+            return self::demoDownlinks($limit > 50 ? 20 : max(1, $limit), $devId, $appId);
         }
         $limit = (int) $limit;
         $sql = "SELECT * FROM downlinks";
@@ -518,7 +577,7 @@ class WebApp
     public static function listEvents(?int $devId = null, ?string $gwId = null, int $limit = 200, ?int $tenantId = null): array
     {
         if (self::scope()['demo']) {
-            return self::demoEvents($limit > 50 ? 25 : max(1, $limit));
+            return self::demoEvents($limit > 50 ? 25 : max(1, $limit), $devId, $gwId);
         }
         $limit = (int) $limit;
         $sql = "SELECT * FROM events";
@@ -1118,7 +1177,7 @@ class WebApp
     public static function listMulticastGroups(?int $appId = null, ?int $tenantId = null): array
     {
         if (self::scope()['demo']) {
-            return self::demoMulticastGroups();
+            return self::demoMulticastGroups($appId);
         }
         $sql = "SELECT * FROM multicast_groups";
         $params = [];
