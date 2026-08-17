@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS devices (
     mac_command_error_count TEXT DEFAULT '',
     uplink_adr_history TEXT DEFAULT '',
     pending_mac TEXT DEFAULT '',
+    relay_state TEXT DEFAULT '',
     last_seen INTEGER DEFAULT 0,
     battery INTEGER DEFAULT -1,
     margin INTEGER DEFAULT 0,
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     abp_rx2_dr INTEGER NOT NULL DEFAULT 0,
     abp_rx2_freq INTEGER NOT NULL DEFAULT 0,
     allow_roaming INTEGER NOT NULL DEFAULT 0,
+    relay_params TEXT DEFAULT '',
     created_at INTEGER NOT NULL
 );
 
@@ -279,7 +281,16 @@ CREATE TABLE IF NOT EXISTS relay_devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     relay_gateway_id INTEGER NOT NULL,
     dev_eui TEXT NOT NULL,
+    -- ---- 会话字段（对齐 ChirpStack internal.proto RelayDevice） ----
+    slot_index INTEGER NOT NULL DEFAULT 0,          -- proto index：中继过滤列表槽位（0-15）
+    join_eui TEXT DEFAULT '',
     dev_addr TEXT DEFAULT '',
+    root_wor_s_key TEXT DEFAULT '',
+    provisioned INTEGER NOT NULL DEFAULT 0,
+    uplink_limit_bucket_size INTEGER NOT NULL DEFAULT 0,
+    uplink_limit_reload_rate INTEGER NOT NULL DEFAULT 0,
+    w_f_cnt_last_request INTEGER NOT NULL DEFAULT 0,
+    -- ---- 会话密钥（1.0 用 nwk_s_key/app_s_key；1.1 用 f/s_nwk_s_int_key + nwk_s_enc_key） ----
     nwk_s_key TEXT DEFAULT '',
     app_s_key TEXT DEFAULT '',
     f_nwk_s_int_key TEXT DEFAULT '',

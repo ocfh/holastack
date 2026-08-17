@@ -38,6 +38,13 @@ class MacCommands
     public const CID_BEACON_FREQ_REQ        = 0x13;
     public const CID_DEVICE_MODE_IND        = 0x20;
     public const CID_RESET_IND              = 0x21;
+    public const CID_RELAY_CONF_REQ         = 0x40; // RelayConfReq/Ans（TS011，对齐 lrwn maccommand.rs CID::to_u8）
+    public const CID_END_DEVICE_CONF_REQ    = 0x41; // EndDeviceConfReq/Ans（TS011）
+    public const CID_FILTER_LIST_REQ        = 0x42; // FilterListReq/Ans（TS011）
+    public const CID_UPDATE_UPLINK_LIST_REQ = 0x43; // UpdateUplinkListReq/Ans（TS011）
+    public const CID_CTRL_UPLINK_LIST_REQ   = 0x44; // CtrlUplinkListReq/Ans（TS011）
+    public const CID_CONFIGURE_FWD_LIMIT_REQ= 0x45; // ConfigureFwdLimitReq/Ans（TS011）
+    public const CID_NOTIFY_NEW_END_DEVICE_REQ = 0x46; // NotifyNewEndDeviceReq（TS011）
 
     // 应答 CID（设备→NS 的 Ans/Ind 与 NS→设备 的 Ans/Conf 复用同一 CID）
     public const CID_LINK_CHECK_ANS        = 0x02;
@@ -120,6 +127,12 @@ class MacCommands
             case self::CID_DEVICE_MODE_CONF:       return 1;
             case self::CID_RESET_IND:              return 1;
             case self::CID_RESET_CONF:             return 1;
+            case self::CID_RELAY_CONF_REQ:         return 1; // 上行方向为 RelayConfAns（1 字节）
+            case self::CID_END_DEVICE_CONF_REQ:    return 1; // 上行方向为 EndDeviceConfAns（1 字节）
+            case self::CID_FILTER_LIST_REQ:        return 1; // 上行方向为 FilterListAns（1 字节）
+            case self::CID_UPDATE_UPLINK_LIST_REQ: return 1; // 上行方向为 UpdateUplinkListAns（1 字节）
+            case self::CID_CTRL_UPLINK_LIST_REQ:   return 1; // 上行方向为 CtrlUplinkListAns（1 字节）
+            case self::CID_CONFIGURE_FWD_LIMIT_REQ:return 1; // 上行方向为 ConfigureFwdLimitAns（1 字节）
             default:                               return -1;
         }
     }
@@ -237,6 +250,9 @@ class MacCommands
             case self::CID_PING_SLOT_CHANNEL_ANS: return self::onPingSlotChannelAns($device, $blocks);
             case self::CID_BEACON_FREQ_ANS:   return self::onBeaconFreqAns($device, $blocks);
             case self::CID_DEV_STATUS_ANS:    return self::onDevStatusAns($device, $blocks);
+            case self::CID_RELAY_CONF_REQ:    return self::onRelayConfAns($device, $blocks);
+            case self::CID_END_DEVICE_CONF_REQ: return self::onEndDeviceConfAns($device, $blocks);
+            case self::CID_FILTER_LIST_REQ:   return self::onFilterListAns($device, $blocks);
             default:
                 return ['bytes' => null, 'mustRespond' => false];
         }
@@ -405,6 +421,34 @@ class MacCommands
             'margin'  => $m,
         ];
         return ['bytes' => null, 'mustRespond' => false];
+    }
+
+    /**
+     * RelayConfAns 处理：委托 Relay::handleRelayConfAns（对齐 maccommand/relay_conf.rs）。
+     * 全 ACK → 写入 devices.relay_state；nack → 不写入。无待确认请求时忽略。
+     */
+    private static function onRelayConfAns(array &$device, array $blocks): array
+    {
+        $payload = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
+        return Relay::handleRelayConfAns($device, $payload);
+    }
+
+    /**
+     * EndDeviceConfAns（CID 0x41）：全 ACK → 写 relay_state 的 ed_* 字段（对齐 end_device_conf.rs）。
+     */
+    private static function onEndDeviceConfAns(array &$device, array $blocks): array
+    {
+        $payload = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
+        return Relay::handleEndDeviceConfAns($device, $payload);
+    }
+
+    /**
+     * FilterListAns（CID 0x42）：全 ACK → filters provisioned 标记 / NoRule 移除（对齐 filter_list.rs）。
+     */
+    private static function onFilterListAns(array &$device, array $blocks): array
+    {
+        $payload = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
+        return Relay::handleFilterListAns($device, $payload);
     }
 
     /**

@@ -10,10 +10,10 @@ use holastack\DB\Database;
 class Setting
 {
     /** 全部可配置键。 */
-    const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'login_logo_url', 'login_logo_text'];
+    const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice'];
 
     /** 对未登录用户（登录页）安全的公开键。 */
-    const PUBLIC_KEYS = ['site_name', 'login_logo_url', 'login_logo_text'];
+    const PUBLIC_KEYS = ['site_name', 'site_logo_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice'];
 
     /** 读取单个设置，缺失返回默认值。 */
     public static function get(string $key, string $default = ''): string

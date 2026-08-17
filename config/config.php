@@ -57,3 +57,10 @@ define('ELW_ROOT', __DIR__ . '/..');
 
 // 运行日志目录
 define('ELW_LOG_DIR', ELW_ROOT . '/runtime/logs');
+
+// ---- 漫游（Roaming / Backend Interface TS002）----
+// 本 NS 的 NetID（6 hex 字符，如 '000000'）。用于判定 DevAddr 是否属于本网：
+// 不属于本网 NetID 前缀的 DevAddr 视为漫游，转发给伙伴 NS。
+define('ELW_NET_ID', $local['net_id'] ?? (getenv('ELW_NET_ID') ?: '000000'));
+// 漫游是否启用（影响 Join/上行未命中本地设备时是否触发转发）。
+define('ELW_ROAMING_ENABLED', (bool)($local['roaming_enabled'] ?? (getenv('ELW_ROAMING_ENABLED') ?: false)));

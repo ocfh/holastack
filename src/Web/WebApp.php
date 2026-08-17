@@ -21,9 +21,214 @@ class WebApp
     const GW_OFFLINE_TIMEOUT = 300;
     /** 设备离线超时秒数（无上行/入网记录超过此时间则判离线）。 */
     const DEV_OFFLINE_TIMEOUT = 600;
-    public static function listApplications(): array
+
+    // ================= 权限作用域（三角色体系） =================
+    // admin：全局管理 + 可显式按 tenant_id 筛选；tenant：仅本租户数据（可写）；operator：演示（全平台只读 + 模拟日志）
+
+    private static function scope(): array
     {
-        return Database::fetchAll("SELECT * FROM applications ORDER BY id DESC");
+        $u = Auth::currentUser();
+        $role = $u['role'] ?? '';
+        return [
+            'role' => $role,
+            'tenant_id' => (int) ($u['tenant_id'] ?? 0),
+            'is_admin' => $role === Auth::ROLE_ADMIN,
+            'can_write' => in_array($role, [Auth::ROLE_ADMIN, Auth::ROLE_TENANT], true),
+            'demo' => $role === Auth::ROLE_OPERATOR,
+        ];
+    }
+
+    /** 计算生效的租户过滤值；null = 不过滤（全部）。admin 可显式指定，tenant 固定本租户，operator 看全部。 */
+    private static function effectiveTenant(?int $explicit = null): ?int
+    {
+        $s = self::scope();
+        if ($s['is_admin']) {
+            return ($explicit !== null && $explicit > 0) ? $explicit : null;
+        }
+        if ($s['demo']) {
+            return null;
+        }
+        return $s['tenant_id'];
+    }
+
+    /** 校验当前用户能否访问该资源行（写操作/单资源操作前调用）。tenant 要求归属本租户。 */
+    private static function canAccess(array $row, string $tenantCol = 'tenant_id'): bool
+    {
+        $s = self::scope();
+        if ($s['is_admin'] || $s['demo']) {
+            return true;
+        }
+        return (int) ($row[$tenantCol] ?? 0) === $s['tenant_id'];
+    }
+
+    /** 创建资源时写入的 tenant_id：admin 可显式指定（body.tenant_id），tenant 固定本租户。 */
+    private static function createTenantId(array $p = []): int
+    {
+        $s = self::scope();
+        if ($s['is_admin']) {
+            return (int) ($p['tenant_id'] ?? 0);
+        }
+        return $s['tenant_id'];
+    }
+
+    /** 当前作用域内可见的应用 ID 列表；null = 全部可见。 */
+    private static function visibleAppIds(?int $explicit = null): ?array
+    {
+        $tid = self::effectiveTenant($explicit);
+        if ($tid === null) {
+            return null;
+        }
+        $rows = Database::fetchAll("SELECT id FROM applications WHERE tenant_id=?", [$tid]);
+        return array_map(static fn($r) => (int) $r['id'], $rows);
+    }
+
+    // ================= 演示（operator）模拟数据 =================
+
+    private static function demoDevices(): array
+    {
+        return [
+            ['id' => 1, 'name' => '温湿度计-01', 'dev_eui' => '70b3d57e00000001', 'dev_addr' => '01a2b3c4'],
+            ['id' => 2, 'name' => '电表-A1', 'dev_eui' => '70b3d57e00000002', 'dev_addr' => '02b3c4d5'],
+            ['id' => 3, 'name' => '烟感-07', 'dev_eui' => '70b3d57e00000003', 'dev_addr' => '03c4d5e6'],
+            ['id' => 4, 'name' => '门磁-B2', 'dev_eui' => '70b3d57e00000004', 'dev_addr' => '04d5e6f7'],
+        ];
+    }
+
+    private static function demoGateways(): array
+    {
+        return [
+            ['gw_id' => '0080000000000001', 'name' => '楼栋A-网关'],
+            ['gw_id' => '0080000000000002', 'name' => '园区B-网关'],
+            ['gw_id' => '0080000000000003', 'name' => '仓库C-网关'],
+        ];
+    }
+
+    private static function demoStats(): array
+    {
+        $dev = self::demoDevices();
+        $gw = self::demoGateways();
+        $t = time();
+        $mk = static function (string $type, string $level, string $msg, int $backMin): array {
+            return [
+                'id' => mt_rand(5000, 99999), 'type' => $type, 'level' => $level,
+                'dev_id' => mt_rand(1, count(self::demoDevices())), 'gateway_id' => self::demoGateways()[array_rand(self::demoGateways())]['gw_id'],
+                'app_id' => 1, 'message' => $msg, 'created_at' => time() - $backMin * 60,
+                'raw_json' => '',
+            ];
+        };
+        return [
+            'applications' => 3, 'devices' => count($dev), 'gateways' => count($gw),
+            'gateways_online' => 2, 'gateways_offline' => 1,
+            'uplinks' => mt_rand(1800, 2600), 'downlinks' => mt_rand(300, 600),
+            'devices_online' => 3, 'devices_offline' => 1,
+            'device_logs' => [
+                $mk('UPLINK', 'info', '设备上报数据帧，FPort=10', 0),
+                $mk('JOIN', 'ok', '设备完成 OTAA 入网', 3),
+                $mk('UPLINK', 'info', '设备上报数据帧，FPort=10', 5),
+                $mk('STATUS', 'info', '设备状态请求应答：电量 78%', 12),
+                $mk('UPLINK', 'warn', '重传次数 3，链路质量下降', 25),
+            ],
+            'gateway_logs' => [
+                $mk('GW_ONLINE', 'ok', '网关连接建立（Semtech UDP）', 0),
+                $mk('PUSH_ACK', 'info', 'PUSH_ACK 已应答', 0),
+                $mk('GW_OFFLINE', 'warn', '网关心跳超时，标记离线', 40),
+                $mk('GW_ONLINE', 'ok', '网关重新上线', 41),
+                $mk('PULL_ACK', 'info', 'PULL_ACK 已应答', 55),
+            ],
+        ];
+    }
+
+    private static function demoUplinks(int $n = 30): array
+    {
+        $devs = self::demoDevices();
+        $gws = self::demoGateways();
+        $now = time();
+        $out = [];
+        for ($i = 0; $i < $n; $i++) {
+            $d = $devs[array_rand($devs)];
+            $t = $now - $i * mt_rand(5, 90);
+            $b1 = mt_rand(0, 255);
+            $b2 = mt_rand(0, 255);
+            $out[] = [
+                'id' => 100000 + $i, 'app_id' => 1, 'dev_id' => $d['id'], 'dev_addr' => $d['dev_addr'],
+                'fcnt' => mt_rand(1000, 99999), 'port' => (mt_rand(1, 4) === 1 ? 2 : 10),
+                'confirmed' => 0,
+                'decrypted_hex' => sprintf('%02x%02x', $b1, $b2),
+                'phy_payload' => '40' . $d['dev_addr'] . '0000' . sprintf('%02x%02x', $b1, $b2),
+                'gateway_id' => $gws[array_rand($gws)]['gw_id'],
+                'rssi' => mt_rand(-112, -62), 'snr' => mt_rand(-15, 110) / 10,
+                'received_at' => $t, 'raw_json' => '',
+            ];
+        }
+        return $out;
+    }
+
+    private static function demoDownlinks(int $n = 20): array
+    {
+        $devs = self::demoDevices();
+        $now = time();
+        $statuses = ['sent', 'sent', 'acknowledged', 'pending', 'failed'];
+        $out = [];
+        for ($i = 0; $i < $n; $i++) {
+            $d = $devs[array_rand($devs)];
+            $t = $now - $i * mt_rand(10, 200);
+            $out[] = [
+                'id' => 80000 + $i, 'app_id' => 1, 'dev_id' => $d['id'],
+                'port' => mt_rand(1, 3) === 1 ? 2 : 10, 'confirmed' => (mt_rand(1, 3) === 1),
+                'payload_hex' => sprintf('%02x%02x%02x%02x', mt_rand(0, 255), mt_rand(0, 255), mt_rand(0, 255), mt_rand(0, 255)),
+                'status' => $statuses[array_rand($statuses)], 'transmissions' => mt_rand(1, 3),
+                'created_at' => $t, 'sent_at' => $t + 1, 'acknowledged_at' => (mt_rand(0, 2) ? $t + 2 : 0),
+            ];
+        }
+        return $out;
+    }
+
+    private static function demoEvents(int $n = 25): array
+    {
+        $gws = self::demoGateways();
+        $devs = self::demoDevices();
+        $now = time();
+        $pool = [
+            ['UPLINK', 'info', '上行数据帧'],
+            ['JOIN', 'ok', '设备完成 OTAA 入网'],
+            ['GW_ONLINE', 'ok', '网关连接建立（Semtech UDP）'],
+            ['GW_OFFLINE', 'warn', '网关心跳超时'],
+            ['DOWNLINK', 'info', '下行帧已发送'],
+            ['ERROR', 'error', 'MIC 校验失败，丢弃数据帧'],
+            ['PUSH_ACK', 'info', 'PUSH_ACK 已应答'],
+        ];
+        $out = [];
+        for ($i = 0; $i < $n; $i++) {
+            [$type, $level, $msg] = $pool[array_rand($pool)];
+            $isGw = in_array($type, ['GW_ONLINE', 'GW_OFFLINE', 'PUSH_ACK'], true);
+            $out[] = [
+                'id' => 60000 + $i, 'type' => $type, 'level' => $level,
+                'gateway_id' => $isGw ? $gws[array_rand($gws)]['gw_id'] : '',
+                'dev_id' => $isGw ? 0 : $devs[array_rand($devs)]['id'],
+                'app_id' => 1, 'message' => $msg, 'created_at' => $now - $i * mt_rand(3, 120),
+                'raw_json' => '',
+            ];
+        }
+        return $out;
+    }
+
+    public static function listApplications(?int $tenantId = null): array
+    {
+        $tid = self::effectiveTenant($tenantId);
+        if ($tid === null) {
+            return Database::fetchAll("SELECT * FROM applications ORDER BY id DESC");
+        }
+        return Database::fetchAll("SELECT * FROM applications WHERE tenant_id=? ORDER BY id DESC", [$tid]);
+    }
+
+    public static function getApplicationByName(string $name): ?array
+    {
+        return Database::fetch("SELECT * FROM applications WHERE name=?", [$name]);
+    }
+
+    public static function getApplicationByEui(string $appEui): ?array
+    {
+        return Database::fetch("SELECT * FROM applications WHERE app_eui=?", [strtolower($appEui)]);
     }
 
     public static function createApplication(array $p): array
@@ -31,25 +236,38 @@ class WebApp
         if (empty($p['name'])) {
             return ['error' => 'name required'];
         }
+        if (self::getApplicationByName($p['name'])) {
+            return ['error' => 'application name already exists'];
+        }
         // 若未填写 AppEUI 则随机生成（16 hex）
-        $appEui = trim($p['app_eui'] ?? '');
+        $appEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_eui'] ?? ''));
         if ($appEui === '') {
             $appEui = bin2hex(random_bytes(8));
+        } elseif (self::getApplicationByEui($appEui)) {
+            return ['error' => 'app_eui already exists'];
         }
         $callbackUrl = trim($p['callback_url'] ?? '');
+        $tid = self::createTenantId($p);
         Database::execute(
-            "INSERT INTO applications (name, description, app_eui, callback_url, created_at) VALUES (?,?,?,?,?)",
-            [$p['name'], $p['description'] ?? '', $appEui, $callbackUrl, time()]
+            "INSERT INTO applications (name, description, app_eui, callback_url, tenant_id, created_at) VALUES (?,?,?,?,?,?)",
+            [$p['name'], $p['description'] ?? '', $appEui, $callbackUrl, $tid, time()]
         );
         return ['id' => Database::lastInsertId(), 'app_eui' => $appEui];
     }
 
-    public static function listDevices(?int $appId = null): array
+    public static function listDevices(?int $appId = null, ?int $tenantId = null): array
     {
+        $tid = self::effectiveTenant($tenantId);
         if ($appId) {
+            $app = self::getApplication($appId);
+            if (!$app || !self::canAccess($app)) {
+                return [];
+            }
             $rows = Database::fetchAll("SELECT * FROM devices WHERE app_id=? ORDER BY id DESC", [$appId]);
-        } else {
+        } elseif ($tid === null) {
             $rows = Database::fetchAll("SELECT * FROM devices ORDER BY id DESC");
+        } else {
+            $rows = Database::fetchAll("SELECT * FROM devices WHERE tenant_id=? ORDER BY id DESC", [$tid]);
         }
         $devTimeout = time() - self::DEV_OFFLINE_TIMEOUT;
         foreach ($rows as &$d) {
@@ -67,9 +285,12 @@ class WebApp
             return ['error' => 'name and dev_eui required'];
         }
         $activation = strtoupper($p['activation'] ?? 'OTAA');
-        $devEui = strtolower(preg_replace('/[^0-9a-f]/', '', $p['dev_eui']));
+        $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_eui']));
         if (strlen($devEui) !== 16) {
             return ['error' => 'dev_eui must be 16 hex chars'];
+        }
+        if (Database::fetch("SELECT id FROM devices WHERE dev_eui=?", [$devEui])) {
+            return ['error' => 'dev_eui already exists'];
         }
         // Class A/B/C（设备工作模式，决定下行调度策略）
         $class = strtoupper($p['class'] ?? 'A');
@@ -77,6 +298,17 @@ class WebApp
             return ['error' => 'class must be A, B or C'];
         }
         $appId = (int) ($p['app_id'] ?? 0);
+        $app = self::getApplication($appId);
+        if (!$app) {
+            return ['error' => 'application not found'];
+        }
+        if (!self::canAccess($app)) {
+            return ['error' => 'forbidden: application not in your tenant'];
+        }
+        $tid = self::createTenantId($p);
+        if (Database::fetch("SELECT id FROM devices WHERE app_id=? AND name=?", [$appId, $p['name']])) {
+            return ['error' => 'device name already exists in this application'];
+        }
         $region = $p['region'] ?? ELW_DEFAULT_REGION;
         if (!in_array(strtoupper($region), Region::supported(), true)) {
             return ['error' => 'unsupported region: ' . $region];
@@ -85,43 +317,52 @@ class WebApp
         $dp = DeviceProfile::getOrDefault($dpId);
         $macVersion = LoRaWANVersion::value($dp['mac_version'] ?? '1.0.3');
         if ($activation === 'OTAA') {
-            $appKey = strtolower(preg_replace('/[^0-9a-f]/', '', $p['app_key'] ?? ''));
+            $appKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_key'] ?? ''));
             if (strlen($appKey) !== 32) {
                 return ['error' => 'app_key must be 32 hex chars'];
             }
-            $joinEui = strtolower(preg_replace('/[^0-9a-f]/', '', $p['join_eui'] ?? ''));
+            $joinEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['join_eui'] ?? ''));
             if (strlen($joinEui) !== 16) {
                 return ['error' => 'join_eui must be 16 hex chars'];
             }
             // 1.1 设备需要 NwkKey（与 AppKey 分离）；缺省回退到 AppKey，保证 1.0.x 存量兼容
-            $nwkKey = strtolower(preg_replace('/[^0-9a-f]/', '', $p['nwk_key'] ?? $appKey));
+            $nwkKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_key'] ?? $appKey));
             Database::execute(
-                "INSERT INTO devices (app_id, name, dev_eui, join_eui, activation, app_key, nwk_key, region, class, device_profile_id, mac_version, status, created_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [$appId, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
+                "INSERT INTO devices (app_id, tenant_id, name, dev_eui, join_eui, activation, app_key, nwk_key, region, class, device_profile_id, mac_version, status, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [$appId, $tid, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
             );
         } else { // ABP
-            $devAddr = strtolower(preg_replace('/[^0-9a-f]/', '', $p['dev_addr'] ?? ''));
-            $nwk = strtolower(preg_replace('/[^0-9a-f]/', '', $p['nwk_s_key'] ?? ''));
-            $app = strtolower(preg_replace('/[^0-9a-f]/', '', $p['app_s_key'] ?? ''));
+            $devAddr = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_addr'] ?? ''));
+            $nwk = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_s_key'] ?? ''));
+            $app = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_s_key'] ?? ''));
             if (strlen($devAddr) !== 8 || strlen($nwk) !== 32 || strlen($app) !== 32) {
                 return ['error' => 'ABP requires dev_addr(8), nwk_s_key(32), app_s_key(32) hex'];
             }
             Database::execute(
-                "INSERT INTO devices (app_id, name, dev_eui, dev_addr, activation, nwk_s_key, app_s_key, region, class, device_profile_id, mac_version, status, created_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [$appId, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'active', time()]
+                "INSERT INTO devices (app_id, tenant_id, name, dev_eui, dev_addr, activation, nwk_s_key, app_s_key, region, class, device_profile_id, mac_version, status, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [$appId, $tid, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'active', time()]
             );
         }
         return ['id' => Database::lastInsertId()];
     }
 
-    public static function listGateways(): array
+    public static function listGateways(?int $tenantId = null): array
     {
-        $rows = Database::fetchAll(
-            "SELECT g.*, (SELECT COUNT(*) FROM uplinks u WHERE u.gateway_id=g.gw_id) AS uplinks
-             FROM gateways g ORDER BY g.last_seen DESC"
-        );
+        $tid = self::effectiveTenant($tenantId);
+        if ($tid === null) {
+            $rows = Database::fetchAll(
+                "SELECT g.*, (SELECT COUNT(*) FROM uplinks u WHERE u.gateway_id=g.gw_id) AS uplinks
+                 FROM gateways g ORDER BY g.last_seen DESC"
+            );
+        } else {
+            $rows = Database::fetchAll(
+                "SELECT g.*, (SELECT COUNT(*) FROM uplinks u WHERE u.gateway_id=g.gw_id) AS uplinks
+                 FROM gateways g WHERE g.tenant_id=? ORDER BY g.last_seen DESC",
+                [$tid]
+            );
+        }
         $timeout = time() - self::GW_OFFLINE_TIMEOUT; // 300s 心跳超时
         foreach ($rows as &$g) {
             $g['status'] = ((int) ($g['last_seen'] ?? 0) >= $timeout) ? 'online' : 'offline';
@@ -131,8 +372,11 @@ class WebApp
         return $rows;
     }
 
-    public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200): array
+    public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null): array
     {
+        if (self::scope()['demo']) {
+            return self::demoUplinks($limit > 50 ? 30 : max(1, $limit));
+        }
         $limit = (int) $limit;
         $sql = "SELECT * FROM uplinks";
         $params = [];
@@ -145,6 +389,13 @@ class WebApp
             $where[] = "app_id=?";
             $params[] = $appId;
         }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) {
+            if (!$appIds) {
+                return [];
+            }
+            $where[] = 'app_id IN (' . implode(',', $appIds) . ')';
+        }
         if ($where) {
             $sql .= " WHERE " . implode(" AND ", $where);
         }
@@ -152,8 +403,11 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200): array
+    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null): array
     {
+        if (self::scope()['demo']) {
+            return self::demoDownlinks($limit > 50 ? 20 : max(1, $limit));
+        }
         $limit = (int) $limit;
         $sql = "SELECT * FROM downlinks";
         $params = [];
@@ -166,6 +420,13 @@ class WebApp
             $where[] = "app_id=?";
             $params[] = $appId;
         }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) {
+            if (!$appIds) {
+                return [];
+            }
+            $where[] = 'app_id IN (' . implode(',', $appIds) . ')';
+        }
         if ($where) {
             $sql .= " WHERE " . implode(" AND ", $where);
         }
@@ -173,8 +434,11 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listEvents(?int $devId = null, ?string $gwId = null, int $limit = 200): array
+    public static function listEvents(?int $devId = null, ?string $gwId = null, int $limit = 200, ?int $tenantId = null): array
     {
+        if (self::scope()['demo']) {
+            return self::demoEvents($limit > 50 ? 25 : max(1, $limit));
+        }
         $limit = (int) $limit;
         $sql = "SELECT * FROM events";
         $params = [];
@@ -186,6 +450,13 @@ class WebApp
         if ($gwId) {
             $where[] = "gateway_id=?";
             $params[] = $gwId;
+        }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) {
+            if (!$appIds) {
+                return [];
+            }
+            $where[] = 'app_id IN (' . implode(',', $appIds) . ')';
         }
         if ($where) {
             $sql .= " WHERE " . implode(" AND ", $where);
@@ -199,6 +470,9 @@ class WebApp
         $device = Database::fetch("SELECT * FROM devices WHERE id=?", [$devId]);
         if (!$device) {
             return ['error' => 'device not found'];
+        }
+        if (!self::canAccess($device)) {
+            return ['error' => 'forbidden: device not in your tenant'];
         }
         if (!ctype_xdigit($payloadHex)) {
             return ['error' => 'payload must be hex'];
@@ -226,18 +500,43 @@ class WebApp
 
     public static function updateApplication(int $id, array $p): array
     {
+        $app = self::getApplication($id);
+        if (!$app) {
+            return ['error' => 'application not found'];
+        }
+        if (!self::canAccess($app)) {
+            return ['error' => 'forbidden: application not in your tenant'];
+        }
         if (empty($p['name'])) {
             return ['error' => 'name required'];
         }
+        $dupName = Database::fetch("SELECT id FROM applications WHERE name=? AND id<>?", [$p['name'], $id]);
+        if ($dupName) {
+            return ['error' => 'application name already exists'];
+        }
+        $appEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_eui'] ?? ''));
+        if ($appEui !== '') {
+            $dupEui = Database::fetch("SELECT id FROM applications WHERE app_eui=? AND id<>?", [$appEui, $id]);
+            if ($dupEui) {
+                return ['error' => 'app_eui already exists'];
+            }
+        }
         Database::execute(
             "UPDATE applications SET name=?, description=?, app_eui=?, callback_url=? WHERE id=?",
-            [$p['name'], $p['description'] ?? '', $p['app_eui'] ?? '', trim($p['callback_url'] ?? ''), $id]
+            [$p['name'], $p['description'] ?? '', $appEui, trim($p['callback_url'] ?? ''), $id]
         );
         return ['id' => $id];
     }
 
     public static function deleteApplication(int $id): array
     {
+        $app = self::getApplication($id);
+        if (!$app) {
+            return ['error' => 'application not found'];
+        }
+        if (!self::canAccess($app)) {
+            return ['error' => 'forbidden: application not in your tenant'];
+        }
         $devIds = Database::fetchAll("SELECT id FROM devices WHERE app_id=?", [$id]);
         if (!empty($devIds)) {
             $ids = implode(',', array_map(fn($d) => (int) $d['id'], $devIds));
@@ -262,7 +561,16 @@ class WebApp
         if (!$device) {
             return ['error' => 'device not found'];
         }
+        if (!self::canAccess($device)) {
+            return ['error' => 'forbidden: device not in your tenant'];
+        }
         $name = $p['name'] ?? $device['name'];
+        if (array_key_exists('name', $p) && $name !== '') {
+            $dupName = Database::fetch("SELECT id FROM devices WHERE app_id=? AND name=? AND id<>?", [$device['app_id'], $name, $id]);
+            if ($dupName) {
+                return ['error' => 'device name already exists in this application'];
+            }
+        }
         $class = strtoupper($p['class'] ?? $device['class']);
         if (!in_array($class, ['A', 'B', 'C'], true)) {
             return ['error' => 'class must be A/B/C'];
@@ -280,9 +588,9 @@ class WebApp
         }
 
         if ($device['activation'] === 'ABP') {
-            $devAddr = strtolower(preg_replace('/[^0-9a-f]/', '', $p['dev_addr'] ?? $device['dev_addr']));
-            $nwk = strtolower(preg_replace('/[^0-9a-f]/', '', $p['nwk_s_key'] ?? $device['nwk_s_key']));
-            $app = strtolower(preg_replace('/[^0-9a-f]/', '', $p['app_s_key'] ?? $device['app_s_key']));
+            $devAddr = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_addr'] ?? $device['dev_addr']));
+            $nwk = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_s_key'] ?? $device['nwk_s_key']));
+            $app = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_s_key'] ?? $device['app_s_key']));
             if (strlen($devAddr) !== 8 || strlen($nwk) !== 32 || strlen($app) !== 32) {
                 return ['error' => 'ABP requires dev_addr(8), nwk_s_key(32), app_s_key(32) hex'];
             }
@@ -293,7 +601,7 @@ class WebApp
             $params[] = $nwk;
             $params[] = $app;
         } elseif (!empty($p['app_key'])) {
-            $appKey = strtolower(preg_replace('/[^0-9a-f]/', '', $p['app_key']));
+            $appKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_key']));
             if (strlen($appKey) !== 32) {
                 return ['error' => 'app_key must be 32 hex chars'];
             }
@@ -304,14 +612,17 @@ class WebApp
         // OTAA 设备也允许编辑 DevEUI/JoinEUI
         if ($device['activation'] === 'OTAA') {
             if (!empty($p['dev_eui'])) {
-                $devEui = strtolower(preg_replace('/[^0-9a-f]/', '', $p['dev_eui']));
+                $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_eui']));
                 if (strlen($devEui) === 16) {
+                    if (Database::fetch("SELECT id FROM devices WHERE dev_eui=? AND id<>?", [$devEui, $id])) {
+                        return ['error' => 'dev_eui already exists'];
+                    }
                     $setParts[] = 'dev_eui=?';
                     $params[] = $devEui;
                 }
             }
             if (!empty($p['join_eui'])) {
-                $joinEui = strtolower(preg_replace('/[^0-9a-f]/', '', $p['join_eui']));
+                $joinEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['join_eui']));
                 if (strlen($joinEui) === 16) {
                     $setParts[] = 'join_eui=?';
                     $params[] = $joinEui;
@@ -327,6 +638,13 @@ class WebApp
 
     public static function deleteDevice(int $id): array
     {
+        $device = self::getDevice($id);
+        if (!$device) {
+            return ['error' => 'device not found'];
+        }
+        if (!self::canAccess($device)) {
+            return ['error' => 'forbidden: device not in your tenant'];
+        }
         Database::execute("DELETE FROM downlinks WHERE dev_id=?", [$id]);
         Database::execute("DELETE FROM uplinks WHERE dev_id=?", [$id]);
         Database::execute("DELETE FROM devices WHERE id=?", [$id]);
@@ -342,7 +660,7 @@ class WebApp
 
     public static function createGateway(array $p): array
     {
-        $gwId = strtolower(preg_replace('/[^0-9a-f]/', '', $p['gw_id'] ?? ''));
+        $gwId = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['gw_id'] ?? ''));
         if (strlen($gwId) !== 16 && strlen($gwId) !== 32) {
             return ['error' => 'gw_id must be 16 or 32 hex chars'];
         }
@@ -569,9 +887,9 @@ class WebApp
             return ['error' => 'unsupported region: ' . $region];
         }
         $sess = Multicast::generateSession();
-        $mcAddr = strtolower(preg_replace('/[^0-9a-f]/', '', $p['mc_addr'] ?? $sess['mc_addr']));
-        $mcNwk = strtolower(preg_replace('/[^0-9a-f]/', '', $p['mc_nwk_s_key'] ?? $sess['mc_nwk_s_key']));
-        $mcApp = strtolower(preg_replace('/[^0-9a-f]/', '', $p['mc_app_s_key'] ?? $sess['mc_app_s_key']));
+        $mcAddr = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['mc_addr'] ?? $sess['mc_addr']));
+        $mcNwk = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['mc_nwk_s_key'] ?? $sess['mc_nwk_s_key']));
+        $mcApp = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['mc_app_s_key'] ?? $sess['mc_app_s_key']));
         if (strlen($mcAddr) !== 8 || strlen($mcNwk) !== 32 || strlen($mcApp) !== 32) {
             return ['error' => 'multicast keys must be mc_addr(8)/mc_nwk_s_key(32)/mc_app_s_key(32) hex'];
         }

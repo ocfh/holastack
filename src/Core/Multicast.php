@@ -48,7 +48,7 @@ class Multicast
 
     public static function addDevice(int $groupId, string $devEui): void
     {
-        $devEui = strtolower(preg_replace('/[^0-9a-f]/', '', $devEui));
+        $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $devEui));
         if (strlen($devEui) !== 16) {
             return;
         }

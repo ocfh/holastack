@@ -3,76 +3,87 @@
  * 漫游（Roaming, Backend Interface）管理 CLI。
  *
  *   php bin/roaming.php list-servers
- *   php bin/roaming.php add-server <name> <url> [kind] [protocol]
- *   php bin/roaming.php del-server <serverId>
- *   php bin/roaming.php forward-uplink <serverId> <devEui> <pduHex>
+ *   php bin/roaming.php add-server <name> <url> [net_id] [kek_label]
+ *   php bin/roaming.php del-server <id>
+ *   php bin/roaming.php test-forward <net_id> <pduHex>
  */
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\Roaming;
+use holastack\DB\Database;
 
-function roaming_usage(): void
+function roam_usage(): void
 {
     echo "Usage:\n";
     echo "  php bin/roaming.php list-servers\n";
-    echo "  php bin/roaming.php add-server <name> <url> [kind] [protocol]\n";
-    echo "  php bin/roaming.php del-server <serverId>\n";
-    echo "  php bin/roaming.php forward-uplink <serverId> <devEui> <pduHex>\n";
+    echo "  php bin/roaming.php add-server <name> <url> [net_id] [kek_label]\n";
+    echo "  php bin/roaming.php del-server <id>\n";
+    echo "  php bin/roaming.php test-forward <net_id> <pduHex>\n";
 }
 
 $argv = array_slice($GLOBALS['argv'], 1);
 if (empty($argv)) {
-    roaming_usage();
+    roam_usage();
     exit(1);
 }
 
 $cmd = $argv[0];
 switch ($cmd) {
     case 'list-servers':
-        $rows = Roaming::listServers();
+        $rows = Database::fetchAll("SELECT id, name, net_id, kind, protocol, server, enabled, async_timeout FROM roaming_servers ORDER BY id");
         echo count($rows) . " roaming server(s):\n";
         foreach ($rows as $r) {
-            echo "  [{$r['id']}] {$r['name']} {$r['kind']}/{$r['protocol']} -> {$r['server']} enabled={$r['enabled']}\n";
+            echo "  [{$r['id']}] {$r['name']} net_id={$r['net_id']} {$r['kind']}/{$r['protocol']} -> {$r['server']} enabled={$r['enabled']} async_timeout={$r['async_timeout']}ms\n";
         }
         break;
 
     case 'add-server':
-        if (count($argv) < 3) { roaming_usage(); exit(1); }
-        $res = Roaming::addServer([
-            'name'     => $argv[1],
-            'server'   => $argv[2],
-            'kind'     => $argv[3] ?? 'PASSIVE',
-            'protocol' => $argv[4] ?? 'BI_1_0',
-        ]);
-        echo $res['error'] ?? ("added roaming server id={$res['id']}\n");
+        if (count($argv) < 3) { roam_usage(); exit(1); }
+        Database::execute(
+            "INSERT INTO roaming_servers (name, server, net_id, kek_label, kind, protocol, async_timeout, enabled, created_at)
+             VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+                $argv[1], $argv[2], strtoupper($argv[3] ?? ''), $argv[4] ?? '',
+                'PASSIVE', 'BI_1_0', 250, 1, time(),
+            ]
+        );
+        $id = Database::lastInsertId();
+        echo "added roaming server id=$id (run Roaming::setup() / restart NS to activate)\n";
         break;
 
     case 'del-server':
-        if (count($argv) < 2) { roaming_usage(); exit(1); }
-        Roaming::deleteServer((int) $argv[1]);
+        if (count($argv) < 2) { roam_usage(); exit(1); }
+        Database::execute("DELETE FROM roaming_servers WHERE id=?", [(int) $argv[1]]);
         echo "deleted roaming server {$argv[1]}\n";
         break;
 
-    case 'forward-uplink':
-        if (count($argv) < 4) { roaming_usage(); exit(1); }
-        $server = Roaming::getServer((int) $argv[1]);
-        if (!$server) {
-            echo "roaming server not found\n";
+    case 'test-forward':
+        if (count($argv) < 3) { roam_usage(); exit(1); }
+        Roaming::setup();
+        $netId = strtoupper($argv[1]);
+        $client = Roaming::getClient($netId);
+        if (!$client) {
+            echo "roaming client not found for net_id=$netId (check roaming_servers + Roaming::setup)\n";
             exit(1);
         }
-        $pdu = hex2bin($argv[3]);
-        $msg = Roaming::buildXmitDataReq($server, [
-            'phy'      => base64_encode($pdu),
-            'dev_eui'  => $argv[2],
-            'dev_addr' => '',
-            'gw_id'    => '',
-            'dr'       => '',
+        $pdu = hex2bin($argv[2]);
+        $msg = Roaming::buildXmitDataReq($client, [
+            'phy'       => base64_encode($pdu),
+            'dev_eui'   => '',
+            'dev_addr'  => bin2hex(substr($pdu, 1, 4)),
+            'freq'      => 868.1,
+            'dr'        => 'SF7BW125',
+            'recv_time' => time(),
+            'gw_id'     => '00000000',
+            'rssi'      => -60,
+            'snr'       => 7.0,
+            'region'    => ELW_DEFAULT_REGION,
         ]);
-        $resp = Roaming::forward($server, $msg);
+        $resp = Roaming::forward($client, $msg);
         echo "response: " . json_encode($resp, JSON_UNESCAPED_SLASHES) . "\n";
         break;
 
     default:
-        roaming_usage();
+        roam_usage();
         exit(1);
 }

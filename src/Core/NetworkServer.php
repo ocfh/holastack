@@ -10,6 +10,7 @@ use holastack\Core\LoRaWANVersion;
 use holastack\Storage\DeviceProfile;
 use holastack\Integration\Integration;
 use holastack\Core\Multicast;
+use holastack\Core\Roaming;
 
 /**
  * LoRaWAN 网络服务器核心：
@@ -37,6 +38,11 @@ class NetworkServer
     {
         Database::migrate();
         $this->log("Database ready.");
+        // 加载漫游伙伴注册表（按 NetID 路由），必须在主循环前完成
+        $nRoam = Roaming::setup();
+        if ($nRoam > 0 || Roaming::isEnabled()) {
+            $this->log("Roaming enabled: $nRoam partner server(s) registered (NetID=" . Roaming::localNsId() . ")");
+        }
         $this->sock = stream_socket_server("udp://0.0.0.0:{$this->port}", $errno, $errstr, STREAM_SERVER_BIND);
         if ($this->sock === false) {
             fwrite(STDERR, "FATAL: cannot bind UDP :{$this->port} ($errstr)\n");
@@ -233,6 +239,10 @@ class NetworkServer
         }
         $t3 = microtime(true);
         if (!$device) {
+            // 漫游：非本网设备 Join，作为服务 NS 转发给 Home NS（Passive Roaming，按 JoinEUI 路由）
+            if (Roaming::isEnabled() && $this->tryRoamingJoin($phy, $jr, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer)) {
+                return; // 已成功转发，等待 Home NS 经 bin/roaming-inbound.php 回送 JoinAns 下行
+            }
             $this->log("JOIN: unknown device devEUI=$devEui appEUI=$appEUI");
             $this->logEvent('join', 'error', "入网请求：未知设备 devEUI=$devEui appEUI=$appEui", $gwEui);
             return;
@@ -390,6 +400,10 @@ class NetworkServer
 
         $device = Database::fetch("SELECT * FROM devices WHERE dev_addr=? AND status='active'", [$devAddrHex]);
         if (!$device) {
+            // 漫游：非本网 DevAddr 上行，作为服务 NS 转发给 Home NS（Passive Roaming，按 DevAddr 路由）
+            if ($this->tryRoamingDataUp($phy, $p, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer)) {
+                return; // 已发送 XmitDataReq，等待 Home NS 经 bin/roaming-inbound.php 回送下行
+            }
             $this->log("DATA UP: unknown devAddr=$devAddrHex");
             $this->logEvent('uplink', 'error', "上行：未知设备 devAddr=$devAddrHex", $gwEui);
             return;
@@ -540,6 +554,84 @@ class NetworkServer
         $this->dispatchPendingAppDownlinks($device, $region, $tmst, $freq, $datr, $gwEui, $peer, $p['dev_addr'], $ks, $mac, $macConsumed);
     }
 
+    // ---------------- 漫游（Passive Roaming，服务 NS 出站转发） ----------------
+
+    /**
+     * 非本网设备 Join：作为服务 NS 把 JoinReq 转发给 Home NS（按 JoinEUI 路由）。
+     * 成功转发返回 true（调用方不再走本地入网流程）；无匹配伙伴或转发失败返回 false。
+     * 注意：转发为同步 HTTPS（curl），会短暂阻塞 UDP 接收循环；漫游伙伴低延迟时可接受。
+     */
+    private function tryRoamingJoin(string $phy, array $jr, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, string $peer): bool
+    {
+        $client = Roaming::clientForJoinEui($jr['app_eui']);
+        if (!$client) {
+            $this->log("ROAMING JOIN: no partner for appEUI=" . bin2hex($jr['app_eui']));
+            return false;
+        }
+        $msg = Roaming::buildJoinReq($client, [
+            'phy'        => base64_encode($phy),
+            'mac_version'=> '1.0.3',
+            'opt_neg'    => false,
+            'dev_eui'    => bin2hex($jr['dev_eui']),
+            'dev_addr'   => '',
+            'dl_settings'=> '',
+            'rx_delay'   => 0,
+            'cf_list'    => '',
+        ]);
+        // Join-Accept 固定延迟 JOIN_ACCEPT_DELAY1 = 5s
+        Roaming::rememberPending('join', bin2hex($jr['dev_eui']), '', $gwEui, $peer, $tmst, ELW_DEFAULT_REGION, $freq, $datr, 5000);
+        $resp = Roaming::forward($client, $msg);
+        if (isset($resp['error'])) {
+            $this->log("ROAMING JOIN forward failed appEUI=" . bin2hex($jr['app_eui']) . ": " . $resp['error']);
+            return false;
+        }
+        $this->log("ROAMING JoinReq devEUI=" . bin2hex($jr['dev_eui']) . " -> " . $client->receiverId . " queued (awaiting JoinAns)");
+        return true;
+    }
+
+    /**
+     * 非本网 DevAddr 上行：作为服务 NS 把 XmitDataReq 转发给 Home NS（按 DevAddr 路由）。
+     * 成功转发返回 true；否则返回 false（调用方按未知设备处理）。
+     */
+    private function tryRoamingDataUp(string $phy, array $p, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, string $peer): bool
+    {
+        $devAddrBin = $p['dev_addr'];
+        if (!Roaming::isRoamingDevAddr($devAddrBin)) {
+            return false;
+        }
+        $netIds = Roaming::getNetIdsForDevAddr($devAddrBin);
+        if (empty($netIds)) {
+            $this->log("ROAMING DATA: no partner for devAddr=" . bin2hex($devAddrBin));
+            return false;
+        }
+        $client = Roaming::getClient($netIds[0]);
+        if (!$client) {
+            return false;
+        }
+        $region = Region::get(ELW_DEFAULT_REGION);
+        $dlDelay = (int) ($region->getReceiveDelay1() * 1000); // RX1 窗口延迟
+        $msg = Roaming::buildXmitDataReq($client, [
+            'phy'       => base64_encode($phy),
+            'dev_eui'   => '',
+            'dev_addr'  => bin2hex($devAddrBin),
+            'freq'      => $freq,
+            'dr'        => $datr,
+            'recv_time' => time(),
+            'gw_id'     => $gwEui,
+            'rssi'      => $rssi,
+            'snr'      => $lsnr,
+            'region'    => ELW_DEFAULT_REGION,
+        ]);
+        Roaming::rememberPending('data', '', bin2hex($devAddrBin), $gwEui, $peer, $tmst, ELW_DEFAULT_REGION, $freq, $datr, $dlDelay);
+        $resp = Roaming::forward($client, $msg);
+        if (isset($resp['error'])) {
+            $this->log("ROAMING XmitDataReq forward failed devAddr=" . bin2hex($devAddrBin) . ": " . $resp['error']);
+            return false;
+        }
+        $this->log("ROAMING XmitDataReq devAddr=" . bin2hex($devAddrBin) . " -> " . $client->receiverId . " queued (awaiting PrUpdAns)");
+        return true;
+    }
+
     private function dispatchPendingAppDownlinks(array $device, Region $region, int $tmst, float $freq, string $datr, string $gwEui, string $peer, string $devAddrBin, array $ks, array $mac = ['fopts' => '', 'port0' => ''], bool $macConsumed = false): void
     {
         $pendings = Database::fetchAll(
@@ -659,6 +751,24 @@ class NetworkServer
             }
         }
 
+        // Relay 配置调度（对齐 ChirpStack downlink/data.rs：仅当 device_profile 配置了
+        // relay_params 时执行）。is_relay → RelayConfReq（6 字段比对），is_relay_ed → EndDeviceConfReq（6 字段比对）。
+        // 设备应答全 ACK 后由 handleRelayConfAns 写入 relay_state，下次上行即不再排队。
+        $dp = DeviceProfile::get((int) ($device['device_profile_id'] ?? 0));
+        $relayParams = $dp ? DeviceProfile::relayParams($dp) : null;
+        if ($relayParams !== null) {
+            $relayMac = Relay::scheduleConf($device, $relayParams);
+            if ($relayMac !== '') {
+                $fopts .= $relayMac;
+                $this->log(sprintf(
+                    "RELAY: dev#%d schedule %s (%dB)",
+                    $device['id'],
+                    (ord($relayMac[0]) === Relay::CID_RELAY_CONF_REQ) ? 'RelayConfReq' : 'EndDeviceConfReq',
+                    strlen($relayMac)
+                ));
+            }
+        }
+
         // FOpts 长度上限 15 字节。注意 LoRaWAN 规范：FPort=0 时 FOpts 必须为空，
         // 即 FOpts 与 FPort=0 不能共存于同一帧。因此：
         //  - ≤15 字节：全部放入 FOpts（可与应用负载共存）；
@@ -681,7 +791,7 @@ class NetworkServer
         $cols = [
             'dr', 'tx_power_index', 'nb_trans', 'rx2_frequency', 'rx2_dr', 'rx1_dr_offset',
             'enabled_uplink_channel_indices', 'pending_mac', 'mac_command_error_count',
-            'uplink_adr_history', 'class', 'battery', 'margin',
+            'uplink_adr_history', 'class', 'battery', 'margin', 'relay_state',
         ];
         $upd = [];
         $params = [];

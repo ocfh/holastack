@@ -131,6 +131,7 @@ class Database
                 ['downlinks', 'acknowledged_at', 'INTEGER DEFAULT 0'],
                 ['applications', 'callback_url', 'TEXT DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT DEFAULT \'\''],
+                ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['applications', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['gateways', 'tenant_id', 'INTEGER DEFAULT 0'],
@@ -138,9 +139,31 @@ class Database
                 ['integrations', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['multicast_groups', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['api_keys', 'created_at', 'INTEGER DEFAULT 0'],
+                ['roaming_servers', 'net_id', 'TEXT DEFAULT \'\''],
+                ['roaming_servers', 'kek_label', 'TEXT DEFAULT \'\''],
+                ['roaming_servers', 'ca_cert', 'TEXT DEFAULT \'\''],
+                ['roaming_servers', 'tls_cert', 'TEXT DEFAULT \'\''],
+                ['roaming_servers', 'tls_key', 'TEXT DEFAULT \'\''],
+                ['roaming_servers', 'authorization', 'TEXT DEFAULT \'\''],
+                ['roaming_servers', 'passive_roaming_lifetime', 'INTEGER NOT NULL DEFAULT 0'],
+                ['roaming_servers', 'validate_mic', 'INTEGER NOT NULL DEFAULT 1'],
+                ['devices', 'relay_state', 'TEXT DEFAULT \'\''],
+                ['device_profiles', 'relay_params', 'TEXT DEFAULT \'\''],
+                // relay_devices 会话字段（对齐 ChirpStack internal.proto RelayDevice；旧库升级补列）
+                ['relay_devices', 'slot_index', 'INTEGER NOT NULL DEFAULT 0'],
+                ['relay_devices', 'join_eui', 'TEXT DEFAULT \'\''],
+                ['relay_devices', 'root_wor_s_key', 'TEXT DEFAULT \'\''],
+                ['relay_devices', 'provisioned', 'INTEGER NOT NULL DEFAULT 0'],
+                ['relay_devices', 'uplink_limit_bucket_size', 'INTEGER NOT NULL DEFAULT 0'],
+                ['relay_devices', 'uplink_limit_reload_rate', 'INTEGER NOT NULL DEFAULT 0'],
+                ['relay_devices', 'w_f_cnt_last_request', 'INTEGER NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
+            // 漫游相关表
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL UNIQUE, kek TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, kind VARCHAR(16) NOT NULL, dev_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', gw_id TEXT NOT NULL DEFAULT \'\', peer TEXT DEFAULT \'\', ul_tmst INTEGER NOT NULL DEFAULT 0, region TEXT NOT NULL DEFAULT \'\', freq REAL NOT NULL DEFAULT 0, datr TEXT DEFAULT \'\', dl_delay INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL DEFAULT 0)');
+            self::ensureColumn('roaming_pending', 'dl_delay', 'INTEGER NOT NULL DEFAULT 0');
             // 兜底：确保令牌表 / 事件表 / 租户表存在
             $pdo->exec('CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INTEGER DEFAULT 0, app_id INTEGER DEFAULT 0, message TEXT DEFAULT \'\', raw_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
@@ -148,7 +171,7 @@ class Database
             // ---- ChirpStack-port 路线图模块表（BasicStation/Relay/FUOTA/Roaming） ----
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, gateway_id TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', lns_secret TEXT DEFAULT \'\', ca_cert TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, relay_dev_eui TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, relay_gateway_id INTEGER NOT NULL, dev_eui TEXT NOT NULL, dev_addr TEXT DEFAULT \'\', nwk_s_key TEXT DEFAULT \'\', app_s_key TEXT DEFAULT \'\', f_nwk_s_int_key TEXT DEFAULT \'\', s_nwk_s_int_key TEXT DEFAULT \'\', nwk_s_enc_key TEXT DEFAULT \'\', mac_version TEXT DEFAULT \'1.1\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, relay_gateway_id INTEGER NOT NULL, dev_eui TEXT NOT NULL, slot_index INTEGER NOT NULL DEFAULT 0, join_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', root_wor_s_key TEXT DEFAULT \'\', provisioned INTEGER NOT NULL DEFAULT 0, uplink_limit_bucket_size INTEGER NOT NULL DEFAULT 0, uplink_limit_reload_rate INTEGER NOT NULL DEFAULT 0, w_f_cnt_last_request INTEGER NOT NULL DEFAULT 0, nwk_s_key TEXT DEFAULT \'\', app_s_key TEXT DEFAULT \'\', f_nwk_s_int_key TEXT DEFAULT \'\', s_nwk_s_int_key TEXT DEFAULT \'\', nwk_s_enc_key TEXT DEFAULT \'\', mac_version TEXT DEFAULT \'1.1\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, multicast_group_id INTEGER NOT NULL, fragment_size INTEGER NOT NULL DEFAULT 200, redundancy INTEGER NOT NULL DEFAULT 1, descriptor_version INTEGER NOT NULL DEFAULT 0, fw_version TEXT DEFAULT \'\', fw_length INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, dev_id INTEGER NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INTEGER PRIMARY KEY AUTOINCREMENT, deployment_id INTEGER NOT NULL, frag_index INTEGER NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)');
@@ -185,7 +208,7 @@ class Database
             // ---- ChirpStack-port 路线图模块表（BasicStation/Relay/FUOTA/Roaming） ----
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, gateway_id VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', lns_secret VARCHAR(128) DEFAULT \'\', ca_cert TEXT, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, relay_dev_eui VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', created_at INT NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INT AUTO_INCREMENT PRIMARY KEY, relay_gateway_id INT NOT NULL, dev_eui VARCHAR(32) NOT NULL, dev_addr VARCHAR(16) DEFAULT \'\', nwk_s_key VARCHAR(64) DEFAULT \'\', app_s_key VARCHAR(64) DEFAULT \'\', f_nwk_s_int_key VARCHAR(64) DEFAULT \'\', s_nwk_s_int_key VARCHAR(64) DEFAULT \'\', nwk_s_enc_key VARCHAR(64) DEFAULT \'\', mac_version VARCHAR(16) DEFAULT \'1.1\', created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INT AUTO_INCREMENT PRIMARY KEY, relay_gateway_id INT NOT NULL, dev_eui VARCHAR(32) NOT NULL, slot_index INT NOT NULL DEFAULT 0, join_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', root_wor_s_key VARCHAR(64) DEFAULT \'\', provisioned TINYINT NOT NULL DEFAULT 0, uplink_limit_bucket_size INT NOT NULL DEFAULT 0, uplink_limit_reload_rate INT NOT NULL DEFAULT 0, w_f_cnt_last_request INT NOT NULL DEFAULT 0, nwk_s_key VARCHAR(64) DEFAULT \'\', app_s_key VARCHAR(64) DEFAULT \'\', f_nwk_s_int_key VARCHAR(64) DEFAULT \'\', s_nwk_s_int_key VARCHAR(64) DEFAULT \'\', nwk_s_enc_key VARCHAR(64) DEFAULT \'\', mac_version VARCHAR(16) DEFAULT \'1.1\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, multicast_group_id INT NOT NULL, fragment_size INT NOT NULL DEFAULT 200, redundancy INT NOT NULL DEFAULT 1, descriptor_version INT NOT NULL DEFAULT 0, fw_version VARCHAR(32) DEFAULT \'\', fw_length INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, dev_id INT NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INT AUTO_INCREMENT PRIMARY KEY, deployment_id INT NOT NULL, frag_index INT NOT NULL, data TEXT NOT NULL, created_at INT NOT NULL)');
@@ -221,6 +244,7 @@ class Database
                 ['devices', 'altitude', 'DOUBLE DEFAULT 0'],
                 ['applications', 'callback_url', 'VARCHAR(512) DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT'],
+                ['users', 'tenant_id', 'INT DEFAULT 0'],
                 ['applications', 'tenant_id', 'INT DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INT DEFAULT 0'],
                 ['gateways', 'tenant_id', 'INT DEFAULT 0'],
@@ -229,11 +253,31 @@ class Database
                 ['multicast_groups', 'tenant_id', 'INT DEFAULT 0'],
                 ['downlinks', 'transmissions', 'INT DEFAULT 0'],
                 ['downlinks', 'acknowledged_at', 'INT DEFAULT 0'],
+                ['roaming_servers', 'net_id', 'VARCHAR(6) DEFAULT \'\''],
+                ['roaming_servers', 'kek_label', 'VARCHAR(32) DEFAULT \'\''],
+                ['roaming_servers', 'ca_cert', 'TEXT'],
+                ['roaming_servers', 'tls_cert', 'TEXT'],
+                ['roaming_servers', 'tls_key', 'TEXT'],
+                ['roaming_servers', 'authorization', 'VARCHAR(255) DEFAULT \'\''],
+                ['roaming_servers', 'passive_roaming_lifetime', 'INT DEFAULT 0'],
+                ['roaming_servers', 'validate_mic', 'TINYINT DEFAULT 1'],
+                ['devices', 'relay_state', 'TEXT'],
+                ['device_profiles', 'relay_params', 'TEXT'],
+                // relay_devices 会话字段（对齐 ChirpStack internal.proto RelayDevice；旧库升级补列）
+                ['relay_devices', 'slot_index', 'INT NOT NULL DEFAULT 0'],
+                ['relay_devices', 'join_eui', 'VARCHAR(32) DEFAULT \'\''],
+                ['relay_devices', 'root_wor_s_key', 'VARCHAR(64) DEFAULT \'\''],
+                ['relay_devices', 'provisioned', 'TINYINT NOT NULL DEFAULT 0'],
+                ['relay_devices', 'uplink_limit_bucket_size', 'INT NOT NULL DEFAULT 0'],
+                ['relay_devices', 'uplink_limit_reload_rate', 'INT NOT NULL DEFAULT 0'],
+                ['relay_devices', 'w_f_cnt_last_request', 'INT NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 if (!self::mysqlColumnExists($tbl, $col)) {
                     $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");
                 }
             }
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INT AUTO_INCREMENT PRIMARY KEY, label VARCHAR(32) NOT NULL UNIQUE, kek VARCHAR(64) DEFAULT \'\', created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INT AUTO_INCREMENT PRIMARY KEY, kind VARCHAR(16) NOT NULL, dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', gw_id VARCHAR(32) NOT NULL DEFAULT \'\', peer TEXT, ul_tmst INT NOT NULL DEFAULT 0, region VARCHAR(16) NOT NULL DEFAULT \'\', freq DOUBLE NOT NULL DEFAULT 0, datr VARCHAR(16) DEFAULT \'\', dl_delay INT NOT NULL DEFAULT 0, created_at INT NOT NULL, expires_at INT NOT NULL DEFAULT 0, INDEX idx_rp_dev (dev_eui), INDEX idx_rp_addr (dev_addr))');
         }
         // 确保存在一条 EU868「默认模板」，供未指定设备模板的设备回退（幂等）
         DeviceProfile::ensureDefault();

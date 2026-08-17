@@ -159,8 +159,18 @@ class DeviceProfile
             'supports_otaa' => 1, 'supports_class_b' => 0, 'supports_class_c' => 0,
             'class_b_timeout' => 0, 'class_b_ping_slot_periodicity' => 0, 'class_b_ping_slot_dr' => 0, 'class_b_ping_slot_freq' => 0,
             'class_c_timeout' => 0, 'abp_rx1_delay' => 1, 'abp_rx1_dr_offset' => 0, 'abp_rx2_dr' => 0, 'abp_rx2_freq' => 0,
-            'allow_roaming' => 0, 'created_at' => 0,
+            'allow_roaming' => 0, 'relay_params' => '', 'created_at' => 0,
         ];
+    }
+
+    /** 解析模板内的 Relay 参数（TS011）。返回 null 表示未配置中继能力。 */
+    public static function relayParams(?array $dp): ?array
+    {
+        if (!$dp || empty($dp['relay_params'])) {
+            return null;
+        }
+        $j = json_decode($dp['relay_params'], true);
+        return is_array($j) ? $j : null;
     }
 
     private static function cast(string $col, $val)
