@@ -88,7 +88,8 @@ class MacCommands
         return $out;
     }
 
-    private static function cmdLen(int $cid): int
+    /** 标准 MAC 命令负载长度（CID 之后的有效字节；未知返回 -1）。FUOTA 消歧扫描复用。 */
+    public static function cmdLen(int $cid): int
     {
         switch ($cid) {
             case self::CID_LINK_CHECK_REQ:        return 0;

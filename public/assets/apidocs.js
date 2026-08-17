@@ -214,9 +214,10 @@
     });
   }
 
-  // 生成 curl 示例（基于当前站点 origin 动态拼接）
+  // 生成 curl 示例（基于配置的 API 基础地址或当前站点 origin 动态拼接）
   function Ad_curl(a) {
-    var url = location.origin + a.path;
+    var base = (typeof window !== 'undefined' && window.ELW_API_BASE_URL) ? window.ELW_API_BASE_URL : location.origin;
+    var url = base + a.path;
     var head = '  -H "Authorization: Bearer <YOUR_API_KEY>"';
     if (a.method === 'POST') {
       return 'curl -X POST "' + url + '" \\\n' + head + ' \\\n  -H "Content-Type: application/json" \\\n  -d \'' + JSON.stringify(a.sample || {}) + '\'';

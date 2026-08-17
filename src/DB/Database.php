@@ -112,6 +112,7 @@ class Database
                 ['devices', 'nb_trans', 'INTEGER NOT NULL DEFAULT 1'],
                 ['devices', 'rx1_dr_offset', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'rx2_dr', 'INTEGER NOT NULL DEFAULT 0'],
+                ['devices', 'rx2_frequency', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'rx_delay', 'INTEGER NOT NULL DEFAULT 1'],
                 ['devices', 'max_supported_tx_power_index', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'min_supported_tx_power_index', 'INTEGER NOT NULL DEFAULT 0'],
@@ -133,6 +134,7 @@ class Database
                 ['events', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['applications', 'tenant_id', 'INTEGER DEFAULT 0'],
+                ['devices', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['gateways', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['api_keys', 'tenant_id', 'INTEGER DEFAULT 0'],
@@ -157,6 +159,24 @@ class Database
                 ['relay_devices', 'uplink_limit_bucket_size', 'INTEGER NOT NULL DEFAULT 0'],
                 ['relay_devices', 'uplink_limit_reload_rate', 'INTEGER NOT NULL DEFAULT 0'],
                 ['relay_devices', 'w_f_cnt_last_request', 'INTEGER NOT NULL DEFAULT 0'],
+                // FUOTA 状态机列（对齐 schema/sqlite.sql；旧库升级补列）
+                ['fuota_campaigns', 'state', 'VARCHAR(16) NOT NULL DEFAULT \'PENDING\''],
+                ['fuota_campaigns', 'mc_ke_key', 'TEXT DEFAULT \'\''],
+                ['fuota_campaigns', 'min_delay', 'INTEGER NOT NULL DEFAULT 200'],
+                ['fuota_campaigns', 'max_delay', 'INTEGER NOT NULL DEFAULT 1000'],
+                ['fuota_campaigns', 'timeout', 'INTEGER NOT NULL DEFAULT 3600'],
+                ['fuota_campaigns', 'frames_sent', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'total_frames', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'next_frame_at', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'started_at', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'updated_at', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'firmware_sha256', 'TEXT DEFAULT \'\''],
+                ['fuota_campaigns', 'firmware_crc', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'status_req_sent', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'frag_nb_missing', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'mc_group_ans', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'status_ans', 'INTEGER NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'updated_at', 'INTEGER NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
@@ -172,9 +192,10 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, gateway_id TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', lns_secret TEXT DEFAULT \'\', ca_cert TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, relay_dev_eui TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, relay_gateway_id INTEGER NOT NULL, dev_eui TEXT NOT NULL, slot_index INTEGER NOT NULL DEFAULT 0, join_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', root_wor_s_key TEXT DEFAULT \'\', provisioned INTEGER NOT NULL DEFAULT 0, uplink_limit_bucket_size INTEGER NOT NULL DEFAULT 0, uplink_limit_reload_rate INTEGER NOT NULL DEFAULT 0, w_f_cnt_last_request INTEGER NOT NULL DEFAULT 0, nwk_s_key TEXT DEFAULT \'\', app_s_key TEXT DEFAULT \'\', f_nwk_s_int_key TEXT DEFAULT \'\', s_nwk_s_int_key TEXT DEFAULT \'\', nwk_s_enc_key TEXT DEFAULT \'\', mac_version TEXT DEFAULT \'1.1\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, multicast_group_id INTEGER NOT NULL, fragment_size INTEGER NOT NULL DEFAULT 200, redundancy INTEGER NOT NULL DEFAULT 1, descriptor_version INTEGER NOT NULL DEFAULT 0, fw_version TEXT DEFAULT \'\', fw_length INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, dev_id INTEGER NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, multicast_group_id INTEGER NOT NULL, fragment_size INTEGER NOT NULL DEFAULT 200, redundancy INTEGER NOT NULL DEFAULT 1, descriptor_version INTEGER NOT NULL DEFAULT 0, fw_version TEXT DEFAULT \'\', fw_length INTEGER NOT NULL DEFAULT 0, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', mc_ke_key TEXT DEFAULT \'\', min_delay INTEGER NOT NULL DEFAULT 200, max_delay INTEGER NOT NULL DEFAULT 1000, timeout INTEGER NOT NULL DEFAULT 3600, frames_sent INTEGER NOT NULL DEFAULT 0, total_frames INTEGER NOT NULL DEFAULT 0, next_frame_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, firmware_sha256 TEXT DEFAULT \'\', firmware_crc INTEGER NOT NULL DEFAULT 0, status_req_sent INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, dev_id INTEGER NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INTEGER NOT NULL DEFAULT 0, frag_nb_missing INTEGER NOT NULL DEFAULT 0, mc_group_ans INTEGER NOT NULL DEFAULT 0, status_ans INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INTEGER PRIMARY KEY AUTOINCREMENT, deployment_id INTEGER NOT NULL, frag_index INTEGER NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_frames (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, seq INTEGER NOT NULL, fopts_hex TEXT NOT NULL, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server TEXT DEFAULT \'\', async_timeout INTEGER NOT NULL DEFAULT 250, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)');
             // 兜底：确保后期模块表存在（防止旧库升级时漏建；与 schema 文件定义一致）
             $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INTEGER PRIMARY KEY AUTOINCREMENT, application_id INTEGER NOT NULL, tenant_id INTEGER DEFAULT 0, kind TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
@@ -209,9 +230,10 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, gateway_id VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', lns_secret VARCHAR(128) DEFAULT \'\', ca_cert TEXT, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, relay_dev_eui VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INT AUTO_INCREMENT PRIMARY KEY, relay_gateway_id INT NOT NULL, dev_eui VARCHAR(32) NOT NULL, slot_index INT NOT NULL DEFAULT 0, join_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', root_wor_s_key VARCHAR(64) DEFAULT \'\', provisioned TINYINT NOT NULL DEFAULT 0, uplink_limit_bucket_size INT NOT NULL DEFAULT 0, uplink_limit_reload_rate INT NOT NULL DEFAULT 0, w_f_cnt_last_request INT NOT NULL DEFAULT 0, nwk_s_key VARCHAR(64) DEFAULT \'\', app_s_key VARCHAR(64) DEFAULT \'\', f_nwk_s_int_key VARCHAR(64) DEFAULT \'\', s_nwk_s_int_key VARCHAR(64) DEFAULT \'\', nwk_s_enc_key VARCHAR(64) DEFAULT \'\', mac_version VARCHAR(16) DEFAULT \'1.1\', created_at INT NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, multicast_group_id INT NOT NULL, fragment_size INT NOT NULL DEFAULT 200, redundancy INT NOT NULL DEFAULT 1, descriptor_version INT NOT NULL DEFAULT 0, fw_version VARCHAR(32) DEFAULT \'\', fw_length INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, dev_id INT NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, multicast_group_id INT NOT NULL, fragment_size INT NOT NULL DEFAULT 200, redundancy INT NOT NULL DEFAULT 1, descriptor_version INT NOT NULL DEFAULT 0, fw_version VARCHAR(32) DEFAULT \'\', fw_length INT NOT NULL DEFAULT 0, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', mc_ke_key VARCHAR(64) DEFAULT \'\', min_delay INT NOT NULL DEFAULT 200, max_delay INT NOT NULL DEFAULT 1000, timeout INT NOT NULL DEFAULT 3600, frames_sent INT NOT NULL DEFAULT 0, total_frames INT NOT NULL DEFAULT 0, next_frame_at INT NOT NULL DEFAULT 0, started_at INT NOT NULL DEFAULT 0, updated_at INT NOT NULL DEFAULT 0, firmware_sha256 VARCHAR(64) DEFAULT \'\', firmware_crc INT NOT NULL DEFAULT 0, status_req_sent TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, dev_id INT NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INT NOT NULL DEFAULT 0, frag_nb_missing INT NOT NULL DEFAULT 0, mc_group_ans TINYINT NOT NULL DEFAULT 0, status_ans TINYINT NOT NULL DEFAULT 0, updated_at INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INT AUTO_INCREMENT PRIMARY KEY, deployment_id INT NOT NULL, frag_index INT NOT NULL, data TEXT NOT NULL, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_frames (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, seq INT NOT NULL, fopts_hex TEXT NOT NULL, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server VARCHAR(255) DEFAULT \'\', async_timeout INT NOT NULL DEFAULT 250, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL)');
             // 兜底：确保后期模块表存在（防止旧库升级时漏建；与 schema 文件定义一致）
             $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INT AUTO_INCREMENT PRIMARY KEY, application_id INT NOT NULL, tenant_id INT DEFAULT 0, kind VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL DEFAULT 1, config_json TEXT, created_at INT NOT NULL, INDEX idx_integrations_app (application_id))');
@@ -230,6 +252,7 @@ class Database
                 ['devices', 'nb_trans', 'INT DEFAULT 1'],
                 ['devices', 'rx1_dr_offset', 'INT DEFAULT 0'],
                 ['devices', 'rx2_dr', 'INT DEFAULT 0'],
+                ['devices', 'rx2_frequency', 'INT DEFAULT 0'],
                 ['devices', 'rx_delay', 'INT DEFAULT 1'],
                 ['devices', 'max_supported_tx_power_index', 'INT DEFAULT 0'],
                 ['devices', 'min_supported_tx_power_index', 'INT DEFAULT 0'],
@@ -246,6 +269,7 @@ class Database
                 ['events', 'raw_json', 'TEXT'],
                 ['users', 'tenant_id', 'INT DEFAULT 0'],
                 ['applications', 'tenant_id', 'INT DEFAULT 0'],
+                ['devices', 'tenant_id', 'INT DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INT DEFAULT 0'],
                 ['gateways', 'tenant_id', 'INT DEFAULT 0'],
                 ['api_keys', 'tenant_id', 'INT DEFAULT 0'],
@@ -271,6 +295,24 @@ class Database
                 ['relay_devices', 'uplink_limit_bucket_size', 'INT NOT NULL DEFAULT 0'],
                 ['relay_devices', 'uplink_limit_reload_rate', 'INT NOT NULL DEFAULT 0'],
                 ['relay_devices', 'w_f_cnt_last_request', 'INT NOT NULL DEFAULT 0'],
+                // FUOTA 状态机列（对齐 schema/mysql.sql；旧库升级补列）
+                ['fuota_campaigns', 'state', 'VARCHAR(16) NOT NULL DEFAULT \'PENDING\''],
+                ['fuota_campaigns', 'mc_ke_key', 'VARCHAR(64) DEFAULT \'\''],
+                ['fuota_campaigns', 'min_delay', 'INT NOT NULL DEFAULT 200'],
+                ['fuota_campaigns', 'max_delay', 'INT NOT NULL DEFAULT 1000'],
+                ['fuota_campaigns', 'timeout', 'INT NOT NULL DEFAULT 3600'],
+                ['fuota_campaigns', 'frames_sent', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'total_frames', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'next_frame_at', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'started_at', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'updated_at', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'firmware_sha256', 'VARCHAR(64) DEFAULT \'\''],
+                ['fuota_campaigns', 'firmware_crc', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_campaigns', 'status_req_sent', 'TINYINT NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'frag_nb_missing', 'INT NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'mc_group_ans', 'TINYINT NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'status_ans', 'TINYINT NOT NULL DEFAULT 0'],
+                ['fuota_deployments', 'updated_at', 'INT NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 if (!self::mysqlColumnExists($tbl, $col)) {
                     $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");

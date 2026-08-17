@@ -45,7 +45,7 @@ class Auth
     public static function authenticate(string $username, string $password): ?array
     {
         $user = Database::fetch(
-            "SELECT * FROM users WHERE username=?",
+            "SELECT * FROM users WHERE LOWER(username)=?",
             [strtolower(trim($username))]
         );
         if (!$user) {
@@ -95,6 +95,10 @@ class Auth
         return self::currentUser() !== null;
     }
 
+    /**
+     * 角色能力层级：admin（全局管理）> tenant（本租户可写）> operator（只读演示）。
+     * hasRole(minRole) 表示当前用户是否具备该级别的能力。
+     */
     public static function hasRole(string $role): bool
     {
         $u = self::currentUser();
@@ -104,8 +108,11 @@ class Auth
         if ($role === self::ROLE_ADMIN) {
             return $u['role'] === self::ROLE_ADMIN;
         }
-        // operator 及以上
-        return in_array($u['role'], [self::ROLE_ADMIN, self::ROLE_OPERATOR], true);
+        if ($role === self::ROLE_TENANT) {
+            return in_array($u['role'], [self::ROLE_ADMIN, self::ROLE_TENANT], true);
+        }
+        // ROLE_OPERATOR 及以下：任何已登录用户
+        return true;
     }
 
     /** 注销：删除指定令牌（缺省则清除当前请求令牌）。 */
@@ -154,7 +161,7 @@ class Auth
 
     // ---------------- 守卫（Guard）----------------
 
-    /** API 守卫：未登录或角色不足则输出 JSON 错误并终止。 */
+    /** API 守卫：未登录或角色不足则输出 JSON 错误并终止。minRole 支持 admin / tenant / operator。 */
     public static function guardApi(string $minRole = self::ROLE_OPERATOR): void
     {
         if (!self::isLoggedIn()) {
@@ -163,7 +170,7 @@ class Auth
             echo json_encode(['error' => 'unauthorized']);
             exit;
         }
-        if ($minRole === self::ROLE_ADMIN && !self::hasRole(self::ROLE_ADMIN)) {
+        if (!self::hasRole($minRole)) {
             header('Content-Type: application/json; charset=utf-8');
             http_response_code(403);
             echo json_encode(['error' => 'forbidden']);

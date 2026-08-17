@@ -46,7 +46,8 @@ if ($path === '/install') {
 Database::migrate();
 
 // ---- 应用级开放 API（/v1/，使用应用 API Key 鉴权，作用域限定到该 Key 所属应用）----
-if (strpos($path, '/v1/') === 0) {
+// 注意：$path 已 rtrim('/')，根路径为 '/v1'（对应请求 '/v1/'）
+if ($path === '/v1' || strpos($path, '/v1/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
     try {
         echo json_encode(handleAppApi($method, $path), JSON_UNESCAPED_UNICODE);
@@ -58,7 +59,7 @@ if (strpos($path, '/v1/') === 0) {
 }
 
 // ---- API 路由 ----
-if (strpos($path, '/api/') === 0) {
+if ($path === '/api' || strpos($path, '/api/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
     try {
         echo json_encode(handleApi($method, $path), JSON_UNESCAPED_UNICODE);
@@ -129,13 +130,27 @@ function handleApi(string $method, string $path): array
         return ['regions' => WebApp::regions()];
     }
 
-    // 其余需登录；写操作（创建/更新/删除）需 admin，下行入队 operator 即可
+    // 其余需登录。权限模型：
+    //  - users/tenants/settings 为系统管理资源 → 仅 admin
+    //  - 其他写操作（应用/设备/网关/模板/Key/集成/组播）→ admin 或 tenant（guardWrite），WebApp 层再按租户细粒度拦截
+    //  - 只读 + 下行/组播入队 + 改自己密码 → operator 及以上
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
     $isDownlink = ($resource === 'devices' && ($segs[2] ?? '') === 'downlink');
     $isPwChange = ($resource === 'users' && ($segs[1] ?? '') === 'password');
     $isMulticastEnqueue = ($resource === 'multicast-groups' && ($segs[2] ?? '') === 'enqueue');
-    $needsAdmin = $isWrite && !$isDownlink && !$isPwChange && !$isMulticastEnqueue;
-    Auth::guardApi($needsAdmin ? Auth::ROLE_ADMIN : Auth::ROLE_OPERATOR);
+    $adminOnlyResource = in_array($resource, ['users', 'tenants', 'settings'], true);
+    // 改自己密码（users/password）不属于系统管理写操作，operator 及以上均可
+    if ($isWrite && $adminOnlyResource && !$isPwChange) {
+        Auth::guardApi(Auth::ROLE_ADMIN);
+    } elseif ($isWrite && !$isDownlink && !$isPwChange && !$isMulticastEnqueue) {
+        Auth::guardWrite();
+    } else {
+        Auth::guardApi(Auth::ROLE_OPERATOR);
+    }
+    // 租户列表属于系统管理数据：读取也仅限 admin（避免租户间信息泄露）
+    if (!$isWrite && $resource === 'tenants') {
+        Auth::guardApi(Auth::ROLE_ADMIN);
+    }
 
     switch ($resource) {
         case 'stats':
@@ -159,7 +174,8 @@ function handleApi(string $method, string $path): array
             if ($method === 'POST') {
                 return WebApp::createApplication($body);
             }
-            return ['data' => WebApp::listApplications()];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listApplications($tid)];
         case 'devices':
             if (isset($segs[1]) && ($segs[2] ?? '') === 'downlink' && $method === 'POST') {
                 return WebApp::enqueueDownlink((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '', !empty($body['confirmed']));
@@ -174,7 +190,8 @@ function handleApi(string $method, string $path): array
                 return WebApp::createDevice($body);
             }
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            return ['data' => WebApp::listDevices($appId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listDevices($appId, $tid)];
         case 'gateways':
             if (isset($segs[1]) && $method === 'PUT') {
                 return WebApp::updateGateway($segs[1], $body);
@@ -185,19 +202,23 @@ function handleApi(string $method, string $path): array
             if ($method === 'POST') {
                 return WebApp::createGateway($body);
             }
-            return ['data' => WebApp::listGateways()];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listGateways($tid)];
         case 'uplinks':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            return ['data' => WebApp::listUplinks($devId, $appId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listUplinks($devId, $appId, 200, $tid)];
         case 'downlinks':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            return ['data' => WebApp::listDownlinks($devId, $appId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listDownlinks($devId, $appId, 200, $tid)];
         case 'events':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $gwId = isset($get['gw_id']) ? trim($get['gw_id']) : null;
-            return ['data' => WebApp::listEvents($devId, $gwId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listEvents($devId, $gwId, 200, $tid)];
         case 'users':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteUser((int) $segs[1]);
@@ -211,10 +232,16 @@ function handleApi(string $method, string $path): array
                 if (empty($body['username']) || empty($body['password'])) {
                     return ['error' => 'username and password required'];
                 }
-                if (!in_array($body['role'] ?? 'operator', [Auth::ROLE_ADMIN, Auth::ROLE_OPERATOR], true)) {
+                if (!in_array($body['role'] ?? 'operator', Auth::ROLES, true)) {
                     return ['error' => 'invalid role'];
                 }
-                $id = Auth::createUser($body['username'], $body['password'], $body['role'] ?? Auth::ROLE_OPERATOR);
+                $id = Auth::createUser(
+                    $body['username'],
+                    $body['password'],
+                    $body['role'] ?? Auth::ROLE_OPERATOR,
+                    (int) ($body['tenant_id'] ?? 0),
+                    $body['new_tenant_name'] ?? null
+                );
                 return ['id' => $id];
             }
             return ['data' => WebApp::listUsers()];
@@ -228,7 +255,8 @@ function handleApi(string $method, string $path): array
             if ($method === 'POST') {
                 return WebApp::createDeviceProfile($body);
             }
-            return ['data' => WebApp::listDeviceProfiles()];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listDeviceProfiles($tid)];
         case 'api-keys':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteApiKey((int) $segs[1]);
@@ -237,7 +265,8 @@ function handleApi(string $method, string $path): array
                 return WebApp::createApiKey((int) ($body['application_id'] ?? 0), $body);
             }
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
-            return ['data' => WebApp::listApiKeys($appId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listApiKeys($appId, $tid)];
         case 'integrations':
             if (isset($segs[1]) && $method === 'PUT') {
                 return WebApp::updateIntegration((int) $segs[1], $body);
@@ -249,7 +278,8 @@ function handleApi(string $method, string $path): array
                 return WebApp::createIntegration($body);
             }
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
-            return ['data' => WebApp::listIntegrations($appId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listIntegrations($appId, $tid)];
         case 'multicast-groups':
             if (isset($segs[1]) && ($segs[2] ?? '') === 'enqueue' && $method === 'POST') {
                 return WebApp::enqueueMulticast((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '');
@@ -289,7 +319,25 @@ function handleApi(string $method, string $path): array
                 return WebApp::createMulticastGroup($body);
             }
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            return ['data' => WebApp::listMulticastGroups($appId)];
+            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            return ['data' => WebApp::listMulticastGroups($appId, $tid)];
+        case 'fuota':
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'start' && $method === 'POST') {
+                return WebApp::startFuotaCampaign((int) $segs[1], $body);
+            }
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'devices' && $method === 'POST') {
+                return WebApp::addFuotaDeployment((int) $segs[1], (int) ($body['dev_id'] ?? 0));
+            }
+            if (isset($segs[1]) && $method === 'GET' && !isset($segs[2])) {
+                return WebApp::getFuotaCampaign((int) $segs[1]);
+            }
+            if (isset($segs[1]) && $method === 'DELETE') {
+                return WebApp::deleteFuotaCampaign((int) $segs[1]);
+            }
+            if ($method === 'POST') {
+                return WebApp::createFuotaCampaign($body);
+            }
+            return ['data' => WebApp::listFuotaCampaigns()];
         case 'tenants':
             if (isset($segs[1]) && $method === 'PUT') {
                 return WebApp::updateTenant((int) $segs[1], $body);
@@ -609,7 +657,7 @@ function renderPage(): string
 </head>
 <body>
 <header class="hidden" id="topbar">
-  <h1 id="brand">holastack</h1>
+  <h1 id="brand"><a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">holastack</a></h1>
   <nav id="deskNav" class="desk-nav"></nav>
   <div class="spacer"></div>
   <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 10px;font-size:16px;line-height:1">🌙</button>
@@ -662,7 +710,7 @@ function updateThemeIcon(t){
 // 页面加载时同步按钮图标
 updateThemeIcon(getTheme());
 
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:''};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -687,10 +735,18 @@ function renderShell(){
   document.getElementById('view').classList.remove('hidden');
   document.getElementById('who').textContent = state.user.username;
   renderNav();
-  nav('dashboard');
+  // 每次登录/切换账号都刷新公共设置（站点名/logo/API 基础地址等），避免残留上一账号的旧值
+  applyPublicSettings();
+  // 支持直接访问 #hash 页面（如 /#settings）；无 hash 默认概览
+  nav((location.hash||'').slice(1)||'dashboard');
 }
 const isAdmin = () => state.user && state.user.role === 'admin';
-const adminBtn = (html) => isAdmin() ? html : '';
+const isTenant = () => state.user && state.user.role === 'tenant';
+const isDemo = () => state.user && state.user.role === 'operator';
+// 可写角色：admin（全局）/ tenant（仅本租户）；operator（演示）只读
+const canWrite = () => state.user && ['admin','tenant'].includes(state.user.role);
+// demo 角色：按钮不隐藏，可以打开弹窗查看内容，但保存/删除按钮会被禁用
+const adminBtn = (html) => html;
 
 // 导航按功能分类；桌面端渲染为二级下拉，移动端渲染为双列分类面板。
 const NAV_GROUPS = [
@@ -781,6 +837,10 @@ const api = async (m,p,body) => {
   const ct = r.headers.get('content-type') || '';
   const text = await r.text();
   if (r.status === 401) { state.token = null; state.user = null; localStorage.removeItem('elw_token'); renderShell(); throw new Error('unauthorized'); }
+  if (r.status === 403) {
+    // 演示账号写操作被后端 guardWrite 拒绝时给出友好提示
+    try { const ej = JSON.parse(text); if (ej.error && ej.error.indexOf('forbidden') !== -1) alert('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'); } catch(e) {}
+  }
   if (r.status < 200 || r.status >= 300) {
     throw new Error('HTTP ' + r.status + '：' + text.slice(0, 300));
   }
@@ -805,7 +865,11 @@ async function nav(v, silent=false){
   state.view = v;
   closeNav(); closeGrps();
   document.querySelectorAll('.nav').forEach(a=>a.classList.toggle('active', a.dataset.v===v));
-  if(!silent) showLoader();
+  if(!silent){
+    // 同步地址栏 hash（不触发 hashchange，避免双渲染）；浏览器前进/后退/手改 hash 由 hashchange 监听处理
+    if((location.hash||'').slice(1)!==v) history.replaceState(null,'','#'+v);
+    showLoader();
+  }
   try {
     if (v==='dashboard') await viewDashboard();
     else if (v==='applications') await viewApplications();
@@ -821,9 +885,11 @@ async function nav(v, silent=false){
     else if (v==='multicast-groups') await viewMulticastGroups();
     else if (v==='users') await viewUsers();
     else if (v==='loracalc') await viewLoraCalc();
-    else if (v==='apidocs') await viewApiDocs();
+    else if (v==='apidocs') { await applyPublicSettings(); await viewApiDocs(); }
     else if (v==='settings') await viewSettings();
     else document.getElementById('view').innerHTML = '<div class="muted">未知页面</div>';
+    // 演示账号：列表页写操作按钮（删除/新建/停用/启用）灰禁用，但"编辑"可点击打开弹窗
+    if (isDemo()) disableDemoWriteButtons();
   } catch(e){
     if(!silent) document.getElementById('view').innerHTML = `<div class="err-box">加载失败：${esc(e && e.message ? e.message : e)}</div>`;
   } finally {
@@ -832,6 +898,12 @@ async function nav(v, silent=false){
 }
 function toggleNav(){ document.getElementById('mobilePanel').classList.toggle('open'); }
 function closeNav(){ document.getElementById('mobilePanel').classList.remove('open'); }
+
+// 地址栏 hash 变化（浏览器前进/后退、手动修改 URL）→ 切换对应页面
+window.addEventListener('hashchange', ()=>{
+  const v = (location.hash||'').slice(1) || 'dashboard';
+  if (v !== state.view) nav(v);
+});
 
 // 自动刷新：只读的实时视图（概览/网关/上行/下行/日志）每 5 秒刷新；模态框打开时暂停，避免打断编辑
 const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','downlinks','events'];
@@ -922,15 +994,38 @@ function dashLogRow(ev, who){
     <div class="log-msg">${esc(ev.message||'')}</div>
   </div>`;
 }
+// 租户筛选下拉（仅 admin 可见；tenant 用户由后端强制过滤，无需此控件）
+async function tenantFilterHtml(){
+  if (!isAdmin()) return '';
+  let opts = '';
+  try {
+    const r = await api('GET','/api/tenants');
+    opts = (r.data||[]).map(t=>`<option value="${t.id}" ${String(state.tenantFilter)===String(t.id)?'selected':''}>${esc(t.name)}</option>`).join('');
+  } catch(e){}
+  return `<div style="flex:0 0 220px"><label>租户筛选</label><select id="tf" onchange="state.tenantFilter=this.value;nav(state.view)"><option value="">全部租户</option>${opts}</select></div>`;
+}
 async function viewApplications(){
-  const r = await api('GET','/api/applications'); state.apps = r.data||[];
+  const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
+  const [r, tf] = await Promise.all([api('GET','/api/applications'+q), tenantFilterHtml()]);
+  state.apps = r.data||[];
   const rows = state.apps.map(a=>`<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${esc(a.callback_url||'')}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
      <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无应用</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>应用</h2>${adminBtn('<button onclick="newApplication()">+ 新建应用</button>')}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
     <table><thead><tr><th>ID</th><th>名称</th><th>AppEUI</th><th>回调 URL</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function viewDevices(){
-  const r = await api('GET','/api/devices'); state.devs = r.data||[];
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const q = [tq, state.devAppFilter ? ('app_id='+state.devAppFilter) : ''].filter(Boolean).join('&');
+  const [r, ar, tf] = await Promise.all([
+    api('GET','/api/devices'+(q?'?'+q:'')),
+    api('GET','/api/applications'+(tq?'?'+tq:'')),
+    tenantFilterHtml()
+  ]);
+  state.devs = r.data||[];
+  const apps = ar.data||[];
+  const appName = id => { const a = apps.find(x=>x.id===id); return a ? esc(a.name) : ('#'+id); };
+  const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.devAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
   const rows = state.devs.map(d=>{
     const online = d.online==='online';
     const tel = [];
@@ -941,6 +1036,7 @@ async function viewDevices(){
     const seen = (d.last_seen_fmt && d.last_seen_fmt!=='-') ? d.last_seen_fmt : '-';
     return `<tr>
       <td>${d.id}</td><td>${esc(d.name)}</td>
+      <td class="muted"><span class="pill" style="margin:0">${appName(d.app_id)}</span></td>
       <td><span class="tag">${d.activation}</span></td>
       <td><span class="tag ${d.class}">${d.class}</span></td>
       <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
@@ -948,9 +1044,10 @@ async function viewDevices(){
       <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
       <td class="muted">${seen}${telStr}</td>
       <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
-  }).join('')||`<tr><td colspan="10" class="muted">暂无设备</td></tr>`;
+  }).join('')||`<tr><td colspan="11" class="muted">暂无设备</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备</h2>${adminBtn('<button onclick="newDevice()">+ 添加设备</button>')}</div>
-    <table><thead><tr><th>ID</th><th>名称</th><th>激活</th><th>Class</th><th>状态</th><th>DevEUI</th><th>DevAddr</th><th>入网</th><th>最近/遥测</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div></div>
+    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>激活</th><th>Class</th><th>状态</th><th>DevEUI</th><th>DevAddr</th><th>入网</th><th>最近/遥测</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
@@ -965,7 +1062,9 @@ async function deviceDetail(id){
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 async function viewGateways(){
-  const r = await api('GET','/api/gateways'); state.gws = r.data||[];
+  const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
+  const [r, tf] = await Promise.all([api('GET','/api/gateways'+q), tenantFilterHtml()]);
+  state.gws = r.data||[];
   const rows = state.gws.map(g=>{
     const online = g.status==='online';
     const seen = g.last_seen ? new Date(g.last_seen*1000).toLocaleString() : '-';
@@ -975,18 +1074,20 @@ async function viewGateways(){
       <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">删除</button>`)}</td></tr>`;
   }).join('')||`<tr><td colspan="7" class="muted">暂无网关（网关连接后自动出现，亦可手动添加）</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>网关</h2>${adminBtn('<button onclick="newGateway()">+ 新建网关</button>')}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
     <table><thead><tr><th>GatewayID</th><th>名称</th><th>状态</th><th>区域</th><th>上行数</th><th>最近心跳</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 async function viewUplinks(){
-  const qs = [
-    state.upsFilter ? ('dev_id='+state.upsFilter) : '',
-    state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''
-  ].filter(Boolean).join('&');
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
   const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
-  const [dr, ar] = await Promise.all([api('GET','/api/devices'), api('GET','/api/applications')]);
+  const [dr, ar, tf] = await Promise.all([
+    api('GET','/api/devices' + (tq ? '?'+tq : '')),
+    api('GET','/api/applications' + (tq ? '?'+tq : '')),
+    tenantFilterHtml()
+  ]);
   const devs = dr.data||[], apps = ar.data||[];
-  state.apps = apps;
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.upsAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
@@ -1002,9 +1103,10 @@ async function viewUplinks(){
     <td><button class="btn ghost" onclick="showRaw(${u.id})">JSON</button></td></tr>`).join('')||`<tr><td colspan="12" class="muted">暂无上行</td></tr>`;
   document.getElementById('view').innerHTML = `<h2>上行消息日志</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
+      ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;viewUplinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;viewUplinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';viewUplinks()">重置</button>
+      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';state.tenantFilter='';viewUplinks()">重置</button>
     </div>
     <p class="muted">应用维度已在每行“应用”标签中区分；phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“JSON”查看网关上报元数据。</p>
     <table><thead><tr><th>ID</th><th>应用</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -1026,14 +1128,15 @@ const DL_STATUS = {
   error:      {label:'错误',   cls:'err'}
 };
 async function viewDownlinks(){
-  const qs = [
-    state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '',
-    state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''
-  ].filter(Boolean).join('&');
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
   const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
-  const [dr, ar] = await Promise.all([api('GET','/api/devices'), api('GET','/api/applications')]);
+  const [dr, ar, tf] = await Promise.all([
+    api('GET','/api/devices' + (tq ? '?'+tq : '')),
+    api('GET','/api/applications' + (tq ? '?'+tq : '')),
+    tenantFilterHtml()
+  ]);
   const devs = dr.data||[], apps = ar.data||[];
-  state.apps = apps;
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
   const devName = id => { const d = devs.find(x=>x.id===id); return d ? (d.name+' (#'+id+')') : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.dlDevFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
@@ -1054,9 +1157,10 @@ async function viewDownlinks(){
   }).join('')||`<tr><td colspan="11" class="muted">暂无下行</td></tr>`;
   document.getElementById('view').innerHTML = `<h2>下行消息日志</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
+      ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;viewDownlinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;viewDownlinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';viewDownlinks()">重置</button>
+      <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';state.tenantFilter='';viewDownlinks()">重置</button>
     </div>
     <p class="muted">点“JSON”查看下行记录的结构化（格式化）与解析展示（含 payload 解码）。</p>
     <table><thead><tr><th>ID</th><th>应用</th><th>设备</th><th>FPort</th><th>确认</th><th>负载</th><th>状态</th><th>发送时间</th><th>重传</th><th>确认时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -1091,11 +1195,17 @@ async function showDownlinkRaw(id){
 }
 
 async function viewEvents(){
-  // 拉取设备/网关列表供下拉筛选（若已加载则复用）
-  if (!state.devs.length) { const rd = await api('GET','/api/devices'); state.devs = rd.data||[]; }
-  if (!state.gws.length)  { const rg = await api('GET','/api/gateways'); state.gws = rg.data||[]; }
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  // 拉取设备/网关列表供下拉筛选（随租户筛选联动）
+  const [rd, rg, tf] = await Promise.all([
+    api('GET','/api/devices' + (tq ? '?'+tq : '')),
+    api('GET','/api/gateways' + (tq ? '?'+tq : '')),
+    tenantFilterHtml()
+  ]);
+  state.devs = rd.data||[]; state.gws = rg.data||[];
   // 构建筛选查询串
   let q = [];
+  if (tq) q.push(tq);
   if (state.evsDevFilter) q.push('dev_id=' + state.evsDevFilter);
   if (state.evsGwFilter)  q.push('gw_id=' + encodeURIComponent(state.evsGwFilter));
   const qs = q.length ? ('?' + q.join('&')) : '';
@@ -1115,9 +1225,10 @@ async function viewEvents(){
   }).join('')||`<tr><td colspan="6" class="muted">暂无事件</td></tr>`;
   document.getElementById('view').innerHTML = `<h2>网关日志</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
+      ${tf}
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; viewEvents()">${devOpts}</select></div>
       <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; viewEvents()">${gwOpts}</select></div>
-      <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; viewEvents()">重置</button>
+      <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; state.tenantFilter=''; viewEvents()">重置</button>
     </div>
     <p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件。点“JSON”查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。</p>
     <table><thead><tr><th>类型</th><th>级别</th><th>对象</th><th>消息</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -1131,10 +1242,12 @@ async function showEventRaw(id){
 async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/users'); state.users = r.data||[];
-  const rows = state.users.map(u=>`<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td><td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
-     <td><button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`).join('')||`<tr><td colspan="5" class="muted">暂无用户</td></tr>`;
+  const rows = state.users.map(u=>`<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td>
+     <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#租户'+u.tenant_id)) : '—'}</td>
+     <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
+     <td><button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无用户</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户</h2><button onclick="newUser()">+ 新建用户</button></div>
-    <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>租户</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // ================= 站点设置（仅 admin） =================
@@ -1150,6 +1263,7 @@ async function viewSettings(){
      <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
      <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="holastack">
      <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
+     <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://lora.mybug.cn">
      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
        <button class="ghost" onclick="nav('dashboard')">取消</button>
        <button onclick="busy('保存中…', saveSettings)">保存</button>
@@ -1164,6 +1278,7 @@ async function saveSettings(){
     login_logo_url: v('st_login_img'),
     login_logo_text: v('st_login_text'),
     login_notice: v('st_notice'),
+    api_base_url: v('st_api_url'),
   };
   const r = await api('POST','/api/settings', body);
   if (r.error) { alert(r.error); return; }
@@ -1178,8 +1293,8 @@ async function applyPublicSettings(){
     const d = (await r.json()).data || {};
     const brand = document.getElementById('brand');
     if (brand) {
-      if (d.site_logo_url) brand.innerHTML = `<img src="${esc(d.site_logo_url)}" alt="logo">`;
-      else brand.textContent = d.site_name || 'holastack';
+      if (d.site_logo_url) brand.innerHTML = `<a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit"><img src="${esc(d.site_logo_url)}" alt="logo"></a>`;
+      else brand.innerHTML = `<a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">${esc(d.site_name || 'holastack')}</a>`;
     }
     const ll = document.getElementById('loginLogo');
     if (ll) {
@@ -1188,6 +1303,8 @@ async function applyPublicSettings(){
       else ll.innerHTML = '';
     }
     if (d.site_name) document.title = d.site_name;
+    // API 文档页 curl 示例的基础地址（留空则用当前站点 origin）
+    window.ELW_API_BASE_URL = d.api_base_url || '';
     const fav = document.getElementById('faviconLink');
     if (fav && d.favicon_url) fav.href = d.favicon_url;
     const ln = document.getElementById('loginNotice');
@@ -1201,6 +1318,11 @@ async function applyPublicSettings(){
   } catch(e) {}
 }
 async function changePw(){
+  // operator（演示）只读，禁止修改密码（含自己的）
+  if (isDemo()) {
+    alert('演示模式：当前为只读账号，不能修改密码');
+    return;
+  }
   let targetSel = '';
   if (isAdmin()) {
     const r = await api('GET','/api/users');
@@ -1300,9 +1422,35 @@ function downlink(devId){ openModal(`<h3>下发数据 (设备 #${devId})</h3><la
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('发送中…', ()=>sendDown(${devId}))">发送</button></div>`); }
 async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked}); if(r.error){alert(r.error);return;} closeModal(); alert('已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。'); }
 
-function newUser(){ openModal(`<h3>新建用户</h3><label>用户名</label><input id="m_user"><label>密码（≥6 位）</label><input id="m_pass" type="password"><label>角色</label><select id="m_role"><option value="operator">operator（只读+下行）</option><option value="admin">admin（全部权限）</option></select>
-  <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveUser)">保存</button></div>`); }
-async function saveUser(){ const r = await api('POST','/api/users',{username:v('m_user'),password:v('m_pass'),role:v('m_role')}); if(r.error){alert(r.error);return;} closeModal(); viewUsers(); }
+async function newUser(){
+  let tenants = '';
+  try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join(''); } catch(e){}
+  openModal(`<h3>新建用户</h3><label>用户名</label><input id="m_user"><label>密码（≥6 位）</label><input id="m_pass" type="password">
+    <label>角色</label><select id="m_role" onchange="roleTenantToggle()">
+      <option value="operator">operator（演示：只读 + 模拟数据）</option>
+      <option value="tenant">tenant（仅本租户数据，可写）</option>
+      <option value="admin">admin（全部权限）</option>
+    </select>
+    <div id="m_tenant_box" class="hidden"><label>绑定租户（tenant 角色；留空则自动新建同名租户）</label>
+      <select id="m_tenant"><option value="">— 自动新建同名租户 —</option>${tenants}</select>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveUser)">保存</button></div>`);
+  roleTenantToggle();
+}
+function roleTenantToggle(){
+  const box = document.getElementById('m_tenant_box');
+  if (box) box.classList.toggle('hidden', (document.getElementById('m_role')||{}).value !== 'tenant');
+}
+async function saveUser(){
+  const role = v('m_role');
+  const body = {username:v('m_user'), password:v('m_pass'), role};
+  if (role === 'tenant') {
+    const t = v('m_tenant');
+    if (t && +t > 0) body.tenant_id = +t;
+    else body.new_tenant_name = v('m_user'); // 未指定 → 自动新建同名租户
+  }
+  const r = await api('POST','/api/users',body); if(r.error){alert(r.error);return;} closeModal(); viewUsers();
+}
 async function delUser(id){ if(!confirm('确认删除该用户？'))return; const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(r.error);return;} viewUsers(); }
 
 // 设备模板下拉（含“默认模板”）
@@ -1313,7 +1461,9 @@ async function dpOptions(sel){
 
 // ================= 设备模板（Device Profile） =================
 async function viewDeviceProfiles(){
-  const r = await api('GET','/api/device-profiles'); state.dps = r.data||[];
+  const q = state.tenantFilter ? ('?tenant_id='+state.tenantFilter) : '';
+  const [r, tf] = await Promise.all([api('GET','/api/device-profiles'+q), tenantFilterHtml()]);
+  state.dps = r.data||[];
   const rows = state.dps.map(d=>{
     const cls = []; if(d.supports_class_b) cls.push('B'); if(d.supports_class_c) cls.push('C');
     return `<tr><td>${d.id}</td><td>${esc(d.name)}</td><td class="muted">${esc(d.region)}</td>
@@ -1322,6 +1472,7 @@ async function viewDeviceProfiles(){
       <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDeviceProfile(${d.id}))">删除</button>`)}</td></tr>`;
   }).join('')||`<tr><td colspan="8" class="muted">暂无设备模板</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板（Device Profile）</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
     <table><thead><tr><th>ID</th><th>名称</th><th>区域</th><th>MAC</th><th>ADR</th><th>编解码</th><th>Class</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -1431,16 +1582,18 @@ async function delDeviceProfile(id){ if(!confirm('确认删除该模板？引用
 
 // ================= 应用 API Key =================
 async function viewApiKeys(){
-  if(!state.apps.length){ const ra=await api('GET','/api/applications'); state.apps=ra.data||[]; }
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
+  state.apps = ra.data||[];
   const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
   let rows=`<tr><td colspan="5" class="muted">请先在上方选择应用</td></tr>`;
   if(state.appSel){
-    const r=await api('GET','/api/api-keys?app_id='+state.appSel); const ks=r.data||[];
+    const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); const ks=r.data||[];
     rows=ks.map(k=>`<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
       <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="5" class="muted">该应用暂无 API Key</td></tr>`;
   }
   document.getElementById('view').innerHTML=`<h2>应用 API Key</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 Key</button>'):''}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 Key</button>'):''}</div>
    <table><thead><tr><th>ID</th><th>名称</th><th>Token(预览)</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function newApiKey(){
@@ -1460,11 +1613,13 @@ async function delApiKey(id){ if(!confirm('确认删除该 API Key？'))return; 
 
 // ================= 集成（Integrations） =================
 async function viewIntegrations(){
-  if(!state.apps.length){ const ra=await api('GET','/api/applications'); state.apps=ra.data||[]; }
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
+  state.apps = ra.data||[];
   const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.intAppSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
   let rows=`<tr><td colspan="5" class="muted">请先在上方选择应用</td></tr>`;
   if(state.intAppSel){
-    const r=await api('GET','/api/integrations?app_id='+state.intAppSel); const its=r.data||[];
+    const r=await api('GET','/api/integrations?app_id='+state.intAppSel+(tq?'&'+tq:'')); const its=r.data||[];
     rows=its.map(it=>{
       let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
       const summary = it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
@@ -1476,7 +1631,7 @@ async function viewIntegrations(){
     }).join('')||`<tr><td colspan="5" class="muted">该应用暂无集成</td></tr>`;
   }
   document.getElementById('view').innerHTML=`<h2>集成（Integrations）</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建集成</button>'):''}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建集成</button>'):''}</div>
    <table><thead><tr><th>类型</th><th>状态</th><th>配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function newIntegration(){
@@ -1520,9 +1675,11 @@ async function delIntegration(id){ if(!confirm('确认删除该集成？'))retur
 
 // ================= 组播组（Multicast Group） =================
 async function viewMulticastGroups(){
-  if(!state.apps.length){ const ra=await api('GET','/api/applications'); state.apps=ra.data||[]; }
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
+  state.apps = ra.data||[];
   const opts=`<option value="">全部应用</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
-  let q=[]; if(state.appSel) q.push('app_id='+state.appSel);
+  let q=[]; if(tq) q.push(tq); if(state.appSel) q.push('app_id='+state.appSel);
   const r=await api('GET','/api/multicast-groups'+(q.length?'?'+q.join('&'):'')); const ms=r.data||[];
   const appName=(id)=>{const a=(state.apps||[]).find(x=>x.id===id);return a?esc(a.name):('#'+id);};
   const rows=ms.map(m=>`<tr><td>${m.id}</td><td>${esc(m.name)}</td><td class="muted">${appName(m.application_id)}</td>
@@ -1530,7 +1687,7 @@ async function viewMulticastGroups(){
      <td class="muted"><code>${esc(m.mc_addr)}</code></td><td class="muted">DR${m.dr}</td><td class="muted">${m.f_cnt}</td>
      <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delMulticast(${m.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
   document.getElementById('view').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2>组播组（Multicast Group）</h2>${adminBtn('<button onclick="newMulticast()">+ 新建组播组</button>')}</div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px"><div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div></div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div></div>
    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>区域</th><th>类型</th><th>MC Addr</th><th>DR</th><th>FCnt</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function multicastForm(m){
@@ -1591,7 +1748,34 @@ async function rmMcDev(id,e){ const r=await api('DELETE',`/api/multicast-groups/
 async function addMcGw(id){ const e=v('m_mcgw'); if(!e){alert('请输入 Gateway ID');return;} const r=await api('POST',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
 async function rmMcGw(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
 
-function openModal(html){ document.getElementById('modalBox').innerHTML=html; document.getElementById('modal').classList.add('show'); }
+function openModal(html){
+  document.getElementById('modalBox').innerHTML=html;
+  document.getElementById('modal').classList.add('show');
+  // 演示账号：禁用弹窗内写操作按钮（保存/删除等），保留"取消/关闭"与"随机生成"（后者只填表单不写库）
+  if (isDemo()) {
+    document.querySelectorAll('#modalBox button').forEach(btn => {
+      const txt = (btn.textContent || '').trim();
+      if (txt === '取消' || txt === '关闭' || txt.includes('随机')) return;
+      btn.disabled = true;
+      btn.style.opacity = '0.45';
+      btn.style.cursor = 'not-allowed';
+      btn.title = '演示模式：只读账号不能进行实际操作';
+    });
+  }
+}
+// 演示账号：禁用列表页中的"删除"/"停用"/"启用"按钮（不可逆写操作）。
+// "新建"/"编辑"不禁用（允许打开弹窗查看表单内容，弹窗内保存按钮由 openModal 禁用）。
+function disableDemoWriteButtons(){
+  document.querySelectorAll('#view button').forEach(btn => {
+    const txt = (btn.textContent || '').trim();
+    if (/删除|停用|启用/.test(txt)) {
+      btn.disabled = true;
+      btn.style.opacity = '0.45';
+      btn.style.cursor = 'not-allowed';
+      btn.title = '演示模式：只读账号不能进行实际操作';
+    }
+  });
+}
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
 function v(id){ return document.getElementById(id).value.trim(); }
 // 粘贴 MAC/EUI/密钥时自动去除冒号、连字符等分隔符，只保留十六进制字符

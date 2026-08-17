@@ -11,11 +11,17 @@ use holastack\Region\Region;
  */
 class DeviceProfile
 {
-    public static function list(?int $appId = null): array
+    /**
+     * 模板列表。$tenantId>0 时仅返回该租户的模板 + 全局共享模板（tenant_id=0，如安装向导建的「默认模板」）。
+     * null = 全部（admin/operator）。
+     */
+    public static function list(?int $tenantId = null): array
     {
-        if ($appId) {
-            // 设备模板本身不绑定应用（ChirpStack 中为租户级），此处仅按 region 过滤无意义，
-            // 保留 appId 参数以兼容未来按应用分组。
+        if ($tenantId !== null && $tenantId > 0) {
+            return Database::fetchAll(
+                "SELECT * FROM device_profiles WHERE tenant_id IN (0, ?) ORDER BY id DESC",
+                [$tenantId]
+            );
         }
         return Database::fetchAll("SELECT * FROM device_profiles ORDER BY id DESC");
     }
@@ -105,6 +111,12 @@ class DeviceProfile
                 $params[] = self::cast($c, $p[$c] ?? $def);
             }
             $vals[] = '?';
+        }
+        // tenant_id 不在 columns() 默认列里（0=全局共享），仅在显式传入时写入
+        if (array_key_exists('tenant_id', $p)) {
+            $set[] = 'tenant_id';
+            $vals[] = '?';
+            $params[] = (int) $p['tenant_id'];
         }
         Database::execute(
             "INSERT INTO device_profiles (" . implode(',', $set) . ") VALUES (" . implode(',', $vals) . ")",

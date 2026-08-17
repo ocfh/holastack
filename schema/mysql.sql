@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS devices (
     nb_trans INT NOT NULL DEFAULT 1,
     rx1_dr_offset INT NOT NULL DEFAULT 0,
     rx2_dr INT NOT NULL DEFAULT 0,
+    rx2_frequency INT NOT NULL DEFAULT 0,
     rx_delay INT NOT NULL DEFAULT 1,
     max_supported_tx_power_index INT NOT NULL DEFAULT 0,
     min_supported_tx_power_index INT NOT NULL DEFAULT 0,
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(16) NOT NULL DEFAULT 'admin',
+    tenant_id INT NOT NULL DEFAULT 0,
     created_at INT NOT NULL
 );
 
@@ -310,7 +312,23 @@ CREATE TABLE IF NOT EXISTS fuota_campaigns (
     descriptor_version INT NOT NULL DEFAULT 0,
     fw_version VARCHAR(32) DEFAULT '',
     fw_length INT NOT NULL DEFAULT 0,
-    created_at INT NOT NULL
+    -- 状态机（对齐 ChirpStack fuota_campaign：PENDING → SETUP → FRAGMENTATION → STATUS → DONE/FAILED）
+    state VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    mc_ke_key VARCHAR(64) DEFAULT '',
+    min_delay INT NOT NULL DEFAULT 200,
+    max_delay INT NOT NULL DEFAULT 1000,
+    timeout INT NOT NULL DEFAULT 3600,
+    frames_sent INT NOT NULL DEFAULT 0,
+    total_frames INT NOT NULL DEFAULT 0,
+    next_frame_at INT NOT NULL DEFAULT 0,
+    started_at INT NOT NULL DEFAULT 0,
+    updated_at INT NOT NULL DEFAULT 0,
+    firmware_sha256 VARCHAR(64) DEFAULT '',
+    firmware_crc INT NOT NULL DEFAULT 0,
+    status_req_sent TINYINT NOT NULL DEFAULT 0,
+    created_at INT NOT NULL,
+    INDEX idx_fc_tenant (tenant_id),
+    INDEX idx_fc_state (state)
 );
 
 CREATE TABLE IF NOT EXISTS fuota_deployments (
@@ -319,7 +337,13 @@ CREATE TABLE IF NOT EXISTS fuota_deployments (
     dev_id INT NOT NULL,
     state VARCHAR(16) NOT NULL DEFAULT 'PENDING',
     fragments_received INT NOT NULL DEFAULT 0,
-    created_at INT NOT NULL
+    frag_nb_missing INT NOT NULL DEFAULT 0,
+    mc_group_ans TINYINT NOT NULL DEFAULT 0,
+    status_ans TINYINT NOT NULL DEFAULT 0,
+    updated_at INT NOT NULL DEFAULT 0,
+    created_at INT NOT NULL,
+    INDEX idx_fd_campaign (campaign_id),
+    INDEX idx_fd_dev (dev_id)
 );
 
 CREATE TABLE IF NOT EXISTS fuota_fragments (
@@ -327,7 +351,18 @@ CREATE TABLE IF NOT EXISTS fuota_fragments (
     deployment_id INT NOT NULL,
     frag_index INT NOT NULL,
     data TEXT NOT NULL,
-    created_at INT NOT NULL
+    created_at INT NOT NULL,
+    INDEX idx_ff_deployment (deployment_id)
+);
+
+-- 预组装的组播下行帧（按 campaign 存，调度器按 min/max_delay 节流取出）
+CREATE TABLE IF NOT EXISTS fuota_frames (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    campaign_id INT NOT NULL,
+    seq INT NOT NULL,
+    fopts_hex TEXT NOT NULL,
+    created_at INT NOT NULL,
+    INDEX idx_ff_campaign (campaign_id)
 );
 
 -- ---- ChirpStack-port: 漫游（Roaming, Backend Interface） ----

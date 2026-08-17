@@ -29,6 +29,13 @@ class NetworkServer
     private $joinBuf = [];    // Join-Request 去重缓冲：micKey => 下行候选（合并镜像频率等重复副本）
     private $uplinkBuf = [];   // 上行去重缓冲：devAddr+fcnt => 首收时间戳（合并多网关重复上送，避免重复 Webhook/ACK/下行）
 
+    // FUOTA 每个调度 tick 最多下发的组播分片帧数（节流，避免瞬间打爆网关）
+    private const FUOTA_FRAMES_PER_TICK = 2;
+    // SETUP 阶段 McGroupSetupReq 重发间隔（秒）
+    private const FUOTA_SETUP_RESEND_INTERVAL = 30;
+    // SETUP 阶段最长等待（秒），超时后未应答设备直接进入分片（其部署在收尾时置 FAILED）
+    private const FUOTA_SETUP_MAX_SECONDS = 120;
+
     public function __construct(int $port = ELW_GW_UDP_PORT)
     {
         $this->port = $port;
@@ -55,14 +62,7 @@ class NetworkServer
             // stream_select 会改写 $read，仅保留就绪的流，因此每次循环都要重建
             $read = [$this->sock];
             // Class B / Class C 主动下行调度（约每 1s 触发一次）
-            if (time() - $this->lastDlCheck >= 1) {
-                $this->lastDlCheck = time();
-                $this->processScheduledDownlinks();
-                $this->processScheduledMulticast();
-                $this->rescheduleUnackedDownlinks();
-            }
-            // Join-Request 去重缓冲刷新（按 MIC 合并重复副本后统一下发，避免网关 COLLISION_PACKET）
-            $this->flushJoinBuffer();
+            $this->runScheduled();
             $write = $except = null;
             $n = @stream_select($read, $write, $except, 1);
             if ($n === false) {
@@ -81,6 +81,76 @@ class NetworkServer
     public function stop(): void
     {
         $this->running = false;
+    }
+
+    // ---------------- Basic Station / LNS 接入 ----------------
+
+    /**
+     * 注册一个 Basic Station 网关（由 LNS 进程调用）。
+     * 注册后该网关的上行（ingestStationUp）与下行（flushDownlink）全部走 station 协议：
+     * 下行不再经 UDP PULL_RESP，而是把 dnmsg 数组交给 $dnSink（LNS 负责 WebSocket 回送）。
+     *
+     * @param callable $dnSink function(array $dnmsg): void
+     */
+    public function registerStationGateway(string $gwEui, callable $dnSink, string $peer = '', string $region = ''): void
+    {
+        $this->gateways[$gwEui] = [
+            'addr'       => $peer !== '' ? $peer : 'station://' . $gwEui,
+            'proto'      => 'station',
+            'dnSink'     => $dnSink,
+            'region'     => $region !== '' ? $region : ELW_DEFAULT_REGION,
+            'pending'    => [],
+            'version'    => "\x01",
+            'pull_token' => "\x00\x00",
+            'last_xtime' => 0,
+        ];
+        $this->log("STATION gateway registered: $gwEui (region=" . ($region ?: ELW_DEFAULT_REGION) . ")");
+    }
+
+    /**
+     * Basic Station 上行接入点：把站上报的 PHYPayload + upinfo 转成内部 rxpk 结构走标准上行链路。
+     * upinfo 字段对齐 Basic Station：rssi/snr/freq(MHz)/dr(索引)/xtime(µs)/rctx。
+     */
+    public function ingestStationUp(string $phy, array $upinfo, string $gwEui, string $peer = ''): void
+    {
+        if ($phy === '') {
+            return;
+        }
+        $regionName = $this->gateways[$gwEui]['region'] ?? ELW_DEFAULT_REGION;
+        $region = Region::get($regionName);
+        $datr = $region->drToDatr((int) ($upinfo['dr'] ?? 0));
+        $rxpk = [
+            'tmst' => (int) ($upinfo['xtime'] ?? 0),
+            'freq' => (float) ($upinfo['freq'] ?? 0),
+            'datr' => $datr,
+            'codr' => '4/5',
+            'rssi' => (int) ($upinfo['rssi'] ?? 0),
+            'lsnr' => (float) ($upinfo['snr'] ?? 0),
+            'data' => base64_encode($phy),
+        ];
+        if (isset($this->gateways[$gwEui])) {
+            $this->gateways[$gwEui]['last_xtime'] = (int) ($upinfo['xtime'] ?? 0);
+        }
+        $this->log(sprintf("STATION RX gw=%s freq=%.3f datr=%s rssi=%d snr=%.1f (dr=%d, %dB phy)",
+            $gwEui, $rxpk['freq'], $datr, $rxpk['rssi'], $rxpk['lsnr'], (int) ($upinfo['dr'] ?? 0), strlen($phy)));
+        $this->processUplink($rxpk, $peer !== '' ? $peer : 'station://' . $gwEui, $gwEui);
+    }
+
+    /**
+     * 周期调度 tick（Class B/C 下行、组播、FUOTA、未确认重传、Join 缓冲）。
+     * LNS 进程（无 UDP 主循环）每 ~1s 调用一次；run() 主循环内部亦复用本方法。
+     */
+    public function runScheduled(): void
+    {
+        if (time() - $this->lastDlCheck < 1) {
+            return;
+        }
+        $this->lastDlCheck = time();
+        $this->processScheduledDownlinks();
+        $this->processScheduledMulticast();
+        $this->processScheduledFuota();
+        $this->rescheduleUnackedDownlinks();
+        $this->flushJoinBuffer();
     }
 
     // ---------------- 包分发 ----------------
@@ -441,6 +511,9 @@ class NetworkServer
             }
         }
 
+        // FUOTA 应用层载荷（FPort 200 FuotaSetupAns / 201 FuotaStatusAns，AppSKey 加密）
+        $this->handleFuotaAppPayload($device, $p['fport'] ?? null, $decrypted);
+
         Database::execute(
             "UPDATE devices SET fcnt_up=?, last_seen=? WHERE id=?",
             [$fcnt, time(), $device['id']]
@@ -522,7 +595,10 @@ class NetworkServer
         // 1) 应用级 callback_url（遗留单次 Webhook，TTN v3 格式）
         $this->fireCallback($device['app_id'], $uplinkData + $telemetry);
         // 2) 应用级集成（HTTP / InfluxDB / MQTT，见 integrations 表）
-        Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, [$this, 'log']);
+        // ★ 传闭包而非 [$this,'log']：私有方法数组在类外 is_callable=false，PHP 8 会 TypeError
+        Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, function (string $m): void {
+            $this->log($m);
+        });
 
         // 3) 设备回执（ACK 位）→ 确认型下行被设备确认，闭环下行队列（对齐 ChirpStack 下行 ACK 处理）
         if (!empty($p['ack'])) {
@@ -530,7 +606,9 @@ class NetworkServer
         }
         // 4) 设备状态事件（DevStatusAns → 电量/链路余量变化），对齐 ChirpStack status 事件
         if ($statusEvent) {
-            Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, [$this, 'log'], 'status');
+            Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, function (string $m): void {
+                $this->log($m);
+            }, 'status');
             $this->logEvent('status', 'info',
                 "设备状态更新 dev#{$device['id']} battery=" . var_export($telemetry['battery'] ?? null, true)
                 . " margin=" . ($telemetry['margin'] ?? ''),
@@ -690,6 +768,11 @@ class NetworkServer
         $macBytes = $p['fopts'] ?? '';
         if (($p['fport'] ?? null) === 0 && $decrypted !== '') {
             $macBytes .= $decrypted;
+        }
+        // FUOTA MAC 消歧：FUOTA 命令（0x08~0x0D）与标准 MAC 命令同号，仅当设备属于
+        // 活跃 campaign 的组播组时按 FUOTA 语义剥离并处理（对齐 ChirpStack），剩余字节继续走标准解析。
+        if ($macBytes !== '') {
+            $macBytes = $this->handleFuotaMacUplink($device, $macBytes);
         }
         $fopts = '';
         if ($macBytes !== '') {
@@ -890,7 +973,9 @@ class NetworkServer
         $this->logEvent('ack', 'info', "下行被设备确认 dev#{$device['id']} downlink#{$dl['id']} fcnt={$dl['fcnt']}", $gwEui, $device['id'], $device['app_id']);
         // ack 集成事件（消费者可见是哪条下行被确认）
         $ackData = $uplinkData + ['downlink_id' => (int) $dl['id'], 'downlink_fcnt' => (int) $dl['fcnt']];
-        Integration::dispatch($device['app_id'], $device, $ackData, $telemetry, [$this, 'log'], 'ack');
+        Integration::dispatch($device['app_id'], $device, $ackData, $telemetry, function (string $m): void {
+            $this->log($m);
+        }, 'ack');
     }
 
     /**
@@ -1271,12 +1356,288 @@ class NetworkServer
             // 递增组播帧计数并出队
             Database::execute("UPDATE multicast_groups SET f_cnt = f_cnt + 1 WHERE id=?", [$q['multicast_group_id']]);
             Database::execute("DELETE FROM multicast_queue WHERE id=?", [$q['id']]);
-            $this->log("MULTICAST DOWNLINK -> group={$q['multicast_group_id']} port={$q['f_port']} gw=" . count($gws));
-            $this->logEvent('downlink', 'info', "组播下行下发 group={$q['multicast_group_id']} port={$q['f_port']}", '', 0, 0);
+        $this->log("MULTICAST DOWNLINK -> group={$q['multicast_group_id']} port={$q['f_port']} gw=" . count($gws));
+        $this->logEvent('downlink', 'info', "组播下行下发 group={$q['multicast_group_id']} port={$q['f_port']}", '', 0, 0);
+    }
+}
+
+// ---------------- FUOTA 调度（对齐 ChirpStack fuota 状态机） ----------------
+
+/**
+ * 周期调用：推进所有活跃 FUOTA campaign 的状态机。
+ *   SETUP          → 单播 McGroupSetupReq（等设备 McGroupSetupAns）
+ *   FRAGMENTATION  → 组播 FragSessionSetupReq + FragDataBlockReq（按 min/max_delay 节流）
+ *   STATUS         → 组播 FragStatusReq + FPort201 FuotaStatusReq（收集设备上报）
+ *   DONE | FAILED  → 由 finalizeCampaign 收尾
+ * 超时兜底：campaign 启动超过 timeout 秒即收尾。
+ */
+private function processScheduledFuota(): void
+{
+    $now = time();
+    $campaigns = Database::fetchAll(
+        "SELECT * FROM fuota_campaigns WHERE state IN ('SETUP','FRAGMENTATION','STATUS') AND next_frame_at <= ?",
+        [$now]
+    );
+    foreach ($campaigns as $camp) {
+        if ((int) $camp['started_at'] > 0 && ($now - (int) $camp['started_at']) > (int) $camp['timeout']) {
+            $res = Fuota::finalizeCampaign((int) $camp['id']);
+            $this->log(sprintf("FUOTA: campaign#%d timeout -> %s (done=%d failed=%d)", $camp['id'], $res['state'], $res['done'], $res['failed']));
+            $this->logEvent('fuota', 'warn', "FUOTA campaign#{$camp['id']} 超时收尾 state={$res['state']}", '', 0, (int) $camp['application_id']);
+            continue;
+        }
+        switch ($camp['state']) {
+            case Fuota::STATE_SETUP:
+                $this->fuotaSetupPhase($camp, $now);
+                break;
+            case Fuota::STATE_FRAGMENTATION:
+                $this->fuotaFragmentationPhase($camp, $now);
+                break;
+            case Fuota::STATE_STATUS:
+                $this->fuotaStatusPhase($camp, $now);
+                break;
         }
     }
+}
 
-    // ---------------- 下行入队 / 下发 ----------------
+/** SETUP：向未确认组播会话的部署设备单播 McGroupSetupReq；全部确认或超时后进入 FRAGMENTATION。 */
+private function fuotaSetupPhase(array $camp, int $now): void
+{
+    $campId = (int) $camp['id'];
+    $group = Database::fetch("SELECT * FROM multicast_groups WHERE id=?", [(int) $camp['multicast_group_id']]);
+    if (!$group) {
+        Fuota::finalizeCampaign($campId);
+        return;
+    }
+    $macCmd = Fuota::buildGroupSetupForCampaign($camp, $group);
+    $deps = Database::fetchAll(
+        "SELECT d.*, dv.id AS dev_id, dv.dev_eui, dv.dev_addr, dv.class, dv.region, dv.last_gw_id,
+                dv.fcnt_down, dv.adr, dv.app_id, dv.mac_version,
+                dv.nwk_s_key, dv.app_s_key, dv.f_nwk_s_int_key, dv.s_nwk_s_int_key, dv.nwk_s_enc_key
+         FROM fuota_deployments d JOIN devices dv ON dv.id = d.dev_id
+         WHERE d.campaign_id=? AND d.mc_group_ans=0 AND d.state != 'FAILED'",
+        [$campId]
+    );
+    foreach ($deps as $dep) {
+        $dev = $dep;
+        $gwEui = $this->resolveServingGateway($dev);
+        if ($gwEui === '') {
+            continue; // 无服务网关（设备未上行过/网关未保活），等下一轮重发
+        }
+        $region = Region::get($dev['region'] ?: ELW_DEFAULT_REGION);
+        $ks = $this->deviceKeySet($dev);
+        $fcntDown = (int) $dev['fcnt_down'] + 1;
+        $downPhy = $this->buildDownPhy($ks, hex2bin($dev['dev_addr']), $fcntDown, false, false, 0, $macCmd, 0, '', 0);
+        $this->bumpDownFCnt((int) $dev['dev_id']);
+        $peer = $this->gateways[$gwEui]['addr'] ?? '';
+        $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), true);
+        $this->log("FUOTA: campaign#$campId McGroupSetupReq -> dev#{$dev['dev_id']} ({$dev['dev_eui']}) gw=$gwEui");
+        $this->logEvent('fuota', 'info', "FUOTA 组播会话下发 dev_eui={$dev['dev_eui']}", $gwEui, (int) $dev['dev_id'], (int) $dev['app_id']);
+    }
+
+    // 全部确认 → 立即进入分片；否则按重发间隔推进
+    $remaining = Database::fetch(
+        "SELECT COUNT(*) AS n FROM fuota_deployments WHERE campaign_id=? AND mc_group_ans=0 AND state != 'FAILED'",
+        [$campId]
+    );
+    $waiting = Database::fetch(
+        "SELECT COUNT(*) AS n FROM fuota_deployments WHERE campaign_id=? AND state != 'FAILED'",
+        [$campId]
+    );
+    if ((int) $remaining['n'] === 0 && (int) $waiting['n'] > 0) {
+        Database::execute(
+            "UPDATE fuota_campaigns SET state='FRAGMENTATION', next_frame_at=?, updated_at=? WHERE id=?",
+            [$now, $now, $campId]
+        );
+        $this->log("FUOTA: campaign#$campId all McGroupSetupAns received -> FRAGMENTATION");
+        $this->logEvent('fuota', 'info', "FUOTA campaign#$campId 组播会话全部确认，开始分片", '', 0, (int) $camp['application_id']);
+        return;
+    }
+    // 未收齐：SETUP 超过 SETUP_MAX_SECONDS 也放行（未应答设备部署在收尾时置 FAILED）
+    if ((int) $camp['started_at'] > 0 && ($now - (int) $camp['started_at']) >= self::FUOTA_SETUP_MAX_SECONDS) {
+        Database::execute(
+            "UPDATE fuota_campaigns SET state='FRAGMENTATION', next_frame_at=?, updated_at=? WHERE id=?",
+            [$now, $now, $campId]
+        );
+        $this->log("FUOTA: campaign#$campId setup deadline reached (unacked=" . (int) $remaining['n'] . ") -> FRAGMENTATION");
+        return;
+    }
+    Database::execute(
+        "UPDATE fuota_campaigns SET next_frame_at=? WHERE id=?",
+        [$now + self::FUOTA_SETUP_RESEND_INTERVAL, $campId]
+    );
+}
+
+/** FRAGMENTATION：组播下发下一批分片帧（含首帧的 FragSessionSetupReq），全部发完进入 STATUS。 */
+private function fuotaFragmentationPhase(array $camp, int $now): void
+{
+    $campId = (int) $camp['id'];
+    $group = Database::fetch("SELECT * FROM multicast_groups WHERE id=?", [(int) $camp['multicast_group_id']]);
+    if (!$group) {
+        Fuota::finalizeCampaign($campId);
+        return;
+    }
+    $remaining = (int) $camp['total_frames'] - (int) $camp['frames_sent'];
+    if ($remaining <= 0) {
+        Database::execute(
+            "UPDATE fuota_campaigns SET state='STATUS', next_frame_at=?, status_req_sent=0, updated_at=? WHERE id=?",
+            [$now, $now, $campId]
+        );
+        $this->log("FUOTA: campaign#$campId all frames sent -> STATUS");
+        return;
+    }
+    $batch = min(self::FUOTA_FRAMES_PER_TICK, $remaining);
+    $frames = Fuota::nextFrames($campId, (int) $camp['frames_sent'], $batch);
+    foreach ($frames as $f) {
+        $phy = Fuota::buildMulticastDown($group, 0, '', hex2bin($f['fopts_hex']));
+        $this->fuotaSendMulticast($group, $phy);
+    }
+    $sent = (int) $camp['frames_sent'] + count($frames);
+    // 节流：下一批在 min/max_delay * 本批帧数 之后（测试可设 0/0 立即推进）
+    $delay = (int) $camp['min_delay'] * count($frames);
+    $delay = random_int($delay, max($delay, (int) $camp['max_delay'] * count($frames)));
+    Database::execute(
+        "UPDATE fuota_campaigns SET frames_sent=?, next_frame_at=?, updated_at=? WHERE id=?",
+        [$sent, $now + $delay, $now, $campId]
+    );
+    $this->log("FUOTA: campaign#$campId sent " . count($frames) . " frame(s) (total $sent/{$camp['total_frames']})");
+}
+
+/** STATUS：组播 FragStatusReq + FPort201 FuotaStatusReq，等待设备上报后收尾。 */
+private function fuotaStatusPhase(array $camp, int $now): void
+{
+    $campId = (int) $camp['id'];
+    $group = Database::fetch("SELECT * FROM multicast_groups WHERE id=?", [(int) $camp['multicast_group_id']]);
+    if (!$group) {
+        Fuota::finalizeCampaign($campId);
+        return;
+    }
+    if ((int) $camp['status_req_sent'] === 0) {
+        // 组播 FragStatusReq（MAC 0x0A，走 FPort0 FRMPayload）+ FuotaStatusReq（FPort 201）
+        $this->fuotaSendMulticast($group, Fuota::buildMulticastDown($group, 0, Fuota::buildFragStatusReq(), ''));
+        $this->fuotaSendMulticast($group, Fuota::buildMulticastDown($group, Fuota::FPORT_STATUS, Fuota::buildFuotaStatusReq(0, 0), ''));
+        Database::execute(
+            "UPDATE fuota_campaigns SET status_req_sent=1, next_frame_at=?, updated_at=? WHERE id=?",
+            [$now + 30, $now, $campId]
+        );
+        $this->log("FUOTA: campaign#$campId FragStatusReq + FuotaStatusReq sent -> waiting for device reports");
+        return;
+    }
+    $pending = Database::fetch(
+        "SELECT COUNT(*) AS n FROM fuota_deployments WHERE campaign_id=? AND state NOT IN ('DONE','FAILED')",
+        [$campId]
+    );
+    if ((int) $pending['n'] === 0) {
+        $res = Fuota::finalizeCampaign($campId);
+        $this->log(sprintf("FUOTA: campaign#%d completed -> %s (done=%d failed=%d)", $campId, $res['state'], $res['done'], $res['failed']));
+        $this->logEvent('fuota', 'info', "FUOTA campaign#$campId 完成 state={$res['state']}", '', 0, (int) $camp['application_id']);
+    } else {
+        Database::execute("UPDATE fuota_campaigns SET next_frame_at=? WHERE id=?", [$now + 30, $campId]);
+    }
+}
+
+/** 向组播组（或全部在线网关）下发一条物理层帧，并递增组播 f_cnt。 */
+private function fuotaSendMulticast(array $group, string $phy): void
+{
+    $region = Region::get($group['region'] ?: ELW_DEFAULT_REGION);
+    $freq = ((int) $group['frequency'] > 0) ? ((int) $group['frequency'] / 1e6) : ($region->getRx2Frequency() / 1e6);
+    $datr = $region->drToDatr((int) $group['dr']);
+    $imme = (strtoupper($group['group_type']) === 'C');
+    $tmst = $imme ? 0 : (int) (microtime(true) * 1000) % 1000000000;
+
+    $gws = Multicast::groupGateways((int) $group['id']);
+    if (empty($gws)) {
+        $gws = Database::fetchAll("SELECT gw_id FROM gateways");
+    }
+    foreach ($gws as $gw) {
+        $gwEui = $gw['gw_id'];
+        $peer = $this->gateways[$gwEui]['addr'] ?? '';
+        if ($peer === '' && !isset($this->gateways[$gwEui])) {
+            continue;
+        }
+        $this->enqueueDownlink($gwEui, $peer, $phy, $tmst, $freq, $datr, $imme);
+    }
+    Database::execute("UPDATE multicast_groups SET f_cnt = f_cnt + 1 WHERE id=?", [(int) $group['id']]);
+    $this->log("FUOTA MULTICAST DOWNLINK -> group={$group['id']} gw=" . count($gws));
+}
+
+/**
+ * FUOTA MAC 上行消歧：仅当设备属于活跃 campaign 的组播组时，从 MAC 字节流中
+ * 剥离 FUOTA Ans（0x08~0x0D）并按 FUOTA 语义处理；剩余字节返回给标准 MAC 解析。
+ * 无活跃 campaign 时原样返回（与标准命令同号，按标准语义处理）。
+ */
+private function handleFuotaMacUplink(array $device, string $macBytes): string
+{
+    $devEui = $device['dev_eui'] ?? '';
+    if ($devEui === '') {
+        return $macBytes;
+    }
+    $active = Fuota::activeCampaignForDevice($devEui);
+    if (!$active) {
+        return $macBytes;
+    }
+    $camp = $active['campaign'];
+    $out = '';
+    $i = 0;
+    $n = strlen($macBytes);
+    while ($i < $n) {
+        $cid = ord($macBytes[$i]);
+        if (Fuota::isFuotaCid($cid)) {
+            $len = Fuota::fuotaCidPayloadLen($cid);
+            if ($len < 0) {
+                $out .= $macBytes[$i];
+                $i++;
+                continue;
+            }
+            $payload = substr($macBytes, $i + 1, $len);
+            $res = Fuota::handleMacAnswer(['campaign' => $camp, 'cid' => $cid, 'payload' => $payload]);
+            if ($res['log'] !== '') {
+                $this->log("FUOTA: dev#{$device['id']} {$res['log']}");
+                $this->logEvent('fuota', 'info', "FUOTA 上行应答 dev_eui=$devEui {$res['log']}", '', (int) $device['id'], (int) ($device['app_id'] ?? 0));
+            }
+            $i += 1 + $len;
+        } else {
+            $stdLen = MacCommands::cmdLen($cid);
+            if ($stdLen < 0) {
+                // 未知命令：停止消歧，剩余字节原样交给标准解析
+                $out .= substr($macBytes, $i);
+                break;
+            }
+            $out .= substr($macBytes, $i, 1 + $stdLen);
+            $i += 1 + $stdLen;
+        }
+    }
+    return $out;
+}
+
+/** FUOTA 应用层载荷上行（FPort 200/201，AppSKey 加密）。 */
+private function handleFuotaAppPayload(array $device, ?int $fport, string $decrypted): void
+{
+    if ($fport !== Fuota::FPORT_SETUP && $fport !== Fuota::FPORT_STATUS) {
+        return;
+    }
+    if ($decrypted === '') {
+        return;
+    }
+    $devEui = $device['dev_eui'] ?? '';
+    if ($devEui === '') {
+        return;
+    }
+    $active = Fuota::activeCampaignForDevice($devEui);
+    if (!$active) {
+        return;
+    }
+    $res = Fuota::handleAppPayload([
+        'campaign' => $active['campaign'],
+        'fport'    => $fport,
+        'payload'  => $decrypted,
+    ]);
+    if ($res['log'] !== '') {
+        $this->log("FUOTA: dev#{$device['id']} {$res['log']}");
+        $this->logEvent('fuota', 'info', "FUOTA 应用载荷 dev_eui=$devEui {$res['log']}", '', (int) $device['id'], (int) ($device['app_id'] ?? 0));
+    }
+}
+
+// ---------------- 下行入队 / 下发 ----------------
 
     /**
      * 估算上行帧的空口时长（µs）。
@@ -1464,6 +1825,11 @@ class NetworkServer
         if (!isset($this->gateways[$gwEui]) || empty($this->gateways[$gwEui]['pending'])) {
             return;
         }
+        // Basic Station 网关：不走 UDP PULL_RESP，转 dnmsg 经 LNS sink 回送
+        if (($this->gateways[$gwEui]['proto'] ?? '') === 'station') {
+            $this->flushStationDownlink($gwEui);
+            return;
+        }
         foreach ($this->gateways[$gwEui]['pending'] as $item) {
             $txpk = [
                 'imme' => $item['imme'],
@@ -1492,6 +1858,36 @@ class NetworkServer
             $this->log(sprintf(
                 "PULL_RESP sent gw=%s peer=%s tmst=%d freq=%.3f datr=%s imme=%d phy=%s txpk=%s",
                 $gwEui, $peer, $item['tmst'], $item['freq'], $item['datr'], $item['imme'] ? 1 : 0, bin2hex($item['phy']), $json
+            ));
+        }
+        $this->gateways[$gwEui]['pending'] = [];
+    }
+
+    /**
+     * 把 pending 下行转成 Basic Station dnmsg 经注册的 sink 回送（LNS WebSocket）。
+     * xtime 语义：imme（Class C）= 0 立即发送；否则 = 上行 xtime + delay（µs）。
+     * 因 enqueueDownlink 的 tmst 已 = 上行 xtime + delay，此处直接取 tmst 即可。
+     */
+    private function flushStationDownlink(string $gwEui): void
+    {
+        $sink = $this->gateways[$gwEui]['dnSink'] ?? null;
+        $regionName = $this->gateways[$gwEui]['region'] ?? ELW_DEFAULT_REGION;
+        $region = Region::get($regionName);
+        foreach ($this->gateways[$gwEui]['pending'] as $item) {
+            $dn = Station::buildDnMsg([
+                'diid'     => 1,
+                'pdu'      => base64_encode($item['phy']),
+                'freq'     => $item['freq'],
+                'datr'     => $item['datr'],
+                'region'   => $regionName,
+                'rx_delay' => $region->getReceiveDelay1(),
+            ], $item['imme'] ? 0 : ($item['tmst'] & 0xFFFFFFFF), 0, $item['imme'] ? 'C' : 'A');
+            if ($sink !== null) {
+                $sink($dn);
+            }
+            $this->log(sprintf(
+                "STATION DNMSG gw=%s xtime=%d freq=%.3f datr=%s dC=%s phy=%s dn=%s",
+                $gwEui, $dn['xtime'], $item['freq'], $item['datr'], $dn['dC'], bin2hex($item['phy']), json_encode($dn)
             ));
         }
         $this->gateways[$gwEui]['pending'] = [];

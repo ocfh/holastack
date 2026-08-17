@@ -54,8 +54,8 @@ class Integration
             $config = [];
         }
         Database::execute(
-            "INSERT INTO integrations (application_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?)",
-            [$appId, $kind, !empty($p['enabled']) ? 1 : 0, json_encode($config, JSON_UNESCAPED_UNICODE), time()]
+            "INSERT INTO integrations (application_id, tenant_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?,?)",
+            [$appId, (int) ($p['tenant_id'] ?? 0), $kind, !empty($p['enabled']) ? 1 : 0, json_encode($config, JSON_UNESCAPED_UNICODE), time()]
         );
         return ['id' => Database::lastInsertId()];
     }

@@ -10,12 +10,12 @@ use holastack\Crypto\LoRaWANCrypto;
  */
 class Frame
 {
-    /** MHDR mtype 取值 */
+    /** MHDR mtype 取值（LoRaWAN 1.0.x 规范：0=JoinReq 1=JoinAccept 2=UnconfirmedUp 3=UnconfirmedDown 4=ConfirmedUp 5=ConfirmedDown） */
     public const MTYPE_JOIN_REQUEST       = 0x00;
     public const MTYPE_JOIN_ACCEPT        = 0x01;
     public const MTYPE_UNCONFIRMED_UP      = 0x02;
-    public const MTYPE_CONFIRMED_UP        = 0x03;
-    public const MTYPE_UNCONFIRMED_DOWN    = 0x04;
+    public const MTYPE_UNCONFIRMED_DOWN    = 0x03;
+    public const MTYPE_CONFIRMED_UP        = 0x04;
     public const MTYPE_CONFIRMED_DOWN      = 0x05;
 
     public static function mtype(string $phy): int

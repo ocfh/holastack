@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS devices (
     nb_trans INTEGER NOT NULL DEFAULT 1,
     rx1_dr_offset INTEGER NOT NULL DEFAULT 0,
     rx2_dr INTEGER NOT NULL DEFAULT 0,
+    rx2_frequency INTEGER NOT NULL DEFAULT 0,
     rx_delay INTEGER NOT NULL DEFAULT 1,
     max_supported_tx_power_index INTEGER NOT NULL DEFAULT 0,
     min_supported_tx_power_index INTEGER NOT NULL DEFAULT 0,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'admin',
+    tenant_id INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 
@@ -312,6 +314,20 @@ CREATE TABLE IF NOT EXISTS fuota_campaigns (
     descriptor_version INTEGER NOT NULL DEFAULT 0,
     fw_version TEXT DEFAULT '',
     fw_length INTEGER NOT NULL DEFAULT 0,
+    -- 状态机（对齐 ChirpStack fuota_campaign：PENDING → SETUP → FRAGMENTATION → STATUS → DONE/FAILED）
+    state VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    mc_ke_key TEXT DEFAULT '',
+    min_delay INTEGER NOT NULL DEFAULT 200,
+    max_delay INTEGER NOT NULL DEFAULT 1000,
+    timeout INTEGER NOT NULL DEFAULT 3600,
+    frames_sent INTEGER NOT NULL DEFAULT 0,
+    total_frames INTEGER NOT NULL DEFAULT 0,
+    next_frame_at INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    firmware_sha256 TEXT DEFAULT '',
+    firmware_crc INTEGER NOT NULL DEFAULT 0,
+    status_req_sent INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 
@@ -321,6 +337,10 @@ CREATE TABLE IF NOT EXISTS fuota_deployments (
     dev_id INTEGER NOT NULL,
     state VARCHAR(16) NOT NULL DEFAULT 'PENDING',
     fragments_received INTEGER NOT NULL DEFAULT 0,
+    frag_nb_missing INTEGER NOT NULL DEFAULT 0,
+    mc_group_ans INTEGER NOT NULL DEFAULT 0,
+    status_ans INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 
@@ -329,6 +349,15 @@ CREATE TABLE IF NOT EXISTS fuota_fragments (
     deployment_id INTEGER NOT NULL,
     frag_index INTEGER NOT NULL,
     data TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- 预组装的组播下行帧（按 campaign 存，调度器按 min/max_delay 节流取出）
+CREATE TABLE IF NOT EXISTS fuota_frames (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    fopts_hex TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
 
