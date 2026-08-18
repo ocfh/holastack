@@ -10,12 +10,14 @@ CREATE TABLE IF NOT EXISTS applications (
 );
 
 -- ---- 租户（Tenant，多租户隔离基础） ----
+-- private_gateways_unlimited=1 → 关闭上限，无限创建
+-- private_gateways_unlimited=0 → 按 private_gateways_limit 限制（默认 0 = 不允许创建网关）
 CREATE TABLE IF NOT EXISTS tenants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
-    can_have_gateways INTEGER NOT NULL DEFAULT 1,
     private_gateways_limit INTEGER NOT NULL DEFAULT 0,
+    private_gateways_unlimited INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 
@@ -373,3 +375,24 @@ CREATE TABLE IF NOT EXISTS roaming_servers (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL
 );
+
+-- ---- API 调用日志（admin 全局 / tenant 仅本租户 可读） ----
+CREATE TABLE IF NOT EXISTS api_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    method VARCHAR(8) NOT NULL DEFAULT '',
+    path TEXT DEFAULT '',
+    status INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    ip TEXT DEFAULT '',
+    user_id INTEGER NOT NULL DEFAULT 0,
+    username TEXT DEFAULT '',
+    role VARCHAR(16) DEFAULT '',
+    tenant_id INTEGER NOT NULL DEFAULT 0,
+    application_id INTEGER NOT NULL DEFAULT 0,
+    query TEXT DEFAULT '',
+    body_size INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id);
+CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at);

@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     description VARCHAR(255) DEFAULT '',
-    can_have_gateways TINYINT NOT NULL DEFAULT 1,
     private_gateways_limit INT NOT NULL DEFAULT 0,
+    private_gateways_unlimited TINYINT NOT NULL DEFAULT 0,
     created_at INT NOT NULL
 );
 
@@ -376,4 +376,25 @@ CREATE TABLE IF NOT EXISTS roaming_servers (
     async_timeout INT NOT NULL DEFAULT 250,
     enabled TINYINT NOT NULL DEFAULT 1,
     created_at INT NOT NULL
+);
+
+-- ---- API 调用日志 ----
+CREATE TABLE IF NOT EXISTS api_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at INT NOT NULL,
+    method VARCHAR(8) NOT NULL DEFAULT '',
+    path VARCHAR(255) DEFAULT '',
+    status INT NOT NULL DEFAULT 0,
+    latency_ms INT NOT NULL DEFAULT 0,
+    ip VARCHAR(64) DEFAULT '',
+    user_id INT NOT NULL DEFAULT 0,
+    username VARCHAR(64) DEFAULT '',
+    role VARCHAR(16) DEFAULT '',
+    tenant_id INT NOT NULL DEFAULT 0,
+    application_id INT NOT NULL DEFAULT 0,
+    query VARCHAR(512) DEFAULT '',
+    body_size INT NOT NULL DEFAULT 0,
+    INDEX idx_api_logs_tenant (tenant_id),
+    INDEX idx_api_logs_app (application_id),
+    INDEX idx_api_logs_created (created_at)
 );

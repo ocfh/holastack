@@ -827,6 +827,21 @@ class WebApp
             return ['error' => 'unsupported region'];
         }
         $tid = self::createTenantId($p);
+        // 租户私有网关上限：unlimited=1 → 不限；否则按 limit 限制
+        $t = $tid > 0 ? Tenant::get($tid) : null;
+        if ($t) {
+            $unlimited = (int) ($t['private_gateways_unlimited'] ?? 0) === 1;
+            $limit = max(0, (int) ($t['private_gateways_limit'] ?? 0));
+            if (!$unlimited) {
+                $count = (int) Database::fetch(
+                    "SELECT COUNT(*) AS c FROM gateways WHERE tenant_id=?",
+                    [$tid]
+                )['c'];
+                if ($count >= $limit) {
+                    return ['error' => '该用户配置的私有网关数量已达上限（' . $limit . '），请先在「用户配置」中调整上限或开启无限制'];
+                }
+            }
+        }
         Database::execute(
             "INSERT INTO gateways (gw_id, tenant_id, name, region, created_at, last_seen, ip) VALUES (?,?,?,?,?,?,?)",
             [$gwId, $tid, $p['name'], $region, time(), 0, '']

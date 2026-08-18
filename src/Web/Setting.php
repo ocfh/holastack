@@ -10,10 +10,10 @@ use holastack\DB\Database;
 class Setting
 {
     /** 全部可配置键。 */
-    const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang'];
+    const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang', 'footer'];
 
     /** 对未登录用户（登录页）安全的公开键。 */
-    const PUBLIC_KEYS = ['site_name', 'site_logo_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang'];
+    const PUBLIC_KEYS = ['site_name', 'site_logo_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang', 'footer'];
 
     /** 读取单个设置，缺失返回默认值。 */
     public static function get(string $key, string $default = ''): string
@@ -67,6 +67,10 @@ class Setting
         }
         if (($out['login_logo_text'] ?? '') === '') {
             $out['login_logo_text'] = $out['site_name'];
+        }
+        // 默认 footer：© {今年年份} HolaStack（年份取服务端时区，不依赖客户端）
+        if (($out['footer'] ?? '') === '') {
+            $out['footer'] = '© ' . date('Y') . ' HolaStack';
         }
         return $out;
     }

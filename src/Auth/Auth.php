@@ -143,7 +143,7 @@ class Auth
                 $tid = (int) $exists['id'];
             } else {
                 Database::execute(
-                    "INSERT INTO tenants (name, description, can_have_gateways, private_gateways_limit, created_at) VALUES (?,?,1,0,?)",
+                    "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at) VALUES (?,?,0,0,?)",
                     [$name, '', time()]
                 );
                 $tid = Database::lastInsertId();

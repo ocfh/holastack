@@ -14,12 +14,47 @@ use holastack\Auth\Auth;
 use holastack\Auth\ApiKey;
 use holastack\DB\Database;
 use holastack\Install\Installer;
+use holastack\Storage\ApiLog;
 
 $method = $_SERVER['REQUEST_METHOD'];
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
 $path = rtrim($path, '/');
 if ($path === '') {
     $path = '/';
+}
+// 标记：是否需要为本次请求写 API 日志（仅 /api/* 与 /v1/* 记）
+$logApi = ($path === '/api' || strpos($path, '/api/') === 0 || $path === '/v1' || strpos($path, '/v1/') === 0);
+if ($logApi) {
+    $__apiLogStart = microtime(true);
+    $__apiLogCtx = [
+        'method' => $method,
+        'path' => $path,
+        'query' => $_SERVER['QUERY_STRING'] ?? '',
+        'ip' => \holastack\Storage\ApiLog::clientIp(),
+        'body_size' => strlen((string) file_get_contents('php://input')),
+        'application_id' => 0,
+    ];
+    // /v1 应用 API 鉴权后可回填 application_id；本钩子在响应发出后执行
+    register_shutdown_function(static function () use (&$__apiLogStart, &$__apiLogCtx) {
+        $lat = (int) ((microtime(true) - $__apiLogStart) * 1000);
+        $status = http_response_code() ?: 200;
+        $u = \holastack\Auth\Auth::currentUser();
+        \holastack\Storage\ApiLog::record([
+            'created_at' => time(),
+            'method' => $__apiLogCtx['method'],
+            'path' => $__apiLogCtx['path'],
+            'status' => $status,
+            'latency_ms' => $lat,
+            'ip' => $__apiLogCtx['ip'],
+            'user_id' => $u['id'] ?? 0,
+            'username' => $u['username'] ?? '',
+            'role' => $u['role'] ?? '',
+            'tenant_id' => (int) ($u['tenant_id'] ?? 0),
+            'application_id' => (int) ($__apiLogCtx['application_id'] ?? 0),
+            'query' => $__apiLogCtx['query'],
+            'body_size' => $__apiLogCtx['body_size'],
+        ]);
+    });
 }
 
 // ---- 安装守卫 ----
@@ -381,6 +416,27 @@ function handleApi(string $method, string $path): array
                 return WebApp::createTenant($body);
             }
             return ['data' => WebApp::listTenants()];
+        case 'api-logs':
+            // 仅 admin / tenant / operator 可读；admin 可见全部，tenant 只能看自己 tenant_id 的日志
+            $u = Auth::currentUser();
+            $role = $u['role'] ?? '';
+            if (!in_array($role, [Auth::ROLE_ADMIN, Auth::ROLE_TENANT, Auth::ROLE_OPERATOR], true)) {
+                http_response_code(403);
+                return ['error' => 'forbidden'];
+            }
+            $filters = [
+                'tenant_id' => isset($get['tenant_id']) ? (int) $get['tenant_id'] : null,
+                'application_id' => isset($get['application_id']) ? (int) $get['application_id'] : null,
+                'ip' => isset($get['ip']) ? trim((string) $get['ip']) : null,
+                'status' => isset($get['status']) ? $get['status'] : null,
+                'method' => isset($get['method']) ? trim((string) $get['method']) : null,
+                'path_contains' => isset($get['path_contains']) ? trim((string) $get['path_contains']) : null,
+                'since' => isset($get['since']) ? (int) $get['since'] : null,
+            ];
+            $limit = isset($get['limit']) ? (int) $get['limit'] : 200;
+            $offset = isset($get['offset']) ? (int) $get['offset'] : 0;
+            $out = ApiLog::list($u, $filters, $limit, $offset);
+            return ['data' => $out['rows'], 'total' => $out['total']];
         default:
             return ['error' => 'unknown endpoint'];
     }
@@ -405,6 +461,10 @@ function handleAppApi(string $method, string $path): array
     if (!$appId) {
         http_response_code(401);
         return ['error' => 'invalid_api_key', 'message' => '请在请求头携带 Authorization: Bearer <API_KEY> 或使用 ?api_key=<API_KEY>'];
+    }
+    // 回填到 API 日志上下文（用于审计：记录哪个应用发起的调用）
+    if (isset($GLOBALS['__apiLogCtx']) && is_array($GLOBALS['__apiLogCtx'])) {
+        $GLOBALS['__apiLogCtx']['application_id'] = (int) $appId;
     }
     $app = WebApp::getApplication($appId);
     if (!$app) {
@@ -713,6 +773,11 @@ function renderPage(): string
   #loader .lbl{position:absolute;margin-top:74px;color:var(--mut);font-size:13px}
   @keyframes elw-spin{to{transform:rotate(360deg)}}
   .err-box{background:var(--err-box-bg);border:1px solid var(--err-box-border);color:var(--err-box-txt);padding:14px 16px;border-radius:10px;margin:8px 0}
+  /* 页面底部 footer：支持 HTML（由站点设置提供），暗色低对比度不抢戏 */
+  footer.site-footer{margin:24px auto 18px;padding:14px 18px;max-width:1100px;text-align:center;color:var(--mut);font-size:12px;border-top:1px solid var(--line)}
+  footer.site-footer a{color:var(--mut);text-decoration:underline;text-decoration-color:var(--line)}
+  footer.site-footer a:hover{color:var(--txt)}
+  footer.site-footer.login-footer{margin:14px auto 0;max-width:380px;border:0;padding:0 18px}
 </style>
 <script>
 // 防止主题闪烁（FOUC）：在首次渲染前从 localStorage 或系统偏好读取并设置 data-theme
@@ -750,10 +815,12 @@ function renderPage(): string
     <div id="l_err" class="muted" style="color:var(--err)"></div>
     <button style="margin-top:16px;width:100%" onclick="doLogin()">登录</button>
     <div id="loginNotice" class="login-notice hidden"></div>
+    <footer id="loginFooter" class="site-footer login-footer"></footer>
   </div>
 </div>
 
 <main id="view" class="hidden"></main>
+<footer id="siteFooter" class="site-footer hidden"></footer>
 
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 <div id="loader"><div class="spinner"></div><div class="lbl">加载中…</div></div>
@@ -832,9 +899,12 @@ async function loadDict(lang){
 }
 function langAttr(lang){ return (lang === 'en') ? 'en' : (lang === 'zh' ? 'zh-CN' : lang); }
 async function applyLanguage(lang){
-  await loadDict(lang);
-  document.documentElement.setAttribute('lang', langAttr(window.UI_LANG));
-  nav(state.view, true);
+  // 后台接口 /api/settings 已经把 ui_lang 写库，前端只需刷新整页让所有 DOM（含顶栏、nav、模态框占位等）
+  // 重新按新语言渲染；硬刷新最稳妥，避免遗漏的 DOM 片段还停留在旧语言。
+  try {
+    await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
+  } catch(e){}
+  location.reload();
 }
 // 让原生 alert/confirm 也走 i18n：浏览器对话框不在 DOM 中，walker 无法翻译。
 const _origAlert = window.alert;
@@ -842,7 +912,7 @@ window.alert = (m) => _origAlert.call(window, t(m));
 const _origConfirm = window.confirm;
 window.confirm = (q) => _origConfirm.call(window, t(q));
 
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:''};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -854,6 +924,11 @@ async function boot(){
   try { const rr = await fetch('/api/regions'); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
   // 预取当前语言字典与可用语言清单，供界面渲染与「界面语言」下拉使用
   if (!window.LANGS) { try { await loadDict(window.UI_LANG || 'zh'); } catch(e){} }
+  // 在判断登录态之前先对登录页（始终在 DOM 里的静态片段）做一次 i18n，
+  // 否则切换语言后登录页仍显示旧语言。renderShell 之后会再翻译一次。
+  applyI18n(document);
+  // 拉取公开设置（站点名/logo/公告/footer）— 登录页与登录后界面都需用到
+  applyPublicSettings();
   renderShell();
 }
 const regionOptions = (sel) => state.regions.map(r=>`<option ${r===sel?'selected':''}>${r}</option>`).join('');
@@ -903,6 +978,7 @@ const NAV_GROUPS = [
   { label:'工具集成', items:[
     {v:'integrations', text:'外部集成'},
     {v:'api-keys', text:'API 密钥'},
+    {v:'api-logs', text:'API 调用日志'},
     {v:'loracalc', text:'LoRa 计算器'},
     {v:'apidocs', text:'API 文档'},
   ]},
@@ -1025,6 +1101,7 @@ async function nav(v, silent=false){
     else if (v==='api-keys') await viewApiKeys();
     else if (v==='multicast-groups') await viewMulticastGroups();
     else if (v==='users') await viewUsers();
+    else if (v==='api-logs') await viewApiLogs();
     else if (v==='loracalc') await viewLoraCalc();
     else if (v==='apidocs') { await applyPublicSettings(); await viewApiDocs(); }
     else if (v==='settings') await viewSettings();
@@ -1395,6 +1472,93 @@ async function viewUsers(){
     <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>用户配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// ================= API 调用日志 =================
+// admin 看全部 + 租户/应用/IP 筛选；tenant 仅看本租户 + 应用筛选；operator 演示可看全部只读
+async function viewApiLogs(){
+  const showTenant = isAdmin() || isDemo();
+  const params = [];
+  if (state.apiLogFilter.path) params.push('path_contains=' + encodeURIComponent(state.apiLogFilter.path));
+  if (state.apiLogFilter.ip) params.push('ip=' + encodeURIComponent(state.apiLogFilter.ip));
+  if (state.apiLogFilter.status) params.push('status=' + state.apiLogFilter.status);
+  if (state.apiLogFilter.method) params.push('method=' + state.apiLogFilter.method);
+  if (showTenant && state.apiLogFilter.tenant_id) params.push('tenant_id=' + state.apiLogFilter.tenant_id);
+  if (state.apiLogFilter.application_id) params.push('application_id=' + state.apiLogFilter.application_id);
+  const url = '/api/api-logs' + (params.length ? '?' + params.join('&') : '');
+  const r = await api('GET', url);
+  const rows = (r.data || []);
+  const total = r.total || 0;
+  // 拉取租户/应用下拉选项（admin）
+  let tenantOpts = '';
+  let appOpts = '';
+  if (showTenant) {
+    try { const tr = await api('GET','/api/tenants'); tenantOpts = (tr.data||[]).map(x=>`<option value="${x.id}" ${String(state.apiLogFilter.tenant_id)===String(x.id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
+  }
+  try {
+    const aq = showTenant && state.apiLogFilter.tenant_id ? ('?tenant_id=' + state.apiLogFilter.tenant_id) : '';
+    const ar = await api('GET', '/api/applications' + aq);
+    appOpts = (ar.data||[]).map(x=>`<option value="${x.id}" ${String(state.apiLogFilter.application_id)===String(x.id)?'selected':''}>${esc(x.name)}</option>`).join('');
+  } catch(e){}
+  const statusTag = s => {
+    if (!s) return `<span class="tag">-</span>`;
+    if (s>=200 && s<300) return `<span class="tag ok">${s}</span>`;
+    if (s>=400 && s<500) return `<span class="tag err">${s}</span>`;
+    if (s>=500) return `<span class="tag pending">${s}</span>`;
+    return `<span class="tag">${s}</span>`;
+  };
+  const rowsHtml = rows.length ? rows.map(r=>`<tr>
+    <td class="muted">${new Date(r.created_at*1000).toLocaleString()}</td>
+    <td><span class="tag">${esc(r.method)}</span></td>
+    <td class="muted" style="font-family:monospace;font-size:12px;word-break:break-all">${esc(r.path)}${r.query ? '?' + esc(r.query) : ''}</td>
+    <td>${statusTag(r.status)}</td>
+    <td class="muted">${r.latency_ms}ms</td>
+    <td class="muted" style="font-family:monospace">${esc(r.ip||'-')}</td>
+    <td class="muted">${esc(r.username||'-')}${r.role?` <span class="tag">${esc(r.role)}</span>`:''}</td>
+    ${showTenant ? `<td class="muted">${r.tenant_id?('#'+r.tenant_id):'-'}</td>` : ''}
+    <td class="muted">${r.application_id?('#'+r.application_id):'-'}</td>
+    <td class="muted">${r.body_size||0}B</td>
+  </tr>`).join('') : `<tr><td colspan="${showTenant?10:9}" class="muted">${t('暂无日志')}</td></tr>`;
+  const filterId = (k) => 'alf_' + k;
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('API 调用日志')}</h2><div class="muted" style="font-size:12px">${t('共')} ${total} ${t('条')}${t('（仅保留最近 10000 条）')}</div></div>
+   <div class="card" style="margin-bottom:12px">
+     <div class="row" style="align-items:flex-end">
+       <div><label>${t('路径包含')}</label><input id="${filterId('path')}" value="${esc(state.apiLogFilter.path||'')}" placeholder="/v1/devices"></div>
+       <div><label>${t('IP')}</label><input id="${filterId('ip')}" value="${esc(state.apiLogFilter.ip||'')}" placeholder="192.168.1.1"></div>
+       <div><label>${t('状态码')}</label><input id="${filterId('status')}" value="${esc(state.apiLogFilter.status||'')}" type="number" placeholder="200/4xx/5xx"></div>
+       <div><label>${t('方法')}</label><select id="${filterId('method')}">
+         <option value="">${t('全部')}</option>
+         <option value="GET" ${state.apiLogFilter.method==='GET'?'selected':''}>GET</option>
+         <option value="POST" ${state.apiLogFilter.method==='POST'?'selected':''}>POST</option>
+         <option value="PUT" ${state.apiLogFilter.method==='PUT'?'selected':''}>PUT</option>
+         <option value="DELETE" ${state.apiLogFilter.method==='DELETE'?'selected':''}>DELETE</option>
+       </select></div>
+       ${showTenant ? `<div><label>${t('租户')}</label><select id="${filterId('tenant_id')}"><option value="">${t('全部租户')}</option>${tenantOpts}</select></div>` : ''}
+       <div><label>${t('应用')}</label><select id="${filterId('application_id')}"><option value="">${t('全部应用')}</option>${appOpts}</select></div>
+       <div style="flex:0 0 auto"><button onclick="applyApiLogFilter()">${t('应用筛选')}</button> <button class="ghost" onclick="resetApiLogFilter()">${t('重置')}</button></div>
+     </div>
+   </div>
+   <table><thead><tr>
+     <th>${t('时间')}</th><th>${t('方法')}</th><th>${t('路径')}</th><th>${t('状态')}</th><th>${t('耗时')}</th><th>${t('IP')}</th><th>${t('用户')}</th>
+     ${showTenant ? `<th>${t('租户')}</th>` : ''}
+     <th>${t('应用')}</th><th>${t('Body')}</th>
+   </tr></thead><tbody>${rowsHtml}</tbody></table>`;
+}
+function applyApiLogFilter(){
+  const get = k => (document.getElementById('alf_' + k) || {}).value || '';
+  state.apiLogFilter = {
+    path: get('path').trim(),
+    ip: get('ip').trim(),
+    status: get('status').trim(),
+    method: get('method'),
+    tenant_id: get('tenant_id'),
+    application_id: get('application_id'),
+  };
+  viewApiLogs();
+}
+function resetApiLogFilter(){
+  state.apiLogFilter = { path:'', ip:'', status:'', method:'', tenant_id:'', application_id:'' };
+  viewApiLogs();
+}
+
 // ================= 站点设置（仅 admin） =================
 async function viewSettings(){
   if (!isAdmin()) { nav('dashboard'); return; }
@@ -1408,6 +1572,7 @@ async function viewSettings(){
      <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
      <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="HolaStack">
      <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
+     <label>页面底部 Footer（支持 HTML，如 © {Y} HolaStack &nbsp;|&nbsp; <a href="https://example.com">官网</a>；留空使用默认"© 今年年份 HolaStack"）</label><textarea id="st_footer" rows="2" placeholder="&copy; ${new Date().getFullYear()} HolaStack">${esc(s.footer||'')}</textarea>
      <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
      <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
@@ -1425,6 +1590,7 @@ async function saveSettings(){
     login_logo_url: v('st_login_img'),
     login_logo_text: v('st_login_text'),
     login_notice: v('st_notice'),
+    footer: v('st_footer'),
     api_base_url: v('st_api_url'),
     ui_lang: langSel ? langSel.value : 'zh',
   };
@@ -1456,6 +1622,13 @@ async function applyPublicSettings(){
     window.ELW_API_BASE_URL = d.api_base_url || '';
     const fav = document.getElementById('faviconLink');
     if (fav && d.favicon_url) fav.href = d.favicon_url;
+    // 页脚：服务端给的是 HTML 字符串，允许富文本（链接/版权符号等）；仅剥离 <script> 防止 XSS
+    const rawFooter = d.footer || ('© ' + new Date().getFullYear() + ' HolaStack');
+    const safeFooter = String(rawFooter).replace(/<script[\s\S]*?<\/script>/gi, '');
+    const lf = document.getElementById('loginFooter');
+    if (lf) lf.innerHTML = safeFooter;
+    const sf = document.getElementById('siteFooter');
+    if (sf) { sf.innerHTML = safeFooter; sf.classList.remove('hidden'); }
     const ln = document.getElementById('loginNotice');
     if (ln) {
       if (d.login_notice && d.login_notice.trim()) {
@@ -1630,37 +1803,55 @@ async function viewDeviceProfiles(){
 // ---------------- 用户配置 ----------------
 async function viewTenants(){
   const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
-  const rows = state.tenants.map(t=>`<tr><td>${t.id}</td><td>${esc(t.name)}</td><td class="muted">${esc(t.description||'')}</td>
-    <td class="muted">${t.can_have_gateways?'是':'否'}</td><td class="muted">${t.private_gateways_limit||0}</td>
-    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${t.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${t.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无用户配置</td></tr>`;
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户配置</h2>${adminBtn('<button onclick="newTenant()">+ 新建用户配置</button>')}</div>
-    <table><thead><tr><th>ID</th><th>名称</th><th>描述</th><th>可拥有网关</th><th>私有网关上限</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  const rows = state.tenants.map(t=>{
+    const unlimited = +t.private_gateways_unlimited === 1;
+    return `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td class="muted">${esc(t.description||'')}</td>
+    <td class="muted">${unlimited ? t('无限制') : t('上限') + ' ' + (t.private_gateways_limit||0)}</td>
+    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${t.id})">${t('编辑')}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${t.id}))">${t('删除')}</button>`)}</td></tr>`;
+  }).join('')||`<tr><td colspan="5" class="muted">${t('暂无用户配置')}</td></tr>`;
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('用户配置')}</h2>${adminBtn(`<button onclick="newTenant()">${t('+ 新建用户配置')}</button>`)}</div>
+    <table><thead><tr><th>ID</th><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('私有网关上限')}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function tenantForm(t){
-  t = t||{};
-  return `<label>名称</label><input id="t_name" value="${esc(t.name||'')}">
-  <label>描述</label><input id="t_desc" value="${esc(t.description||'')}">
-  <div class="row">
-    <div><label>可拥有网关</label><select id="t_gw">${(t.can_have_gateways?'<option value="1" selected>是</option><option value="0">否</option>':'<option value="1">是</option><option value="0" selected>否</option>')}</select></div>
-    <div><label>私有网关上限</label><input id="t_limit" value="${t.private_gateways_limit||0}"></div>
+  t = t || {};
+  const unlimited = +t.private_gateways_unlimited === 1;
+  const limit = t.private_gateways_limit || 0;
+  return `<label>${t('名称')}</label><input id="t_name" value="${esc(t.name||'')}">
+  <label>${t('描述')}</label><input id="t_desc" value="${esc(t.description||'')}">
+  <div class="row" style="align-items:flex-end">
+    <div><label>${t('启用私有网关上限')}</label>
+      <label class="check" style="margin:6px 0 0">
+        <input type="checkbox" id="t_unlimited" ${unlimited?'':'checked'} onchange="document.getElementById('t_limit_div').style.display=this.checked?'':'none'">
+        <span>${unlimited?t('已关闭（无限额）'):t('已启用（受上限约束）')}</span>
+      </label>
+      <div class="muted" style="font-size:11px;margin-top:4px">${t('取消勾选后该用户配置可创建任意数量的网关；勾选时按下方上限约束。')}</div>
+    </div>
+    <div id="t_limit_div" style="${unlimited?'display:none':''}"><label>${t('私有网关上限')}</label><input id="t_limit" type="number" min="0" value="${limit}"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不允许创建网关；正值 = 允许的最大私有网关数。')}</div></div>
   </div>`;
 }
 function newTenant(){
-  openModal(`<h3>新建用户配置</h3>${tenantForm()}
-   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveTenant(0))">保存</button></div>`);
+  // 新建默认：启用上限 + 上限 0（用户明确要求"默认创建的用户为有上限且上限为0"）
+  openModal(`<h3>${t('新建用户配置')}</h3>${tenantForm({ private_gateways_unlimited: 0, private_gateways_limit: 0 })}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(0))">${t('保存')}</button></div>`);
 }
 async function saveTenant(id){
-  const body={ name:v('t_name'), description:v('t_desc'), can_have_gateways:+v('t_gw'), private_gateways_limit:+v('t_limit') };
+  const unlimited = !document.getElementById('t_unlimited').checked; // 勾选=受限，不勾=无限
+  const body = {
+    name: v('t_name'),
+    description: v('t_desc'),
+    private_gateways_unlimited: unlimited ? 1 : 0,
+    private_gateways_limit: +v('t_limit') || 0,
+  };
   const r = id ? await api('PUT',`/api/tenants/${id}`,body) : await api('POST','/api/tenants',body);
   if(r.error){alert(t(r.error));return;} closeModal(); viewTenants();
 }
 async function editTenant(id){
   const t = state.tenants.find(x=>x.id==id)||{};
-  openModal(`<h3>编辑用户配置</h3>${tenantForm(t)}
-   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveTenant(${id}))">保存</button></div>`);
+  openModal(`<h3>${t('编辑用户配置')}</h3>${tenantForm(t)}
+   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(${id}))">${t('保存')}</button></div>`);
 }
 async function delTenant(id){
-  if(!confirm('删除用户配置？其下资源将回退到默认用户配置。')) return;
+  if(!confirm(t('删除用户配置？其下资源将回退到默认用户配置。'))) return;
   const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(t(r.error));return;} viewTenants();
 }
 function deviceProfileForm(d){

@@ -177,6 +177,8 @@ class Database
                 ['fuota_deployments', 'mc_group_ans', 'INTEGER NOT NULL DEFAULT 0'],
                 ['fuota_deployments', 'status_ans', 'INTEGER NOT NULL DEFAULT 0'],
                 ['fuota_deployments', 'updated_at', 'INTEGER NOT NULL DEFAULT 0'],
+                // 租户：私有网关上限开关（替换旧的 can_have_gateways）
+                ['tenants', 'private_gateways_unlimited', 'INTEGER NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
@@ -187,7 +189,7 @@ class Database
             // 兜底：确保令牌表 / 事件表 / 租户表存在
             $pdo->exec('CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INTEGER DEFAULT 0, app_id INTEGER DEFAULT 0, message TEXT DEFAULT \'\', raw_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT \'\', can_have_gateways INTEGER NOT NULL DEFAULT 1, private_gateways_limit INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT \'\', private_gateways_limit INTEGER NOT NULL DEFAULT 0, private_gateways_unlimited INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             // ---- 后期模块表（BasicStation/Relay/FUOTA/Roaming） ----
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, gateway_id TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', lns_secret TEXT DEFAULT \'\', ca_cert TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, relay_dev_eui TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', created_at INTEGER NOT NULL)');
@@ -201,6 +203,20 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INTEGER PRIMARY KEY AUTOINCREMENT, application_id INTEGER NOT NULL, tenant_id INTEGER DEFAULT 0, kind TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', group_type TEXT NOT NULL DEFAULT \'C\', mc_addr TEXT DEFAULT \'\', mc_nwk_s_key TEXT DEFAULT \'\', mc_app_s_key TEXT DEFAULT \'\', f_cnt INTEGER NOT NULL DEFAULT 0, dr INTEGER NOT NULL DEFAULT 0, frequency INTEGER NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INTEGER NOT NULL DEFAULT 0, class_c_scheduling_type TEXT NOT NULL DEFAULT \'DELAY\', created_at INTEGER NOT NULL)');
             self::ensureColumn('uplinks', 'phy_payload', 'TEXT DEFAULT \'\'');
+            // API 调用日志表
+            $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path TEXT DEFAULT \'\', status INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0, ip TEXT DEFAULT \'\', user_id INTEGER NOT NULL DEFAULT 0, username TEXT DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INTEGER NOT NULL DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, query TEXT DEFAULT \'\', body_size INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at)');
+            // 数据迁移：旧字段 can_have_gateways=1 → 保留无限额行为（设 unlimited=1），避免现有用户被"限额=0"卡住
+            try {
+                $cols = $pdo->query("PRAGMA table_info(tenants)")->fetchAll(\PDO::FETCH_COLUMN, 1);
+                if (in_array('can_have_gateways', $cols, true) && in_array('private_gateways_unlimited', $cols, true)) {
+                    $pdo->exec("UPDATE tenants SET private_gateways_unlimited=1 WHERE can_have_gateways=1");
+                }
+            } catch (\Throwable $e) {
+                error_log('migrate tenants (sqlite) data copy: ' . $e->getMessage());
+            }
         } else {
             // MySQL：按 ; 拆分执行（单条 DDL 失败仅记录日志，不中断整库迁移，确保后续兜底 CREATE 仍能执行）
             foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
@@ -225,7 +241,7 @@ class Database
             if (!self::mysqlColumnExists('events', 'raw_json')) {
                 $pdo->exec('ALTER TABLE events ADD COLUMN raw_json TEXT');
             }
-            $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(128) NOT NULL, description VARCHAR(255) DEFAULT \'\', can_have_gateways TINYINT NOT NULL DEFAULT 1, private_gateways_limit INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(128) NOT NULL, description VARCHAR(255) DEFAULT \'\', private_gateways_limit INT NOT NULL DEFAULT 0, private_gateways_unlimited TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             // ---- 后期模块表（BasicStation/Relay/FUOTA/Roaming） ----
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, gateway_id VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', lns_secret VARCHAR(128) DEFAULT \'\', ca_cert TEXT, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, relay_dev_eui VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', created_at INT NOT NULL)');
@@ -238,6 +254,8 @@ class Database
             // 兜底：确保后期模块表存在（防止旧库升级时漏建；与 schema 文件定义一致）
             $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INT AUTO_INCREMENT PRIMARY KEY, application_id INT NOT NULL, tenant_id INT DEFAULT 0, kind VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL DEFAULT 1, config_json TEXT, created_at INT NOT NULL, INDEX idx_integrations_app (application_id))');
             $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', group_type VARCHAR(8) NOT NULL DEFAULT \'C\', mc_addr VARCHAR(16) DEFAULT \'\', mc_nwk_s_key VARCHAR(64) DEFAULT \'\', mc_app_s_key VARCHAR(64) DEFAULT \'\', f_cnt INT NOT NULL DEFAULT 0, dr INT NOT NULL DEFAULT 0, frequency INT NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INT NOT NULL DEFAULT 0, class_c_scheduling_type VARCHAR(8) NOT NULL DEFAULT \'DELAY\', created_at INT NOT NULL, INDEX idx_mg_app (application_id))');
+            // API 调用日志表
+            $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INT AUTO_INCREMENT PRIMARY KEY, created_at INT NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path VARCHAR(255) DEFAULT \'\', status INT NOT NULL DEFAULT 0, latency_ms INT NOT NULL DEFAULT 0, ip VARCHAR(64) DEFAULT \'\', user_id INT NOT NULL DEFAULT 0, username VARCHAR(64) DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INT NOT NULL DEFAULT 0, application_id INT NOT NULL DEFAULT 0, query VARCHAR(512) DEFAULT \'\', body_size INT NOT NULL DEFAULT 0, INDEX idx_api_logs_tenant (tenant_id), INDEX idx_api_logs_app (application_id), INDEX idx_api_logs_created (created_at))');
             foreach ([
                 ['devices', 'last_seen', 'INT DEFAULT 0'],
                 ['devices', 'device_profile_id', 'INT DEFAULT 0'],
@@ -313,6 +331,8 @@ class Database
                 ['fuota_deployments', 'mc_group_ans', 'TINYINT NOT NULL DEFAULT 0'],
                 ['fuota_deployments', 'status_ans', 'TINYINT NOT NULL DEFAULT 0'],
                 ['fuota_deployments', 'updated_at', 'INT NOT NULL DEFAULT 0'],
+                // 租户：私有网关上限开关
+                ['tenants', 'private_gateways_unlimited', 'TINYINT NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 if (!self::mysqlColumnExists($tbl, $col)) {
                     $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");
@@ -320,6 +340,14 @@ class Database
             }
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INT AUTO_INCREMENT PRIMARY KEY, label VARCHAR(32) NOT NULL UNIQUE, kek VARCHAR(64) DEFAULT \'\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INT AUTO_INCREMENT PRIMARY KEY, kind VARCHAR(16) NOT NULL, dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', gw_id VARCHAR(32) NOT NULL DEFAULT \'\', peer TEXT, ul_tmst INT NOT NULL DEFAULT 0, region VARCHAR(16) NOT NULL DEFAULT \'\', freq DOUBLE NOT NULL DEFAULT 0, datr VARCHAR(16) DEFAULT \'\', dl_delay INT NOT NULL DEFAULT 0, created_at INT NOT NULL, expires_at INT NOT NULL DEFAULT 0, INDEX idx_rp_dev (dev_eui), INDEX idx_rp_addr (dev_addr))');
+            // 数据迁移：旧字段 can_have_gateways=1 → 保留无限额行为
+            if (self::mysqlColumnExists('tenants', 'can_have_gateways') && self::mysqlColumnExists('tenants', 'private_gateways_unlimited')) {
+                try {
+                    $pdo->exec("UPDATE tenants SET private_gateways_unlimited=1 WHERE can_have_gateways=1");
+                } catch (\Throwable $e) {
+                    error_log('migrate tenants (mysql) data copy: ' . $e->getMessage());
+                }
+            }
         }
         // 确保存在一条 EU868「默认模板」，供未指定设备模板的设备回退（幂等）
         DeviceProfile::ensureDefault();

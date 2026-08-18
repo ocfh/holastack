@@ -25,14 +25,23 @@ class Tenant
         if (empty($p['name'])) {
             return ['error' => 'name required'];
         }
+        // 私有网关上限：
+        //   private_gateways_unlimited=1 → 关闭上限，无限创建
+        //   private_gateways_unlimited=0 → 按 private_gateways_limit 限制（默认 0 = 不允许创建网关）
+        // 新建用户配置默认 = 受限 + 上限 0。
+        $unlimited = !empty($p['private_gateways_unlimited']) ? 1 : 0;
+        $limit = (int) ($p['private_gateways_limit'] ?? 0);
+        if ($unlimited) {
+            $limit = 0;
+        }
         Database::execute(
-            "INSERT INTO tenants (name, description, can_have_gateways, private_gateways_limit, created_at)
+            "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at)
              VALUES (?,?,?,?,?)",
             [
                 $p['name'],
                 $p['description'] ?? '',
-                (int) ($p['can_have_gateways'] ?? 1),
-                (int) ($p['private_gateways_limit'] ?? 0),
+                $limit,
+                $unlimited,
                 time(),
             ]
         );
@@ -47,11 +56,19 @@ class Tenant
         }
         $set = [];
         $params = [];
-        foreach (['name', 'description', 'can_have_gateways', 'private_gateways_limit'] as $c) {
+        foreach (['name', 'description'] as $c) {
             if (array_key_exists($c, $p)) {
                 $set[] = "$c=?";
                 $params[] = is_numeric($p[$c]) ? (int) $p[$c] : $p[$c];
             }
+        }
+        if (array_key_exists('private_gateways_limit', $p)) {
+            $set[] = 'private_gateways_limit=?';
+            $params[] = max(0, (int) $p['private_gateways_limit']);
+        }
+        if (array_key_exists('private_gateways_unlimited', $p)) {
+            $set[] = 'private_gateways_unlimited=?';
+            $params[] = !empty($p['private_gateways_unlimited']) ? 1 : 0;
         }
         if (empty($set)) {
             return ['id' => $id];

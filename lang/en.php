@@ -252,10 +252,21 @@ return [
     // ---- Tenant form ----
     '可拥有网关' => 'Can own gateways',
     '私有网关上限' => 'Private gateway limit',
+    '启用私有网关上限' => 'Enforce private gateway limit',
+    '已关闭（无限额）' => 'Off (unlimited)',
+    '已启用（受上限约束）' => 'On (limited)',
+    '取消勾选后该用户配置可创建任意数量的网关；勾选时按下方上限约束。' => 'Uncheck to allow this tenant to create any number of gateways; when checked, limited by the value below.',
+    '0 = 不允许创建网关；正值 = 允许的最大私有网关数。' => '0 = no gateways allowed; positive = max private gateways.',
+    '无限制' => 'Unlimited',
+    '上限' => 'Limit',
+    '+ 新建用户配置' => '+ New Tenant',
     '新建用户配置' => 'New Tenant',
     '编辑用户配置' => 'Edit Tenant',
     '确认删除该用户配置？其下资源将回退到默认用户配置。' => 'Delete this tenant? Its resources fall back to the default tenant.',
     '暂无用户配置' => 'No tenants',
+
+    // ---- Site footer ----
+    '页面底部 Footer（支持 HTML，如 © {Y} HolaStack &nbsp;|&nbsp; <a href="https://example.com">官网</a>；留空使用默认"© 今年年份 HolaStack"）' => 'Page footer (HTML allowed, e.g. © {Y} HolaStack &nbsp;|&nbsp; <a href="https://example.com">Home</a>; empty uses default "© {Y} HolaStack")',
 
     // ---- API keys ----
     '选择应用…' => 'Select application…',
@@ -269,6 +280,27 @@ return [
     '请立即复制保存，关闭后将无法再查看明文：' => 'Copy and save it now; the plaintext cannot be viewed after closing:',
     '确认删除该 API 密钥？' => 'Delete this API key?',
     'Token(预览)' => 'Token (preview)',
+
+    // ---- API call logs ----
+    'API 调用日志' => 'API Call Logs',
+    '路径包含' => 'Path contains',
+    '状态码' => 'Status',
+    '方法' => 'Method',
+    '耗时' => 'Latency',
+    '用户' => 'User',
+    '应用' => 'Application',
+    'Body' => 'Body',
+    '路径' => 'Path',
+    '状态' => 'Status',
+    '全部' => 'All',
+    '全部租户' => 'All Tenants',
+    '全部应用' => 'All Applications',
+    '应用筛选' => 'Apply filter',
+    '暂无日志' => 'No logs',
+    '共' => 'Total',
+    '条' => 'entries',
+    '（仅保留最近 10000 条）' => ' (latest 10,000 kept)',
+    'ip' => 'IP',
 
     // ---- Integrations ----
     '该应用暂无外部集成' => 'No integrations for this application',
