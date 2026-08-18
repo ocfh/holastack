@@ -112,6 +112,14 @@ class ApiLog
             $where[] = 'path LIKE ?';
             $params[] = '%' . (string) $filters['path_contains'] . '%';
         }
+        if (!empty($filters['kind'])) {
+            $kind = (string) $filters['kind'];
+            if ($kind === 'api') {
+                $where[] = "(path = '/api' OR path LIKE '/api/%')";
+            } elseif ($kind === 'v1') {
+                $where[] = "(path = '/v1' OR path LIKE '/v1/%')";
+            }
+        }
         if (!empty($filters['since'])) {
             $where[] = 'created_at>=?';
             $params[] = (int) $filters['since'];

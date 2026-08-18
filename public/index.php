@@ -22,8 +22,18 @@ $path = rtrim($path, '/');
 if ($path === '') {
     $path = '/';
 }
-// 标记：是否需要为本次请求写 API 日志（仅 /api/* 与 /v1/* 记）
-$logApi = ($path === '/api' || strpos($path, '/api/') === 0 || $path === '/v1' || strpos($path, '/v1/') === 0);
+// PHP 内置开发服务器（php -S）：当请求静态资源（public/assets/*、favicon.ico、robots.txt 等）
+// 时，路由脚本必须返回 false 才能让 server 直接发送文件，否则会被当作 PHP 处理并落到
+// renderPage() 输出 HTML，让 <script src="/assets/*.js"> 拿到 SPA 整页、脚本解析失败。
+// 生产环境（Nginx/Apache）由 web server 自身处理静态资源，本分支不执行。
+if (PHP_SAPI === 'cli-server') {
+    $staticFile = __DIR__ . $path;
+    if ($path !== '/' && is_file($staticFile)) {
+        return false;
+    }
+}
+// 标记：是否需要为本次请求写 API 日志（仅 /v1/* 记；管理界面 /api/* 不记，避免日志被自身调用淹没）
+$logApi = ($path === '/v1' || strpos($path, '/v1/') === 0);
 if ($logApi) {
     $__apiLogStart = microtime(true);
     $__apiLogCtx = [
@@ -152,6 +162,15 @@ function handleApi(string $method, string $path): array
     $resource = $segs[0] ?? '';
     $body = in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true) ? getJsonBody() : [];
     $get = $_GET;
+    // 分页工具：admin/management 路由（/api/...）与 v1 应用路由（/v1/...）共用
+    $limitOf  = static function (string $key) use ($get): int {
+        $n = (int) ($get[$key] ?? 50);
+        return max(1, min($n, 500));
+    };
+    $offsetOf = static function (string $key) use ($get): int {
+        $n = (int) ($get[$key] ?? 0);
+        return max(0, $n);
+    };
 
     // 公开端点
     if ($resource === 'login') {
@@ -275,17 +294,21 @@ function handleApi(string $method, string $path): array
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listUplinks($devId, $appId, 200, $tid)];
+            $lim = $limitOf('limit'); $off = $offsetOf('offset');
+            return ['data' => WebApp::listUplinks($devId, $appId, $lim, $tid, $off), 'total' => WebApp::countUplinks($devId, $appId, $tid), 'limit' => $lim, 'offset' => $off];
         case 'downlinks':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listDownlinks($devId, $appId, 200, $tid)];
+            $lim = $limitOf('limit'); $off = $offsetOf('offset');
+            return ['data' => WebApp::listDownlinks($devId, $appId, $lim, $tid, $off), 'total' => WebApp::countDownlinks($devId, $appId, $tid), 'limit' => $lim, 'offset' => $off];
         case 'events':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $gwId = isset($get['gw_id']) ? trim($get['gw_id']) : null;
+            $type = isset($get['type']) ? trim($get['type']) : null;
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listEvents($devId, $gwId, 200, $tid)];
+            $lim = $limitOf('limit'); $off = $offsetOf('offset');
+            return ['data' => WebApp::listEvents($devId, $gwId, $type, $lim, $tid, $off), 'total' => WebApp::countEvents($devId, $gwId, $type, $tid), 'limit' => $lim, 'offset' => $off];
         case 'users':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteUser((int) $segs[1]);
@@ -433,10 +456,10 @@ function handleApi(string $method, string $path): array
                 'path_contains' => isset($get['path_contains']) ? trim((string) $get['path_contains']) : null,
                 'since' => isset($get['since']) ? (int) $get['since'] : null,
             ];
-            $limit = isset($get['limit']) ? (int) $get['limit'] : 200;
-            $offset = isset($get['offset']) ? (int) $get['offset'] : 0;
+            $limit = $limitOf('limit');
+            $offset = $offsetOf('offset');
             $out = ApiLog::list($u, $filters, $limit, $offset);
-            return ['data' => $out['rows'], 'total' => $out['total']];
+            return ['data' => $out['rows'], 'total' => $out['total'], 'limit' => $limit, 'offset' => $offset];
         default:
             return ['error' => 'unknown endpoint'];
     }
@@ -497,10 +520,7 @@ function handleAppApi(string $method, string $path): array
         }
         return Database::fetch("SELECT * FROM devices WHERE dev_eui=? AND app_id=?", [$devEui, $appId]);
     };
-    $limitOf = static function (string $key) use ($get): int {
-        $n = (int) ($get[$key] ?? 50);
-        return max(1, min($n, 500));
-    };
+    // $limitOf / $offsetOf 由 handleApi() 顶部统一提供
 
     switch ($sub) {
         case '':
@@ -684,6 +704,20 @@ function renderPage(): string
   table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:10px;overflow:hidden}
   th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px}
   th{color:var(--mut);font-weight:600;background:var(--bg-subtle)} tr:hover td{background:var(--bg-hover)}
+  table.sortable th{cursor:default;user-select:none}
+  table.sortable th[onclick]{cursor:pointer}
+  table.sortable th[onclick]:hover{background:var(--bg-chip);color:var(--txt)}
+  table.sortable th .sort-arrow{font-size:11px;display:inline-block;width:10px}
+  table.sortable th select{font-size:12px;padding:2px 6px}
+  table.sortable th select:hover{background:var(--bg-chip)}
+  /* 右上角 toast 提示条：渐变卡片（与登录页公告框同风格），4 种状态色 + 复制成功专用色 */
+  /*  之前引用 --bg-card/--ok-bg 等未定义变量 → background 失效 → 透明。改用 --bg-subtle/--panel 渐变 + 类型色边框/左侧色条。 */
+  .toast{background:linear-gradient(135deg,var(--bg-subtle),var(--panel));color:var(--txt);border:1px solid var(--line);border-left-width:3px;border-radius:10px;box-shadow:0 4px 18px rgba(var(--shadow-rgba),.14)}
+  .toast.ok{border-left-color:var(--ok)}
+  .toast.info{border-left-color:var(--acc)}
+  .toast.warn{border-left-color:var(--warn)}
+  .toast.err{border-left-color:var(--err)}
+  .toast.copy{border-left-color:var(--ok)}
   button,.btn{background:var(--acc);color:var(--txt-on-acc);border:0;padding:8px 14px;border-radius:7px;cursor:pointer;font-weight:600}
   button.ghost{background:var(--bg-chip);color:var(--txt)} button.danger{background:var(--tag-err-bg);color:var(--err)}
   input,select,textarea{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;font-family:inherit}
@@ -798,7 +832,7 @@ function renderPage(): string
   <h1 id="brand"><a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">HolaStack</a></h1>
   <nav id="deskNav" class="desk-nav"></nav>
   <div class="spacer"></div>
-  <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 10px;font-size:16px;line-height:1">🌙</button>
+  <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 9px;line-height:1;display:inline-flex;align-items:center;justify-content:center"></button>
   <span class="who" id="who"></span>
   <button class="ghost tb-account" onclick="changePw()">修改密码</button>
   <button class="ghost tb-account" onclick="logout()">退出</button>
@@ -843,9 +877,15 @@ function rerenderForTheme(){
   if (v === 'apidocs' && typeof viewApiDocs === 'function') return viewApiDocs();
   // 其他页面纯 CSS 驱动，无需重建 DOM
 }
+// 主题切换图标：dark 显示月亮（点切到亮），light 显示太阳（点切到暗）。
+// 16x16 stroke icon，跟随 currentColor 自适应主题色。
+const ICON_MOON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+const ICON_SUN  = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
 function updateThemeIcon(t){
   var btn = document.getElementById('themeToggle');
-  if(btn) btn.textContent = (t === 'dark' ? '🌙' : '☀️');
+  if(!btn) return;
+  btn.innerHTML = (t === 'dark' ? ICON_MOON : ICON_SUN);
+  btn.setAttribute('aria-label', t === 'dark' ? '切换到浅色主题' : '切换到深色主题');
 }
 // 页面加载时同步按钮图标
 updateThemeIcon(getTheme());
@@ -907,12 +947,25 @@ async function applyLanguage(lang){
   location.reload();
 }
 // 让原生 alert/confirm 也走 i18n：浏览器对话框不在 DOM 中，walker 无法翻译。
+// alert 改为右上角 toast（非阻塞）；颜色按文本启发式判断（成功/失败/警告/信息）
+// confirm 保留原生阻塞对话框（用于 if (!confirm(...)) 同步判断；toast 改造需 Promise 化）
 const _origAlert = window.alert;
-window.alert = (m) => _origAlert.call(window, t(m));
+const _toastType = (m) => {
+  const s = String(m || '');
+  if (/失败|错误|不允许|不能|无法|forbidden|error|fail/i.test(s)) return 'err';
+  if (/成功|已|完成|ok|saved|created|updated|deleted/i.test(s)) return 'ok';
+  if (/警告|注意|小心|warn/i.test(s)) return 'warn';
+  return 'info';
+};
+window.alert = (m) => {
+  // toast 工具已 hoist，调用安全
+  if (typeof toast === 'function') return toast(t(m), _toastType(m));
+  return _origAlert.call(window, t(m));
+};
 const _origConfirm = window.confirm;
 window.confirm = (q) => _origConfirm.call(window, t(q));
 
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -979,8 +1032,8 @@ const NAV_GROUPS = [
     {v:'integrations', text:'外部集成'},
     {v:'api-keys', text:'API 密钥'},
     {v:'api-logs', text:'API 调用日志'},
-    {v:'loracalc', text:'LoRa 计算器'},
     {v:'apidocs', text:'API 文档'},
+    {v:'loracalc', text:'LoRa 计算器'},
   ]},
   { label:'系统管理', admin:true, items:[
     {v:'tenants', text:'用户配置'},
@@ -1053,8 +1106,8 @@ const api = async (m,p,body) => {
   const text = await r.text();
   if (r.status === 401) { state.token = null; state.user = null; localStorage.removeItem('elw_token'); renderShell(); throw new Error('unauthorized'); }
   if (r.status === 403) {
-    // 演示账号写操作被后端 guardWrite 拒绝时给出友好提示
-    try { const ej = JSON.parse(text); if (ej.error && ej.error.indexOf('forbidden') !== -1) alert('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'); } catch(e) {}
+    // 演示账号写操作被后端 guardWrite 拒绝时给出友好提示（toast）
+    try { const ej = JSON.parse(text); if (ej.error && ej.error.indexOf('forbidden') !== -1) toast(t('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'), 'warn'); } catch(e) {}
   }
   if (r.status < 200 || r.status >= 300) {
     throw new Error('HTTP ' + r.status + '：' + text.slice(0, 300));
@@ -1072,10 +1125,284 @@ const api = async (m,p,body) => {
 const hex = s => s || '-';
 const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
+/**
+ * 通用提示条（toast）：右上角悬浮，2.5s 后自动消失；同类合并；最多 3 条堆叠
+ *   type: 'ok' | 'info' | 'warn' | 'err' | 'copy' （决定配色；'copy' = 复制成功，绿色 ok 色）
+ *   支持点击 × 立即关闭
+ */
+function toast(msg, type){
+  const host = document.getElementById('toastHost') || (() => {
+    const el = document.createElement('div');
+    el.id = 'toastHost';
+    el.style.cssText = 'position:fixed;top:18px;right:18px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none';
+    document.body.appendChild(el);
+    return el;
+  })();
+  const item = document.createElement('div');
+  item.className = 'toast ' + (type || 'info');
+  // 视觉（背景/边框/圆角/阴影）统一走 .toast CSS 类；inline 只保留布局与动画
+  item.style.cssText = 'pointer-events:auto;min-width:180px;max-width:380px;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.45;opacity:0;transform:translateX(20px);transition:opacity .2s, transform .2s';
+  // 颜色按 type 走 CSS class
+  const text = document.createElement('div');
+  text.style.cssText = 'flex:1;word-break:break-word';
+  text.textContent = msg;
+  const close = document.createElement('button');
+  close.textContent = '×';
+  close.style.cssText = 'background:transparent;border:0;color:inherit;opacity:.6;cursor:pointer;font-size:18px;line-height:1;padding:0 0 0 4px';
+  close.onclick = () => removeToast(item);
+  item.appendChild(text);
+  item.appendChild(close);
+  // 限制最多 3 条
+  while (host.children.length >= 3) host.removeChild(host.firstChild);
+  host.appendChild(item);
+  // 触发动画
+  requestAnimationFrame(() => { item.style.opacity = '1'; item.style.transform = 'translateX(0)'; });
+  setTimeout(() => removeToast(item), 2500);
+}
+function removeToast(item){
+  if (!item || !item.parentNode) return;
+  item.style.opacity = '0';
+  item.style.transform = 'translateX(20px)';
+  setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 220);
+}
+/**
+ * hex → 文本（UTF-8 解码）
+ *   不可打印字节（控制字符 / 非 UTF-8）替换为 '·'；空字符串返回 '-'。
+ *   仅作展示用，不改变原始 hex 字段（仍可在"JSON"弹窗看到原值）。
+ */
+const hexToText = (s) => {
+  if (!s) return '-';
+  const clean = String(s).replace(/\s+/g, '');
+  if (!clean) return '-';
+  if (!/^[0-9a-fA-F]+$/.test(clean) || (clean.length & 1)) return s; // 不是合法 hex，原样返回
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.substr(i*2, 2), 16);
+  try {
+    // 先按 UTF-8 解码；含非 UTF-8 字节时浏览器会替换为 U+FFFD
+    const txt = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    // 控制字符（除 \t \n \r）替换为 '·'，便于对齐
+    return txt.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '·');
+  } catch (_) {
+    return s;
+  }
+};
+
 function showLoader(){ const l=document.getElementById('loader'); if(l) l.classList.add('show'); }
 function hideLoader(){ const l=document.getElementById('loader'); if(l) l.classList.remove('show'); }
 // 弹窗内保存/删除/发送：显示遮罩→执行异步操作→finally 隐藏，避免操作耗时无反馈、或接口卡住时页面无响应
 async function busy(label, fn){ showLoader(label); try { return await fn(); } finally { hideLoader(); } }
+
+// ===== 通用可排序/可筛选表格 =====
+// 排序规则（极简版）：
+//   - 默认只有「时间」列才可排序（firstDir=desc），其它列通过 sortable:false 关闭
+//   - 业务方需要给非时间列加排序时，单独给该列去掉 sortable:false，并指定 firstDir
+//   - 状态列（type='status'）若需要排序：opts.values 的顺序就是 sort 顺序（如 error > warn > info）
+/**
+ * 构造带「点击表头排序 + 状态下拉筛选」的表格 HTML。
+ * 排序与状态筛选完全在内存中完成（基于传入的 rows），不重新请求后端。
+ *
+ * 字段：
+ *  - id 容器 id（用于点击事件作用域）
+ *  - stateKey 排序状态写入 state[stateKey]，键形如 {col:'time', dir:'desc'}
+ *  - cols: [{key, label, type, firstDir?, sortable?, opts?}]
+ *      type: 'time' | 'num' | 'str' | 'status' | 'raw'  ← status 列会渲染下拉；raw 是占位列
+ *      firstDir: 'asc' | 'desc'   ← 该列首次点击时的方向（time 列习惯 desc，其余 asc）
+ *      sortable: false            ← 关闭该列排序：不显示箭头 + 不响应点击（仅 status 列还可保留下拉筛选）
+ *      opts: 当 type='status' 时必填，{values:[{value,label,cls?}], getValue:row=>row.status}
+ *  - rows: 当前数据集
+ *  - rowHtml: (row) => string   ← 单行 HTML
+ *  - emptyText: 数据空时显示的 colspan
+ *  - defaultSort: {col, dir}
+ *  - filterStatus: {col, value}   ← 当前状态过滤
+ *  - onSortChange: (newSort) => void   ← 可选：排序变化时通知外层（用于持久化或重新 fetch）
+ */
+function buildSortableTable(cfg){
+  // 把 cfg 暴露到 window 上，让 _tableToggleSort 能在点表头时查 firstDir
+  if (cfg.refresh) {
+    window.__tableCfg = window.__tableCfg || {};
+    window.__tableCfg[cfg.refresh] = cfg;
+  }
+  const sort = cfg.state[cfg.stateKey] || cfg.defaultSort;
+  // 状态筛选：支持多列同时筛（cfg.filterStatusList 数组），单列 cfg.filterStatus 兼容
+  //   形如 [{col:'level', value:'error'}, {col:'type', value:'uplink'}]
+  const filterList = cfg.filterStatusList
+    ? cfg.filterStatusList
+    : (cfg.filterStatus ? [cfg.filterStatus] : []);
+  const fk = cfg.filterStatus ? cfg.filterStatus.col : null;
+  const fv = cfg.filterStatus ? cfg.filterStatus.value : '';
+  // 应用状态过滤（按列分别匹配；多列 AND 关系）
+  let rows = cfg.rows || [];
+  for (const f of filterList) {
+    if (!f || !f.col || !f.value) continue;
+    const fcol = cfg.cols.find(c => c.key === f.col);
+    if (fcol && fcol.opts && fcol.opts.getValue) {
+      const getV = fcol.opts.getValue;
+      // 支持「全部/具体值/类别（2xx/4xx）」三种匹配
+      const opt = fcol.opts.values.find(o => o.value === f.value);
+      const matchFn = opt && opt.match ? opt.match : (v => String(v) === f.value);
+      rows = rows.filter(r => matchFn(getV(r)));
+    }
+  }
+  // 应用排序
+  if (sort && sort.col) {
+    const c = cfg.cols.find(x => x.key === sort.col);
+    if (c) {
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      rows = rows.slice().sort((a,b) => {
+        let va, vb;
+        if (c.type === 'time') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
+        else if (c.type === 'num') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
+        else if (c.type === 'status') {
+          // 状态列：按 opts.values 数组的「下标」排序（业务顺序）
+          //   - DL_STATUS 示例：[pending, scheduled, sent, acknowledged, failed, timeout, error]
+          //   - desc 时 error(6) 排首，pending(0) 排末（业务严重度降序）
+          //   - 不在 values 列表里的"未知状态"统一排到末尾（不参与业务顺序）
+          const vals = c.opts && c.opts.values ? c.opts.values : [];
+          const getV = c.opts && c.opts.getValue ? c.opts.getValue : (r => r[c.key]);
+          const vaRaw = getV(a), vbRaw = getV(b);
+          const ia = vals.findIndex(o => String(o.value) === String(vaRaw));
+          const ib = vals.findIndex(o => String(o.value) === String(vbRaw));
+          const idxA = ia >= 0 ? ia : Number.MAX_SAFE_INTEGER;
+          const idxB = ib >= 0 ? ib : Number.MAX_SAFE_INTEGER;
+          // 索引相等时（如两个都是未知状态）按 value 字典序做稳定排序
+          if (idxA === idxB) return String(vaRaw ?? '').localeCompare(String(vbRaw ?? '')) * dir;
+          va = idxA; vb = idxB;
+        }
+        else { va = String(cfg.cellValue(a, c.key) ?? ''); vb = String(cfg.cellValue(b, c.key) ?? ''); }
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+        return 0;
+      });
+    }
+  }
+  // 表头
+  const arrow = (k) => {
+    if (!sort || sort.col !== k) return '<span class="sort-arrow" style="opacity:.3;margin-left:4px">↕</span>';
+    return sort.dir === 'asc'
+      ? '<span class="sort-arrow" style="opacity:1;margin-left:4px;color:var(--acc)">↑</span>'
+      : '<span class="sort-arrow" style="opacity:1;margin-left:4px;color:var(--acc)">↓</span>';
+  };
+  const header = cfg.cols.map(c => {
+    // 是否可排序：默认 true（除 raw 占位列）；c.sortable=false 显式关闭（不显示箭头 + 不响应点击）
+    // status 类型列默认 true（业务顺序排序）；如不需要可在列定义里 sortable:false（只保留下拉筛选）
+    const sortable = c.sortable !== false && c.type !== 'raw';
+    const cursor = sortable ? 'cursor:pointer' : '';
+    const title = sortable ? `点表头排序（${c.label}）` : '';
+    const onclick = sortable
+      ? ` onclick="window['${cfg.stateKey}_sort']('${c.key}')"`
+      : '';
+    if (c.type === 'status') {
+      // 状态列表头：下拉负责筛选，箭头仅在 sortable=true 时显示
+      //   - opts.values 是「业务顺序」（用于 sort 时按下标排），如 [info, warn, error] 让 desc 时 error 排前
+      //   - 若 values 第一项 value 非空，会自动前置「全部」选项（value=''），UX 不变
+      const vals = c.opts.values || [];
+      const allOpt = (vals[0] && vals[0].value !== '') ? [{value:'',label:'全部'}, ...vals] : vals;
+      // 命中本列的当前筛选值（多列筛选 filterStatusList）
+      const curF = filterList.find(f => f.col === c.key);
+      const curVal = curF ? curF.value : '';
+      const sel = `<select style="font-weight:600;background:transparent;border:0;color:var(--txt);${sortable?'cursor:pointer':'cursor:default'}" onchange="event.stopPropagation();window['${cfg.stateKey}_fstatus']('${c.key}', this.value)">` +
+        allOpt.map(o => `<option value="${esc(o.value)}" ${o.value===curVal?'selected':''}>${esc(o.label)}</option>`).join('') +
+        `</select>`;
+      return `<th style="${cursor}" ${title?`title="${title}"`:''} ${onclick}>${sel}${sortable?arrow(c.key):''}</th>`;
+    }
+    return `<th style="${cursor}" ${title?`title="${title}"`:''} ${onclick}>${esc(c.label)}${sortable?arrow(c.key):''}</th>`;
+  }).join('');
+  // 行
+  const bodyHtml = rows.length
+    ? rows.map(r => cfg.rowHtml(r)).join('')
+    : `<tr><td colspan="${cfg.cols.length}" class="muted">${esc(cfg.emptyText||'暂无数据')}</td></tr>`;
+  return `<table class="sortable"><thead><tr>${header}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+}
+
+// 通用排序调度：state 上读/写 {col, dir}，三态循环（firstDir → 翻转 → 清除）
+//   - 点新列：进入 cfg[col].firstDir
+//     time 列习惯 desc（最新在上），数字列习惯 asc（弱信号 / 小值排前 → 排查问题），
+//     状态列习惯 desc（失败 / 错误排前），字符串列习惯 asc（字典序 / 0-9）
+//   - 点同列：翻转 dir（firstDir↔other）
+//   - 再点一次：清除排序，回原始顺序
+// key 是 state 上的字段名（upsSort / dlsSort / evsSort / apiLogSort），re 是对应刷新函数名
+function _tableToggleSort(key, re, col){
+  const cur = state[key] || {col:null, dir:'desc'};
+  if (cur.col !== col) {
+    // 新列：进入 firstDir
+    const cfg = (window.__tableCfg && window.__tableCfg[re]) || null;
+    const c = cfg && cfg.cols ? cfg.cols.find(x => x.key === col) : null;
+    const firstDir = (c && c.firstDir) ? c.firstDir : 'desc';
+    state[key] = {col, dir:firstDir};
+  }
+  else {
+    // 同列：根据 firstDir 判断"再点是否进入清除"
+    const cfg = (window.__tableCfg && window.__tableCfg[re]) || null;
+    const c = cfg && cfg.cols ? cfg.cols.find(x => x.key === col) : null;
+    const firstDir = (c && c.firstDir) ? c.firstDir : 'desc';
+    if (cur.dir === firstDir) state[key] = {col, dir: firstDir==='desc' ? 'asc' : 'desc'}; // 翻转
+    else state[key] = {col:null, dir:'desc'}; // 已翻转过，再点清除
+  }
+  window[re]();
+}
+// 状态下拉筛选回调：按列写回对应 state 字段
+//   fieldName: 要写入的 state 字段名（如 evsFType），由各 view 注册时指定
+function _tableSetFStatus(fieldName, re, val){
+  state[fieldName] = val;
+  window[re]();
+}
+
+/**
+ * 通用分页条：每页 N 条下拉 + 上一页/下一页/页码 + 跳到 X 页 + 共 N 条
+ *  cfg: { total, limit, offset, pageKey, limitKey, refresh }
+ *   - state[pageKey]   当前页号（1-based）
+ *   - state[limitKey]  每页大小
+ *   - refresh          调 window[refresh]()
+ */
+function buildPager(cfg){
+  const total = +cfg.total || 0;
+  const limit = +cfg.limit || 50;
+  const offset = +cfg.offset || 0;
+  const cur = Math.floor(offset / Math.max(1, limit)) + 1;
+  const pages = Math.max(1, Math.ceil(total / Math.max(1, limit)));
+  const from = total === 0 ? 0 : (offset + 1);
+  const to = Math.min(offset + limit, total);
+  // 窗口化页码：cur-2 .. cur+2
+  const win = [];
+  for (let i = Math.max(1, cur - 2); i <= Math.min(pages, cur + 2); i++) win.push(i);
+  const pageBtn = (p, label, extra) => {
+    const dis = extra && extra.disabled;
+    const cls = extra && extra.cur ? 'btn' : 'ghost';
+    return `<button class="${cls}" style="padding:4px 9px;font-size:12px" ${dis?'disabled':''} onclick="window['${cfg.refresh}__page'](${p})">${label||p}</button>`;
+  };
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:12px;flex-wrap:wrap">
+    <div class="muted" style="font-size:12px">共 <b>${total}</b> 条 · 第 ${from}-${to} 条 · ${pages>0?cur:0} / ${pages} 页</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label style="margin:0;font-size:12px;color:var(--mut)">每页</label>
+      <select style="width:auto;padding:4px 8px;font-size:12px" onchange="window['${cfg.refresh}__limit'](+this.value)">
+        ${[20,50,100,200,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
+      </select>
+      ${pageBtn(Math.max(1, cur-1), '‹ 上一页', {disabled: cur<=1})}
+      ${win[0] > 1 ? pageBtn(1, '1') + (win[0] > 2 ? '<span class="muted">…</span>' : '') : ''}
+      ${win.map(p => pageBtn(p, p, {cur: p===cur})).join('')}
+      ${win[win.length-1] < pages ? (win[win.length-1] < pages-1 ? '<span class="muted">…</span>' : '') + pageBtn(pages, pages) : ''}
+      ${pageBtn(Math.min(pages, cur+1), '下一页 ›', {disabled: cur>=pages})}
+      <label style="margin:0;font-size:12px;color:var(--mut)">跳到</label>
+      <input type="number" min="1" max="${pages}" value="${cur}" style="width:64px;padding:4px 6px;font-size:12px" onchange="window['${cfg.refresh}__page'](+this.value)">
+      <span class="muted" style="font-size:12px">页</span>
+    </div>
+  </div>`;
+}
+function _pagerGo(key, re, page){
+  const lim = +state[key.limitKey] || 50;
+  const total = +state[key.totalKey] || 0;
+  const pages = Math.max(1, Math.ceil(total / lim));
+  const p = Math.max(1, Math.min(pages, page|0));
+  state[key.pageKey] = p;
+  state[key.offsetKey] = (p - 1) * lim;
+  window[re]();
+}
+function _pagerSetLimit(key, re, lim){
+  state[key.limitKey] = +lim;
+  state[key.pageKey] = 1;
+  state[key.offsetKey] = 0;
+  window[re]();
+}
 // 切换页面：显示加载遮罩，渲染完成后（finally）再隐藏；渲染抛错时显示错误提示而非冻结页面。
 // silent=true 用于每 5 秒自动刷新，避免遮罩频繁闪烁。
 async function nav(v, silent=false){
@@ -1218,7 +1545,7 @@ async function tenantFilterHtml(){
   let opts = '';
   try {
     const r = await api('GET','/api/tenants');
-    opts = (r.data||[]).map(t=>`<option value="${t.id}" ${String(state.tenantFilter)===String(t.id)?'selected':''}>${esc(t.name)}</option>`).join('');
+    opts = (r.data||[]).map(row=>`<option value="${row.id}" ${String(state.tenantFilter)===String(row.id)?'selected':''}>${esc(row.name)}</option>`).join('');
   } catch(e){}
   return `<div style="flex:0 0 220px"><label>用户配置筛选</label><select id="tf" onchange="state.tenantFilter=this.value;nav(state.view)"><option value="">全部用户配置</option>${opts}</select></div>`;
 }
@@ -1226,11 +1553,27 @@ async function viewApplications(){
   const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
   const [r, tf] = await Promise.all([api('GET','/api/applications'+q), tenantFilterHtml()]);
   state.apps = r.data||[];
-  const rows = state.apps.map(a=>`<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${esc(a.callback_url||'')}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
-     <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无应用</td></tr>`;
+  const table = buildSortableTable({
+    state, stateKey:'appsSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (a, k) => ({id:a.id, name:a.name, app_eui:a.app_eui, cb:a.callback_url||'', time:a.created_at}[k]),
+    cols:[
+      {key:'id',      label:'ID',        type:'num', firstDir:'asc', sortable:false},
+      {key:'name',    label:'名称',       type:'str', firstDir:'asc', sortable:false},
+      {key:'app_eui', label:'AppEUI',    type:'str', firstDir:'asc', sortable:false},
+      {key:'cb',      label:'回调 URL',   type:'str', firstDir:'asc', sortable:false},
+      {key:'time',    label:'创建时间',   type:'time', firstDir:'desc'},
+      {key:'_raw',    label:'',          type:'raw'},
+    ],
+    rows: state.apps,
+    rowHtml: a => `<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${esc(a.callback_url||'')}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
+     <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`,
+    emptyText:'暂无应用',
+  });
+  window.appsSort_sort = col => _tableToggleSort('appsSort','viewApplications',col);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>应用</h2>${adminBtn('<button onclick="newApplication()">+ 新建应用</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
-    <table><thead><tr><th>ID</th><th>名称</th><th>AppEUI</th><th>回调 URL</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    ${table}`;
 }
 async function viewDevices(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
@@ -1244,62 +1587,121 @@ async function viewDevices(){
   const apps = ar.data||[];
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? esc(a.name) : ('#'+id); };
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.devAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  const rows = state.devs.map(d=>{
-    const online = d.online==='online';
-    const tel = [];
-    if (d.battery!==null && d.battery!==undefined && +d.battery>=0) tel.push('电量'+(+d.battery===0?'外电':(+d.battery)+'%'));
-    if (d.margin!==null && d.margin!==undefined && d.margin!=='') tel.push('余量'+(+d.margin)+'dB');
-    if (d.latitude && +d.latitude!==0 && d.longitude!==null) tel.push('GPS '+ (+d.latitude).toFixed(5)+','+(+d.longitude).toFixed(5));
-    const telStr = tel.length? `<div class="muted" style="font-size:11px">${tel.join(' · ')}</div>`:'';
-    const seen = (d.last_seen_fmt && d.last_seen_fmt!=='-') ? d.last_seen_fmt : '-';
-    return `<tr>
-      <td>${d.id}</td><td>${esc(d.name)}</td>
-      <td class="muted"><span class="pill" style="margin:0">${appName(d.app_id)}</span></td>
-      <td><span class="tag">${d.activation}</span></td>
-      <td><span class="tag ${d.class}">${d.class}</span></td>
-      <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
-      <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(d.dev_addr)}</td>
-      <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
-      <td class="muted">${seen}${telStr}</td>
-      <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
-  }).join('')||`<tr><td colspan="11" class="muted">暂无设备</td></tr>`;
+  const table = buildSortableTable({
+    state, stateKey:'devsSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (d, k) => ({id:d.id, name:d.name, app:appName(d.app_id), activation:d.activation, cls:d.class, online:d.online==='online'?1:0, dev_eui:d.dev_eui, dev_addr:d.dev_addr, status:d.status, time:+d.last_seen||0}[k]),
+    cols:[
+      {key:'id',         label:'ID',      type:'num', firstDir:'asc', sortable:false},
+      {key:'name',       label:'名称',     type:'str', firstDir:'asc', sortable:false},
+      {key:'app',        label:'应用',     type:'str', firstDir:'asc', sortable:false},
+      {key:'activation', label:'激活',     type:'str', firstDir:'asc', sortable:false},
+      {key:'cls',        label:'Class',   type:'str', firstDir:'asc', sortable:false},
+      {key:'online',     label:'状态',     type:'num', firstDir:'asc', sortable:false},
+      {key:'dev_eui',    label:'DevEUI',  type:'str', firstDir:'asc', sortable:false},
+      {key:'dev_addr',   label:'DevAddr', type:'str', firstDir:'asc', sortable:false},
+      {key:'status',     label:'入网',     type:'str', firstDir:'asc', sortable:false},
+      {key:'time',       label:'最近/遥测', type:'time', firstDir:'desc'},
+      {key:'_raw',       label:'',        type:'raw'},
+    ],
+    rows: state.devs,
+    rowHtml: d => {
+      const online = d.online==='online';
+      const tel = [];
+      if (d.battery!==null && d.battery!==undefined && +d.battery>=0) tel.push('电量'+(+d.battery===0?'外电':(+d.battery)+'%'));
+      if (d.margin!==null && d.margin!==undefined && d.margin!=='') tel.push('余量'+(+d.margin)+'dB');
+      if (d.latitude && +d.latitude!==0 && d.longitude!==null) tel.push('GPS '+ (+d.latitude).toFixed(5)+','+(+d.longitude).toFixed(5));
+      const telStr = tel.length? `<div class="muted" style="font-size:11px">${tel.join(' · ')}</div>`:'';
+      const seen = (d.last_seen_fmt && d.last_seen_fmt!=='-') ? d.last_seen_fmt : '-';
+      return `<tr>
+        <td>${d.id}</td><td>${esc(d.name)}</td>
+        <td class="muted"><span class="pill" style="margin:0">${appName(d.app_id)}</span></td>
+        <td><span class="tag">${d.activation}</span></td>
+        <td><span class="tag ${d.class}">${d.class}</span></td>
+        <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
+        <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(d.dev_addr)}</td>
+        <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
+        <td class="muted">${seen}${telStr}</td>
+        <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
+    },
+    emptyText:'暂无设备',
+  });
+  window.devsSort_sort = col => _tableToggleSort('devsSort','viewDevices',col);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备</h2>${adminBtn('<button onclick="newDevice()">+ 添加设备</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div></div>
-    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>激活</th><th>Class</th><th>状态</th><th>DevEUI</th><th>DevAddr</th><th>入网</th><th>最近/遥测</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    ${table}`;
 }
 async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
   const d=(state.devs||[]).find(x=>x.id===id); if(!d)return;
-  const kv=(label,val)=>`<label>${label}</label><input value="${esc(val||'')}" readonly onclick="this.select()">`;
+  // 设备密钥：readonly input，点一下自动复制 + 右上角 toast
+  const kv=(label,val)=>`<label>${label}</label><input value="${esc(val||'')}" readonly style="cursor:pointer" title="点击自动复制" onclick="copyKeyField(this, '${label}')">`;
   openModal(`<h3>${t('设备密钥')} #${id} ${esc(d.name)}</h3>
     ${kv('DevEUI', d.dev_eui)}
     ${d.activation==='OTAA'
       ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
       : kv('DevAddr', d.dev_addr) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
-    <p class="muted" style="font-size:12px">点击输入框即可全选复制。修改请点“编辑”。</p>
+    <p class="muted" style="font-size:12px">点击任意输入框即可复制到剪贴板（右上角有提示）。修改请点"编辑"。</p>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+/**
+ * 复制 readonly input 的值到剪贴板 + 右上角 toast
+ *   优先用 navigator.clipboard（异步），失败降级 document.execCommand
+ */
+async function copyKeyField(input, label){
+  const val = input.value || '';
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(val);
+      ok = true;
+    } else {
+      input.select();
+      document.execCommand && document.execCommand('copy');
+      ok = true;
+    }
+  } catch (e) { ok = false; }
+  toast(ok ? `${label} 已复制` : `复制失败，请手动选中`, ok ? 'copy' : 'err');
 }
 async function viewGateways(){
   const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
   const [r, tf] = await Promise.all([api('GET','/api/gateways'+q), tenantFilterHtml()]);
   state.gws = r.data||[];
-  const rows = state.gws.map(g=>{
-    const online = g.status==='online';
-    const seen = g.last_seen ? new Date(g.last_seen*1000).toLocaleString() : '-';
-    return `<tr><td class="muted">${g.gw_id}</td><td>${esc(g.name)}</td>
-      <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
-      <td class="muted">${esc(g.region)}</td><td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
-      <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">删除</button>`)}</td></tr>`;
-  }).join('')||`<tr><td colspan="7" class="muted">暂无网关（网关连接后自动出现，亦可手动添加）</td></tr>`;
+  const table = buildSortableTable({
+    state, stateKey:'gwsSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?1:0, region:g.region||'', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
+    cols:[
+      {key:'gw_id',   label:'GatewayID', type:'str', firstDir:'asc', sortable:false},
+      {key:'name',    label:'名称',       type:'str', firstDir:'asc', sortable:false},
+      {key:'online',  label:'状态',       type:'num', firstDir:'asc', sortable:false},
+      {key:'region',  label:'区域',       type:'str', firstDir:'asc', sortable:false},
+      {key:'uplinks', label:'上行数',     type:'num', firstDir:'asc', sortable:false},
+      {key:'time',    label:'最近心跳',   type:'time', firstDir:'desc'},
+      {key:'_raw',    label:'',          type:'raw'},
+    ],
+    rows: state.gws,
+    rowHtml: g => {
+      const online = g.status==='online';
+      const seen = g.last_seen ? new Date(g.last_seen*1000).toLocaleString() : '-';
+      return `<tr><td class="muted">${g.gw_id}</td><td>${esc(g.name)}</td>
+        <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
+        <td class="muted">${esc(g.region)}</td><td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
+        <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">删除</button>`)}</td></tr>`;
+    },
+    emptyText:'暂无网关（网关连接后自动出现，亦可手动添加）',
+  });
+  window.gwsSort_sort = col => _tableToggleSort('gwsSort','viewGateways',col);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>网关</h2>${adminBtn('<button onclick="newGateway()">+ 新建网关</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
-    <table><thead><tr><th>GatewayID</th><th>名称</th><th>状态</th><th>区域</th><th>上行数</th><th>最近心跳</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    ${table}`;
 }
 
 async function viewUplinks(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
+  const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : '', 'limit='+state.upsLimit, 'offset='+state.upsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
+  if (typeof r.total === 'number') state.upsTotal = r.total;
   // 设备下拉随应用筛选联动（后端 listDevices 支持 app_id）
   const devQ = [tq, state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
@@ -1311,25 +1713,56 @@ async function viewUplinks(){
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.upsAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  const rows = state.ups.map(u=>`<tr><td>${u.id}</td>
-    <td class="muted"><span class="pill" style="margin:0">${esc(appName(u.app_id))}</span></td>
-    <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(u.dev_addr)}</a></td>
-    <td>${u.fcnt}</td><td>${u.port}</td><td>${u.confirmed?'✓':'-'}</td>
-    <td><code>${hex(u.decrypted_hex)}</code></td>
-    <td><code class="muted">${hex(u.phy_payload)}</code></td>
-    <td class="muted">${u.gateway_id||'-'}</td>
-    <td class="muted">${u.rssi} / ${u.snr}</td>
-    <td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td>
-    <td><button class="btn ghost" onclick="showRaw(${u.id})">JSON</button></td></tr>`).join('')||`<tr><td colspan="12" class="muted">暂无上行</td></tr>`;
+  const table = buildSortableTable({
+    state, stateKey:'upsSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (u, k) => ({id:u.id, app:appName(u.app_id), dev_addr:u.dev_addr, fcnt:u.fcnt, port:u.port, confirmed:u.confirmed?1:0, payload:u.decrypted_hex, text:hexToText(u.decrypted_hex), phy:u.phy_payload, gw:u.gateway_id, rssi_snr:(u.rssi??'-') + ' / ' + (u.snr??'-'), time:u.received_at}[k]),
+    cols:[
+      {key:'id',        label:'ID',                   type:'str', firstDir:'asc', sortable:false},
+      {key:'app',       label:'应用',                  type:'str', firstDir:'asc', sortable:false},
+      {key:'dev_addr',  label:'DevAddr',              type:'str', firstDir:'asc', sortable:false},
+      {key:'fcnt',      label:'FCnt',                 type:'num', firstDir:'asc', sortable:false},
+      {key:'port',      label:'Port',                 type:'num', firstDir:'asc', sortable:false},
+      {key:'confirmed', label:'确认',                  type:'num', firstDir:'asc', sortable:false},
+      {key:'payload',   label:'解密 payload (hex)',   type:'str', firstDir:'asc', sortable:false},
+      {key:'text',      label:'解密 payload (文本)',  type:'str', firstDir:'asc', sortable:false},
+      {key:'phy',       label:'原始帧 phy',           type:'str', firstDir:'asc', sortable:false},
+      {key:'gw',        label:'网关',                  type:'str', firstDir:'asc', sortable:false},
+      {key:'rssi_snr',  label:'RSSI / SNR',           type:'str', firstDir:'asc', sortable:false},
+      {key:'time',      label:'时间',                  type:'time', firstDir:'desc'},
+      {key:'_raw',      label:'',                     type:'raw'},
+    ],
+    rows: state.ups,
+    rowHtml: u => {
+      const textDisp = hexToText(u.decrypted_hex);
+      return `<tr><td>${u.id}</td>
+      <td class="muted"><span class="pill" style="margin:0">${esc(appName(u.app_id))}</span></td>
+      <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(u.dev_addr)}</a></td>
+      <td>${u.fcnt}</td><td>${u.port}</td><td>${u.confirmed?'✓':'-'}</td>
+      <td><code>${hex(u.decrypted_hex)}</code></td>
+      <td class="muted" style="font-family:monospace;word-break:break-all;max-width:280px">${esc(textDisp)}</td>
+      <td><code class="muted">${hex(u.phy_payload)}</code></td>
+      <td class="muted">${u.gateway_id||'-'}</td>
+      <td class="muted">${u.rssi} / ${u.snr}</td>
+      <td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td>
+      <td><button class="btn ghost" onclick="showRaw(${u.id})">JSON</button></td></tr>`;
+    },
+    emptyText:'暂无上行',
+  });
+  const pager = buildPager({ total: state.upsTotal, limit: state.upsLimit, offset: state.upsOffset, pageKey:'upsPage', limitKey:'upsLimit', offsetKey:'upsOffset', totalKey:'upsTotal', refresh:'viewUplinks' });
   document.getElementById('view').innerHTML = `<h2>上行消息日志</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
-      <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;viewUplinks()">${appOpts}</select></div>
-      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;viewUplinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';state.tenantFilter='';viewUplinks()">重置</button>
+      <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${appOpts}</select></div>
+      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${devOpts}</select></div>
+      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsPage=1;state.upsOffset=0;state.upsLimit=50;state.tenantFilter='';viewUplinks()">重置</button>
     </div>
-    <p class="muted">应用维度已在每行“应用”标签中区分；phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点“JSON”查看网关上报元数据。</p>
-    <table><thead><tr><th>ID</th><th>应用</th><th>DevAddr</th><th>FCnt</th><th>Port</th><th>确认</th><th>解密 payload</th><th>原始帧 phy</th><th>网关</th><th>RSSI/SNR</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <p class="muted">应用维度已在每行"应用"标签中区分；phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点"JSON"查看网关上报元数据。点击表头可排序（再次点击切换方向，第三次清除）。</p>
+    ${table}
+    ${pager}`;
+  window.upsSort_sort = col => _tableToggleSort('upsSort','viewUplinks',col);
+  window.viewUplinks__page = p => _pagerGo({pageKey:'upsPage',limitKey:'upsLimit',offsetKey:'upsOffset',totalKey:'upsTotal'},'viewUplinks',p);
+  window.viewUplinks__limit = l => _pagerSetLimit({pageKey:'upsPage',limitKey:'upsLimit',offsetKey:'upsOffset',totalKey:'upsTotal'},'viewUplinks',l);
 }
 async function showRaw(id){
   const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
@@ -1349,8 +1782,9 @@ const DL_STATUS = {
 };
 async function viewDownlinks(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
+  const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : '', 'limit='+state.dlsLimit, 'offset='+state.dlsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
+  if (typeof r.total === 'number') state.dlsTotal = r.total;
   // 设备下拉随应用筛选联动
   const devQ = [tq, state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
@@ -1363,29 +1797,66 @@ async function viewDownlinks(){
   const devName = id => { const d = devs.find(x=>x.id===id); return d ? (d.name+' (#'+id+')') : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.dlDevFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.dlAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  const rows = state.dls.map(d=>{
-    const st = DL_STATUS[d.status] || {label:d.status||'-', cls:''};
-    const sent = d.sent_at ? new Date(d.sent_at*1000).toLocaleString() : '—';
-    const ack = d.acknowledged_at ? new Date(d.acknowledged_at*1000).toLocaleString() : '—';
-    return `<tr><td>${d.id}</td>
-      <td class="muted"><span class="pill" style="margin:0">${esc(appName(d.app_id))}</span></td>
-      <td class="muted">${esc(devName(d.dev_id))}</td>
-      <td>${d.port}</td><td>${d.confirmed?'✓':'-'}</td>
-      <td><code>${hex(d.payload_hex)}</code></td>
-      <td><span class="tag ${st.cls}">${st.label}</span></td>
-      <td class="muted">${sent}</td><td class="muted">${d.transmissions||0}</td>
-      <td class="muted">${ack}</td>
-      <td><button class="btn ghost" onclick="showDownlinkRaw(${d.id})">JSON</button></td></tr>`;
-  }).join('')||`<tr><td colspan="11" class="muted">暂无下行</td></tr>`;
+  // 状态筛选：状态列下拉；按 DL_STATUS 全部枚举 + 1 个"全部"
+  const statusValues = [
+    {value:'',label:'全部'},
+    ...Object.entries(DL_STATUS).map(([k,v]) => ({value:k,label:v.label})),
+  ];
+  const table = buildSortableTable({
+    state, stateKey:'dlsSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (d, k) => ({id:d.id, app:appName(d.app_id), dev:devName(d.dev_id), port:d.port, confirmed:d.confirmed?1:0, payload:d.payload_hex, text:hexToText(d.payload_hex), status:d.status, time:d.created_at||d.sent_at, tx:d.transmissions||0, ack:d.acknowledged_at}[k]),
+    cols:[
+      {key:'id',        label:'ID',        type:'num', firstDir:'asc', sortable:false},
+      {key:'app',       label:'应用',       type:'str', firstDir:'asc', sortable:false},
+      {key:'dev',       label:'设备',       type:'str', firstDir:'asc', sortable:false},
+      {key:'port',      label:'FPort',     type:'num', firstDir:'asc', sortable:false},
+      {key:'confirmed', label:'确认',       type:'num', firstDir:'asc', sortable:false},
+      {key:'payload',   label:'负载 (hex)',  type:'str', firstDir:'asc', sortable:false},
+      {key:'text',      label:'负载 (文本)', type:'str', firstDir:'asc', sortable:false},
+      {key:'status',    label:'状态',       type:'status', firstDir:'asc', sortable:false, opts:{
+        getValue: d => d.status,
+        values: statusValues,
+      }},
+      {key:'time',      label:'发送时间',   type:'time', firstDir:'desc'},
+      {key:'tx',        label:'重传',       type:'num', firstDir:'asc', sortable:false},
+      {key:'ack',       label:'确认时间',   type:'time', firstDir:'desc'},
+      {key:'_raw',      label:'',          type:'raw'},
+    ],
+    rows: state.dls,
+    rowHtml: d => {
+      const st = DL_STATUS[d.status] || {label:d.status||'-', cls:''};
+      const sent = d.sent_at ? new Date(d.sent_at*1000).toLocaleString() : '—';
+      const ack = d.acknowledged_at ? new Date(d.acknowledged_at*1000).toLocaleString() : '—';
+      const textDisp = hexToText(d.payload_hex);
+      return `<tr><td>${d.id}</td>
+        <td class="muted"><span class="pill" style="margin:0">${esc(appName(d.app_id))}</span></td>
+        <td class="muted">${esc(devName(d.dev_id))}</td>
+        <td>${d.port}</td><td>${d.confirmed?'✓':'-'}</td>
+        <td><code>${hex(d.payload_hex)}</code></td>
+        <td class="muted" style="font-family:monospace;word-break:break-all;max-width:280px">${esc(textDisp)}</td>
+        <td><span class="tag ${st.cls}">${st.label}</span></td>
+        <td class="muted">${sent}</td><td class="muted">${d.transmissions||0}</td>
+        <td class="muted">${ack}</td>
+        <td><button class="btn ghost" onclick="showDownlinkRaw(${d.id})">JSON</button></td></tr>`;
+    },
+    emptyText:'暂无下行',
+  });
+  const pager = buildPager({ total: state.dlsTotal, limit: state.dlsLimit, offset: state.dlsOffset, pageKey:'dlsPage', limitKey:'dlsLimit', offsetKey:'dlsOffset', totalKey:'dlsTotal', refresh:'viewDownlinks' });
   document.getElementById('view').innerHTML = `<h2>下行消息日志</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
-      <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;viewDownlinks()">${appOpts}</select></div>
-      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;viewDownlinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';state.tenantFilter='';viewDownlinks()">重置</button>
+      <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${appOpts}</select></div>
+      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${devOpts}</select></div>
+      <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';state.tenantFilter='';viewDownlinks()">重置</button>
     </div>
-    <p class="muted">点“JSON”查看下行记录的结构化（格式化）与解析展示（含 payload 解码）。</p>
-    <table><thead><tr><th>ID</th><th>应用</th><th>设备</th><th>FPort</th><th>确认</th><th>负载</th><th>状态</th><th>发送时间</th><th>重传</th><th>确认时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <p class="muted">点"JSON"查看下行记录的结构化（格式化）与解析展示（含 payload 解码）。点击表头可排序（再次点击切换方向，第三次清除）；状态列是下拉筛选器。</p>
+    ${table}
+    ${pager}`;
+  window.dlsSort_sort = col => _tableToggleSort('dlsSort','viewDownlinks',col);
+  window.dlsSort_fstatus = (col, v) => _tableSetFStatus('dlsFStatus', 'viewDownlinks', v);
+  window.viewDownlinks__page = p => _pagerGo({pageKey:'dlsPage',limitKey:'dlsLimit',offsetKey:'dlsOffset',totalKey:'dlsTotal'},'viewDownlinks',p);
+  window.viewDownlinks__limit = l => _pagerSetLimit({pageKey:'dlsPage',limitKey:'dlsLimit',offsetKey:'dlsOffset',totalKey:'dlsTotal'},'viewDownlinks',l);
 }
 async function showDownlinkRaw(id){
   const d=(state.dls||[]).find(x=>x.id===id); if(!d)return;
@@ -1430,30 +1901,86 @@ async function viewEvents(){
   if (tq) q.push(tq);
   if (state.evsDevFilter) q.push('dev_id=' + state.evsDevFilter);
   if (state.evsGwFilter)  q.push('gw_id=' + encodeURIComponent(state.evsGwFilter));
+  if (state.evsFType)     q.push('type=' + encodeURIComponent(state.evsFType));
+  q.push('limit=' + state.evsLimit);
+  q.push('offset=' + state.evsOffset);
   const qs = q.length ? ('?' + q.join('&')) : '';
   const r = await api('GET','/api/events' + qs); state.evs = r.data||[];
+  if (typeof r.total === 'number') state.evsTotal = r.total;
   const devOpts = ['<option value="">全部设备</option>'].concat(
     state.devs.map(d=>`<option value="${d.id}" ${String(d.id)===state.evsDevFilter?'selected':''}>${esc(d.name)} · ${hex(d.dev_eui)}</option>`)
   ).join('');
   const gwOpts = ['<option value="">全部网关</option>'].concat(
     state.gws.map(g=>`<option value="${esc(g.gw_id)}" ${g.gw_id===state.evsGwFilter?'selected':''}>${esc(g.gw_id)} · ${esc(g.name)}</option>`)
   ).join('');
-  const rows = (r.data||[]).map(e=>{
-    const lvl = e.level==='error' ? 'err' : (e.level==='warn' ? 'pending' : 'ok');
-    const who = e.gateway_id ? ('gw '+e.gateway_id) : (e.dev_id ? ('dev #'+e.dev_id) : '');
-    return `<tr><td><span class="tag">${e.type}</span></td><td><span class="tag ${lvl}">${e.level}</span></td>
-      <td class="muted">${esc(who)}</td><td>${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td>
-      <td><button class="btn ghost" onclick="showEventRaw(${e.id})">JSON</button></td></tr>`;
-  }).join('')||`<tr><td colspan="6" class="muted">暂无事件</td></tr>`;
+  // 级别筛选下拉（info / warn / error / 全部）
+  //   「全部」放在最前以符合用户习惯；排序按下标 0/1/2 走业务严重度（失败优先）
+  const levelValues = [
+    {value:'', label:'全部'},
+    {value:'info',  label:'info · 信息'},
+    {value:'warn',  label:'warn · 警告'},
+    {value:'error', label:'error · 错误'},
+  ];
+  // 类型筛选下拉：与 NetworkServer::logEvent 写入的 type 对齐（真实 DB 事件类型）
+  //   「全部」在最前；option 顺序即业务顺序（网关上下线 → 入网 → 上下行 → 确认 → FUOTA）
+  const typeValues = [
+    {value:'',       label:'全部'},
+    {value:'gateway', label:'网关上下线'},
+    {value:'join',    label:'入网 join'},
+    {value:'uplink',  label:'上行 uplink'},
+    {value:'downlink',label:'下行 downlink'},
+    {value:'txack',   label:'发射确认 txack'},
+    {value:'ack',     label:'确认 ack'},
+    {value:'fuota',   label:'FUOTA'},
+    {value:'status',  label:'状态 status'},
+  ];
+  const table = buildSortableTable({
+    state, stateKey:'evsSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (e, k) => ({type:e.type, level:e.level, who:(e.gateway_id?('gw '+e.gateway_id):(e.dev_id?('dev #'+e.dev_id):'')), msg:e.message, time:e.created_at}[k]),
+    cols:[
+      {key:'type',  label:'类型',  type:'status', firstDir:'asc', sortable:false, opts:{
+        getValue: e => e.type, values: typeValues,
+      }},
+      {key:'level', label:'级别',  type:'status', firstDir:'asc', sortable:false, opts:{
+        getValue: e => e.level, values: levelValues,
+      }},
+      {key:'who',   label:'对象',  type:'str',    firstDir:'asc', sortable:false},
+      {key:'msg',   label:'消息',  type:'str',    firstDir:'asc', sortable:false},
+      {key:'time',  label:'时间',  type:'time',   firstDir:'desc'},
+      {key:'_raw',  label:'',     type:'raw'},
+    ],
+    filterStatusList: [
+      {col:'type',  value: state.evsFType},
+      {col:'level', value: state.evsFLevel},
+    ],
+    rows: state.evs,
+    rowHtml: e => {
+      const lvl = e.level==='error' ? 'err' : (e.level==='warn' ? 'pending' : 'ok');
+      const who = e.gateway_id ? ('gw '+e.gateway_id) : (e.dev_id ? ('dev #'+e.dev_id) : '');
+      // 类型徽章按真实事件类型分色：join 绿 / downlink 黄 / uplink 蓝灰 / gateway 灰 / 其余默认
+      const tCls = e.type==='join' ? 'ok' : (e.type==='downlink' || e.type==='txack' ? 'pending' : (e.type==='gateway' ? 'muted' : ''));
+      return `<tr><td><span class="tag ${tCls}">${esc(e.type)}</span></td><td><span class="tag ${lvl}">${e.level}</span></td>
+        <td class="muted">${esc(who)}</td><td>${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td>
+        <td><button class="btn ghost" onclick="showEventRaw(${e.id})">JSON</button></td></tr>`;
+    },
+    emptyText:'暂无事件',
+  });
+  const pager = buildPager({ total: state.evsTotal, limit: state.evsLimit, offset: state.evsOffset, pageKey:'evsPage', limitKey:'evsLimit', offsetKey:'evsOffset', totalKey:'evsTotal', refresh:'viewEvents' });
   document.getElementById('view').innerHTML = `<h2>网关日志</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
-      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; viewEvents()">${devOpts}</select></div>
-      <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; viewEvents()">${gwOpts}</select></div>
-      <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; state.tenantFilter=''; viewEvents()">重置</button>
+      <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${devOpts}</select></div>
+      <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${gwOpts}</select></div>
+      <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50; state.tenantFilter=''; viewEvents()">重置</button>
     </div>
-    <p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件。点“JSON”查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。</p>
-    <table><thead><tr><th>类型</th><th>级别</th><th>对象</th><th>消息</th><th>时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件。点"JSON"查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。点击表头可排序（仅时间列），类型与级别列是下拉筛选器。</p>
+    ${table}
+    ${pager}`;
+  window.evsSort_sort = col => _tableToggleSort('evsSort','viewEvents',col);
+  window.evsSort_fstatus = (col, v) => _tableSetFStatus(col === 'type' ? 'evsFType' : 'evsFLevel', 'viewEvents', v);
+  window.viewEvents__page = p => _pagerGo({pageKey:'evsPage',limitKey:'evsLimit',offsetKey:'evsOffset',totalKey:'evsTotal'},'viewEvents',p);
+  window.viewEvents__limit = l => _pagerSetLimit({pageKey:'evsPage',limitKey:'evsLimit',offsetKey:'evsOffset',totalKey:'evsTotal'},'viewEvents',l);
 }
 async function showEventRaw(id){
   const e=(state.evs||[]).find(x=>x.id===id); if(!e)return;
@@ -1464,12 +1991,28 @@ async function showEventRaw(id){
 async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/users'); state.users = r.data||[];
-  const rows = state.users.map(u=>`<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td>
+  const table = buildSortableTable({
+    state, stateKey:'usersSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (u, k) => ({id:u.id, username:u.username, role:u.role, tenant:u.tenant_id||0, time:u.created_at}[k]),
+    cols:[
+      {key:'id',       label:'ID',       type:'num', firstDir:'asc', sortable:false},
+      {key:'username', label:'用户名',    type:'str', firstDir:'asc', sortable:false},
+      {key:'role',     label:'角色',      type:'str', firstDir:'asc', sortable:false},
+      {key:'tenant',   label:'用户配置',  type:'num', firstDir:'asc', sortable:false},
+      {key:'time',     label:'创建时间',  type:'time', firstDir:'desc'},
+      {key:'_raw',     label:'',         type:'raw'},
+    ],
+    rows: state.users,
+    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td>
      <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
-     <td><button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无用户</td></tr>`;
+     <td><button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`,
+    emptyText:'暂无用户',
+  });
+  window.usersSort_sort = col => _tableToggleSort('usersSort','viewUsers',col);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户管理</h2><button onclick="newUser()">+ 新建用户</button></div>
-    <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>用户配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    ${table}`;
 }
 
 // ================= API 调用日志 =================
@@ -1479,14 +2022,17 @@ async function viewApiLogs(){
   const params = [];
   if (state.apiLogFilter.path) params.push('path_contains=' + encodeURIComponent(state.apiLogFilter.path));
   if (state.apiLogFilter.ip) params.push('ip=' + encodeURIComponent(state.apiLogFilter.ip));
-  if (state.apiLogFilter.status) params.push('status=' + state.apiLogFilter.status);
+  // 状态筛选改为本地（更灵活：支持 2xx/3xx/4xx/5xx/具体码 几类合一）
   if (state.apiLogFilter.method) params.push('method=' + state.apiLogFilter.method);
   if (showTenant && state.apiLogFilter.tenant_id) params.push('tenant_id=' + state.apiLogFilter.tenant_id);
   if (state.apiLogFilter.application_id) params.push('application_id=' + state.apiLogFilter.application_id);
+  // 分页：每页条数 + 当前偏移（由 buildPager / _pagerGo 维护）
+  params.push('limit=' + (state.apiLogLimit|0 || 50));
+  params.push('offset=' + (state.apiLogOffset|0 || 0));
   const url = '/api/api-logs' + (params.length ? '?' + params.join('&') : '');
   const r = await api('GET', url);
-  const rows = (r.data || []);
-  const total = r.total || 0;
+  const rowsAll = (r.data || []);
+  state.apiLogTotal = +r.total || 0;
   // 拉取租户/应用下拉选项（admin）
   let tenantOpts = '';
   let appOpts = '';
@@ -1505,25 +2051,53 @@ async function viewApiLogs(){
     if (s>=500) return `<span class="tag pending">${s}</span>`;
     return `<span class="tag">${s}</span>`;
   };
-  const rowsHtml = rows.length ? rows.map(r=>`<tr>
-    <td class="muted">${new Date(r.created_at*1000).toLocaleString()}</td>
-    <td><span class="tag">${esc(r.method)}</span></td>
-    <td class="muted" style="font-family:monospace;font-size:12px;word-break:break-all">${esc(r.path)}${r.query ? '?' + esc(r.query) : ''}</td>
-    <td>${statusTag(r.status)}</td>
-    <td class="muted">${r.latency_ms}ms</td>
-    <td class="muted" style="font-family:monospace">${esc(r.ip||'-')}</td>
-    <td class="muted">${esc(r.username||'-')}${r.role?` <span class="tag">${esc(r.role)}</span>`:''}</td>
-    ${showTenant ? `<td class="muted">${r.tenant_id?('#'+r.tenant_id):'-'}</td>` : ''}
-    <td class="muted">${r.application_id?('#'+r.application_id):'-'}</td>
-    <td class="muted">${r.body_size||0}B</td>
-  </tr>`).join('') : `<tr><td colspan="${showTenant?10:9}" class="muted">${t('暂无日志')}</td></tr>`;
+  // 状态分类下拉：全部 / 2xx / 3xx / 4xx / 5xx / 具体码（在前端筛选）
+  const statusValues = [
+    {value:'',label:'全部', match: () => true},
+    {value:'2xx',label:'2xx 成功', match: s => s>=200 && s<300},
+    {value:'3xx',label:'3xx 重定向', match: s => s>=300 && s<400},
+    {value:'4xx',label:'4xx 客户端错', match: s => s>=400 && s<500},
+    {value:'5xx',label:'5xx 服务端错', match: s => s>=500 && s<600},
+  ];
+  const table = buildSortableTable({
+    state, stateKey:'apiLogSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (r, k) => ({time:r.created_at, method:r.method, path:r.path, status:r.status, latency:r.latency_ms, ip:r.ip, user:r.username||'', tenant:r.tenant_id||0, app:r.application_id||0, body:r.body_size||0}[k]),
+    cols:[
+      {key:'time',    label:t('时间'), type:'time', firstDir:'desc'},
+      {key:'method',  label:t('方法'), type:'str',  firstDir:'asc', sortable:false},
+      {key:'path',    label:t('路径'), type:'str',  firstDir:'asc', sortable:false},
+      {key:'status',  label:t('状态'), type:'status', firstDir:'asc', sortable:false, opts:{getValue: r => r.status, values: statusValues}},
+      {key:'latency', label:t('耗时'), type:'num',  firstDir:'asc', sortable:false},
+      {key:'ip',      label:t('IP'),   type:'str',  firstDir:'asc', sortable:false},
+      {key:'user',    label:t('用户'), type:'str',  firstDir:'asc', sortable:false},
+      ...(showTenant ? [{key:'tenant', label:t('租户'), type:'num', firstDir:'asc', sortable:false}] : []),
+      {key:'app',     label:t('应用'), type:'num',  firstDir:'asc', sortable:false},
+      {key:'body',    label:t('Body'), type:'num', firstDir:'asc', sortable:false},
+    ],
+    filterStatus: {col:'status', value: state.apiLogFStatus},
+    rows: rowsAll,
+    rowHtml: r => `<tr>
+      <td class="muted">${new Date(r.created_at*1000).toLocaleString()}</td>
+      <td><span class="tag">${esc(r.method)}</span></td>
+      <td class="muted" style="font-family:monospace;font-size:12px;word-break:break-all">${esc(r.path)}${r.query ? '?' + esc(r.query) : ''}</td>
+      <td>${statusTag(r.status)}</td>
+      <td class="muted">${r.latency_ms}ms</td>
+      <td class="muted" style="font-family:monospace">${esc(r.ip||'-')}</td>
+      <td class="muted">${esc(r.username||'-')}${r.role?` <span class="tag">${esc(r.role)}</span>`:''}</td>
+      ${showTenant ? `<td class="muted">${r.tenant_id?('#'+r.tenant_id):'-'}</td>` : ''}
+      <td class="muted">${r.application_id?('#'+r.application_id):'-'}</td>
+      <td class="muted">${r.body_size||0}B</td>
+    </tr>`,
+    emptyText: t('暂无日志'),
+  });
   const filterId = (k) => 'alf_' + k;
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('API 调用日志')}</h2><div class="muted" style="font-size:12px">${t('共')} ${total} ${t('条')}${t('（仅保留最近 10000 条）')}</div></div>
+  const pager = buildPager({ total: state.apiLogTotal, limit: state.apiLogLimit, offset: state.apiLogOffset, pageKey:'apiLogPage', limitKey:'apiLogLimit', offsetKey:'apiLogOffset', totalKey:'apiLogTotal', refresh:'viewApiLogs' });
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('API 调用日志')}</h2><div class="muted" style="font-size:12px">${t('共')} ${state.apiLogTotal} ${t('条')}${t('（仅保留最近 10000 条）')}</div></div>
    <div class="card" style="margin-bottom:12px">
      <div class="row" style="align-items:flex-end">
        <div><label>${t('路径包含')}</label><input id="${filterId('path')}" value="${esc(state.apiLogFilter.path||'')}" placeholder="/v1/devices"></div>
        <div><label>${t('IP')}</label><input id="${filterId('ip')}" value="${esc(state.apiLogFilter.ip||'')}" placeholder="192.168.1.1"></div>
-       <div><label>${t('状态码')}</label><input id="${filterId('status')}" value="${esc(state.apiLogFilter.status||'')}" type="number" placeholder="200/4xx/5xx"></div>
        <div><label>${t('方法')}</label><select id="${filterId('method')}">
          <option value="">${t('全部')}</option>
          <option value="GET" ${state.apiLogFilter.method==='GET'?'selected':''}>GET</option>
@@ -1536,26 +2110,37 @@ async function viewApiLogs(){
        <div style="flex:0 0 auto"><button onclick="applyApiLogFilter()">${t('应用筛选')}</button> <button class="ghost" onclick="resetApiLogFilter()">${t('重置')}</button></div>
      </div>
    </div>
-   <table><thead><tr>
-     <th>${t('时间')}</th><th>${t('方法')}</th><th>${t('路径')}</th><th>${t('状态')}</th><th>${t('耗时')}</th><th>${t('IP')}</th><th>${t('用户')}</th>
-     ${showTenant ? `<th>${t('租户')}</th>` : ''}
-     <th>${t('应用')}</th><th>${t('Body')}</th>
-   </tr></thead><tbody>${rowsHtml}</tbody></table>`;
+   <p class="muted" style="margin:-4px 0 10px">${t('点击表头可排序（再次点击切换方向，第三次清除）；状态列是下拉筛选器（全部/2xx/3xx/4xx/5xx/具体码）。')}</p>
+   ${table}
+   ${pager}`;
+  window.apiLogSort_sort = col => _tableToggleSort('apiLogSort','viewApiLogs',col);
+  window.apiLogSort_fstatus = (col, v) => _tableSetFStatus('apiLogFStatus', 'viewApiLogs', v);
+  window.viewApiLogs__page = p => _pagerGo({pageKey:'apiLogPage',limitKey:'apiLogLimit',offsetKey:'apiLogOffset',totalKey:'apiLogTotal'},'viewApiLogs',p);
+  window.viewApiLogs__limit = l => _pagerSetLimit({pageKey:'apiLogPage',limitKey:'apiLogLimit',offsetKey:'apiLogOffset',totalKey:'apiLogTotal'},'viewApiLogs',l);
 }
 function applyApiLogFilter(){
   const get = k => (document.getElementById('alf_' + k) || {}).value || '';
   state.apiLogFilter = {
     path: get('path').trim(),
     ip: get('ip').trim(),
-    status: get('status').trim(),
+    status: '',
     method: get('method'),
     tenant_id: get('tenant_id'),
     application_id: get('application_id'),
   };
+  state.apiLogFStatus = '';
+  state.apiLogSort = {col:'time',dir:'desc'};
+  state.apiLogPage = 1;
+  state.apiLogOffset = 0;
   viewApiLogs();
 }
 function resetApiLogFilter(){
   state.apiLogFilter = { path:'', ip:'', status:'', method:'', tenant_id:'', application_id:'' };
+  state.apiLogFStatus = '';
+  state.apiLogSort = {col:'time',dir:'desc'};
+  state.apiLogPage = 1;
+  state.apiLogOffset = 0;
+  state.apiLogLimit = 50;
   viewApiLogs();
 }
 
@@ -1572,7 +2157,7 @@ async function viewSettings(){
      <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
      <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="HolaStack">
      <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
-     <label>页面底部 Footer（支持 HTML，如 © {Y} HolaStack &nbsp;|&nbsp; <a href="https://example.com">官网</a>；留空使用默认"© 今年年份 HolaStack"）</label><textarea id="st_footer" rows="2" placeholder="&copy; ${new Date().getFullYear()} HolaStack">${esc(s.footer||'')}</textarea>
+     <label>页面底部 Footer（支持 HTML，留空使用默认"© 年份 网站名称"，可用占位符 {Y}/{YEAR}/{SITE}）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
      <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
      <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
@@ -1595,11 +2180,11 @@ async function saveSettings(){
     ui_lang: langSel ? langSel.value : 'zh',
   };
   const r = await api('POST','/api/settings', body);
-  if (r.error) { alert(r.error); return; }
+  if (r.error) { toast(r.error, 'err'); return; }
   await applyPublicSettings();
   // 应用新语言：拉取对应字典并静默重渲染当前页（模板源语言为中文，双向切换都正确）
   await applyLanguage(body.ui_lang);
-  alert(t('设置已保存'));
+  toast(t('设置已保存'), 'ok');
 }
 // 拉取公开设置并应用到顶栏品牌、登录页 LOGO、页面标题（无需登录即可读取）
 async function applyPublicSettings(){
@@ -1623,10 +2208,12 @@ async function applyPublicSettings(){
     const fav = document.getElementById('faviconLink');
     if (fav && d.favicon_url) fav.href = d.favicon_url;
     // 页脚：服务端给的是 HTML 字符串，允许富文本（链接/版权符号等）；仅剥离 <script> 防止 XSS
-    const rawFooter = d.footer || ('© ' + new Date().getFullYear() + ' HolaStack');
+    // 注意：登录框内不再显示 footer，避免与底部页脚重复
+    const siteName = d.site_name || 'HolaStack';
+    const rawFooter = d.footer || ('© ' + new Date().getFullYear() + ' ' + siteName);
     const safeFooter = String(rawFooter).replace(/<script[\s\S]*?<\/script>/gi, '');
     const lf = document.getElementById('loginFooter');
-    if (lf) lf.innerHTML = safeFooter;
+    if (lf) { lf.innerHTML = ''; lf.classList.add('hidden'); }
     const sf = document.getElementById('siteFooter');
     if (sf) { sf.innerHTML = safeFooter; sf.classList.remove('hidden'); }
     const ln = document.getElementById('loginNotice');
@@ -1644,7 +2231,7 @@ async function applyPublicSettings(){
 async function changePw(){
   // operator（演示）只读，禁止修改密码（含自己的）
   if (isDemo()) {
-    alert('演示模式：当前为只读账号，不能修改密码');
+    toast(t('演示模式：当前为只读账号，不能修改密码'), 'warn');
     return;
   }
   let targetSel = '';
@@ -1748,7 +2335,7 @@ async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId
 
 async function newUser(){
   let tenants = '';
-  try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join(''); } catch(e){}
+  try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join(''); } catch(e){}
   openModal(`<h3>新建用户</h3><label>用户名</label><input id="m_user"><label>密码（≥6 位）</label><input id="m_pass" type="password">
     <label>角色</label><select id="m_role" onchange="roleTenantToggle()">
       <option value="operator">operator（演示：只读 + 模拟数据）</option>
@@ -1803,11 +2390,11 @@ async function viewDeviceProfiles(){
 // ---------------- 用户配置 ----------------
 async function viewTenants(){
   const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
-  const rows = state.tenants.map(t=>{
-    const unlimited = +t.private_gateways_unlimited === 1;
-    return `<tr><td>${t.id}</td><td>${esc(t.name)}</td><td class="muted">${esc(t.description||'')}</td>
-    <td class="muted">${unlimited ? t('无限制') : t('上限') + ' ' + (t.private_gateways_limit||0)}</td>
-    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${t.id})">${t('编辑')}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${t.id}))">${t('删除')}</button>`)}</td></tr>`;
+  const rows = state.tenants.map(row=>{
+    const unlimited = +row.private_gateways_unlimited === 1;
+    return `<tr><td>${row.id}</td><td>${esc(row.name)}</td><td class="muted">${esc(row.description||'')}</td>
+    <td class="muted">${unlimited ? t('无限制') : t('上限') + ' ' + (row.private_gateways_limit||0)}</td>
+    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${row.id})">${t('编辑')}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${row.id}))">${t('删除')}</button>`)}</td></tr>`;
   }).join('')||`<tr><td colspan="5" class="muted">${t('暂无用户配置')}</td></tr>`;
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('用户配置')}</h2>${adminBtn(`<button onclick="newTenant()">${t('+ 新建用户配置')}</button>`)}</div>
     <table><thead><tr><th>ID</th><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('私有网关上限')}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -1846,8 +2433,8 @@ async function saveTenant(id){
   if(r.error){alert(t(r.error));return;} closeModal(); viewTenants();
 }
 async function editTenant(id){
-  const t = state.tenants.find(x=>x.id==id)||{};
-  openModal(`<h3>${t('编辑用户配置')}</h3>${tenantForm(t)}
+  const row = state.tenants.find(x=>x.id==id)||{};
+  openModal(`<h3>${t('编辑用户配置')}</h3>${tenantForm(row)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(${id}))">${t('保存')}</button></div>`);
 }
 async function delTenant(id){
@@ -1928,15 +2515,30 @@ async function viewApiKeys(){
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
   state.apps = ra.data||[];
   const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
-  let rows=`<tr><td colspan="5" class="muted">请先在上方选择应用</td></tr>`;
+  let ks=[];
   if(state.appSel){
-    const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); const ks=r.data||[];
-    rows=ks.map(k=>`<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
-      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="5" class="muted">该应用暂无 API 密钥</td></tr>`;
+    const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); ks=r.data||[];
   }
+  const table = buildSortableTable({
+    state, stateKey:'apiKeysSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (k, ck) => ({id:k.id, name:k.name, token:k.token_preview||'', time:k.created_at}[ck]),
+    cols:[
+      {key:'id',    label:'ID',          type:'num', firstDir:'asc', sortable:false},
+      {key:'name',  label:'名称',         type:'str', firstDir:'asc', sortable:false},
+      {key:'token', label:'Token(预览)', type:'str', firstDir:'asc', sortable:false},
+      {key:'time',  label:'创建时间',     type:'time', firstDir:'desc'},
+      {key:'_raw',  label:'',            type:'raw'},
+    ],
+    rows: ks,
+    rowHtml: k => `<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
+      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`,
+    emptyText: state.appSel ? '该应用暂无 API 密钥' : '请先在上方选择应用',
+  });
+  window.apiKeysSort_sort = col => _tableToggleSort('apiKeysSort','viewApiKeys',col);
   document.getElementById('view').innerHTML=`<h2>API 密钥</h2>
    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
-   <table><thead><tr><th>ID</th><th>名称</th><th>Token(预览)</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+   ${table}`;
 }
 function newApiKey(){
   if(!state.appSel){alert('请先选择应用');return;}
@@ -1959,22 +2561,37 @@ async function viewIntegrations(){
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
   state.apps = ra.data||[];
   const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.intAppSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
-  let rows=`<tr><td colspan="5" class="muted">请先在上方选择应用</td></tr>`;
+  let its=[];
   if(state.intAppSel){
-    const r=await api('GET','/api/integrations?app_id='+state.intAppSel+(tq?'&'+tq:'')); const its=r.data||[];
-    rows=its.map(it=>{
-      let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
-      const summary = it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
-      return `<tr><td><span class="tag">${it.kind}</span></td>
-        <td><span class="tag ${it.enabled?'ok':'off'}">${it.enabled?'启用':'停用'}</span></td>
-        <td class="muted">${esc(summary)}</td>
-        <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
-        <td>${adminBtn(`<button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`;
-    }).join('')||`<tr><td colspan="5" class="muted">该应用暂无外部集成</td></tr>`;
+    const r=await api('GET','/api/integrations?app_id='+state.intAppSel+(tq?'&'+tq:'')); its=r.data||[];
   }
+  const summaryOf = it => {
+    let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
+    return it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
+  };
+  const table = buildSortableTable({
+    state, stateKey:'intgSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (it, k) => ({kind:it.kind, enabled:it.enabled?1:0, summary:summaryOf(it), time:it.created_at}[k]),
+    cols:[
+      {key:'kind',    label:'类型',     type:'str', firstDir:'asc', sortable:false},
+      {key:'enabled', label:'状态',     type:'num', firstDir:'asc', sortable:false},
+      {key:'summary', label:'配置',     type:'str', firstDir:'asc', sortable:false},
+      {key:'time',    label:'创建时间', type:'time', firstDir:'desc'},
+      {key:'_raw',    label:'',        type:'raw'},
+    ],
+    rows: its,
+    rowHtml: it => `<tr><td><span class="tag">${it.kind}</span></td>
+        <td><span class="tag ${it.enabled?'ok':'off'}">${it.enabled?'启用':'停用'}</span></td>
+        <td class="muted">${esc(summaryOf(it))}</td>
+        <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
+        <td>${adminBtn(`<button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`,
+    emptyText: state.intAppSel ? '该应用暂无外部集成' : '请先在上方选择应用',
+  });
+  window.intgSort_sort = col => _tableToggleSort('intgSort','viewIntegrations',col);
   document.getElementById('view').innerHTML=`<h2>外部集成</h2>
    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建外部集成</button>'):''}</div>
-   <table><thead><tr><th>类型</th><th>状态</th><th>配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+   ${table}`;
 }
 function newIntegration(){
   if(!state.intAppSel){alert('请先选择应用');return;}
@@ -2034,7 +2651,7 @@ async function viewMulticastGroups(){
 }
 function multicastForm(m){
   m=m||{}; const regions=regionOptions(m.region||"");
-  const type=(s)=>['A','B','C'].map(t=>`<option value="${t}" ${t===s?'selected':''}>${t}</option>`).join('');
+  const type=(s)=>['A','B','C'].map(cls=>`<option value="${cls}" ${cls===s?'selected':''}>${cls}</option>`).join('');
   const sched=(s)=>['DELAY','FIXED'].map(t=>`<option value="${t}" ${t===s?'selected':''}>${t}</option>`).join('');
   const appOpts=(state.apps||[]).map(a=>`<option value="${a.id}" ${String(a.id)===String(m.application_id||state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
   return `<label>名称</label><input id="m_name" value="${esc(m.name||'')}">

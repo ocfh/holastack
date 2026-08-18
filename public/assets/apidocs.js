@@ -85,7 +85,9 @@
       if (!view) return;
       Ad_ensureCss();
       try {
-        var res = await fetch('/api/view/apidocs');
+        // 关键：必须带 X-Elw-Token 头，否则 Auth::guardApi 401。
+        var tok = (window.state && window.state.token) || localStorage.getItem('elw_token') || '';
+        var res = await fetch('/api/view/apidocs', tok ? { headers: { 'X-Elw-Token': tok } } : {});
         if (!res.ok) { view.innerHTML = '<p class="muted">' + (typeof t === 'function' ? t('加载失败') : '加载失败') + '</p>'; return; }
         view.innerHTML = await res.text();
       } catch (e) {

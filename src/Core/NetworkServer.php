@@ -852,6 +852,29 @@ class NetworkServer
             }
         }
 
+        // 遥测状态采集：周期性下发 DevStatusReq（对齐 ChirpStack dev_status_req_freq，默认 1 小时）。
+        //   - 距上次请求超过间隔 → setPending 挂起（下次下行捎带）；
+        //   - 设备上报 DevStatusAns 后由 onDevStatusAns 清 pending；
+        //   - 从未采到过（battery/margin 还是默认值）→ 首次间隔缩短到 60s，尽快采一次；
+        //   - 采到过后 → 间隔 3600s（1 小时一次，避免每帧都发 DevStatusReq 干扰设备）。
+        // 注意：margin=0 是合法值（信号刚好在门限上），不能用来判断"未上报"；
+        // 未上报判据用 battery==-1（DB 默认）且 margin 为 NULL/默认 0 的组合。
+        $pendingStatus = MacCommands::getPending($device, MacCommands::CID_DEV_STATUS_REQ);
+        $lastReqAt = (int) ($device['dev_status_req_at'] ?? 0);
+        $batteryDefault = ($device['battery'] ?? -1) == -1;
+        $marginDefault  = ($device['margin'] ?? null) === null || (string) ($device['margin'] ?? '0') === '0';
+        $everAnswered = !($batteryDefault && $marginDefault);
+        $interval = $everAnswered ? 3600 : 60;
+        if ($pendingStatus === null && ($lastReqAt === 0 || (time() - $lastReqAt) >= $interval)) {
+            MacCommands::setPending($device, MacCommands::CID_DEV_STATUS_REQ, MacCommands::buildDevStatusReq());
+            $device['dev_status_req_at'] = time();
+            $this->log("DEVSTATUS: dev#{$device['id']} schedule DevStatusReq (everAnswered=" . ($everAnswered ? 'yes' : 'no') . ")");
+        }
+        $pendingStatus = MacCommands::getPending($device, MacCommands::CID_DEV_STATUS_REQ);
+        if ($pendingStatus !== null && strlen($pendingStatus) === 1 && ord($pendingStatus[0]) === MacCommands::CID_DEV_STATUS_REQ) {
+            $fopts .= $pendingStatus;
+        }
+
         // FOpts 长度上限 15 字节。注意 LoRaWAN 规范：FPort=0 时 FOpts 必须为空，
         // 即 FOpts 与 FPort=0 不能共存于同一帧。因此：
         //  - ≤15 字节：全部放入 FOpts（可与应用负载共存）；
@@ -874,7 +897,7 @@ class NetworkServer
         $cols = [
             'dr', 'tx_power_index', 'nb_trans', 'rx2_frequency', 'rx2_dr', 'rx1_dr_offset',
             'enabled_uplink_channel_indices', 'pending_mac', 'mac_command_error_count',
-            'uplink_adr_history', 'class', 'battery', 'margin', 'relay_state',
+            'uplink_adr_history', 'class', 'battery', 'margin', 'relay_state', 'dev_status_req_at',
         ];
         $upd = [];
         $params = [];

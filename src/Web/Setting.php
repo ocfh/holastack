@@ -54,6 +54,17 @@ class Setting
         }
     }
 
+    /**
+     * 渲染 footer：把 {Y} 替换为当前年份，把 {SITE} 替换为站点名。
+     * 调用方传入原始字符串（可能是 HTML），函数只做占位替换，不做 XSS 过滤。
+     */
+    public static function renderFooter(string $raw, string $siteName = 'HolaStack'): string
+    {
+        $year = date('Y');
+        $name = $siteName !== '' ? $siteName : 'HolaStack';
+        return str_replace(['{Y}', '{YEAR}', '{SITE}'], [$year, $year, $name], $raw);
+    }
+
     /** 读取公开设置（供登录页使用，不暴露敏感项）。 */
     public static function getPublic(): array
     {
@@ -68,10 +79,12 @@ class Setting
         if (($out['login_logo_text'] ?? '') === '') {
             $out['login_logo_text'] = $out['site_name'];
         }
-        // 默认 footer：© {今年年份} HolaStack（年份取服务端时区，不依赖客户端）
-        if (($out['footer'] ?? '') === '') {
-            $out['footer'] = '© ' . date('Y') . ' HolaStack';
+        // 默认 footer 模板：© {Y} {SITE}（占位符在 renderFooter 中替换为当前年份与站点名）
+        $rawFooter = (string)($out['footer'] ?? '');
+        if ($rawFooter === '') {
+            $rawFooter = '© {Y} {SITE}';
         }
+        $out['footer'] = self::renderFooter($rawFooter, (string)$out['site_name']);
         return $out;
     }
 }

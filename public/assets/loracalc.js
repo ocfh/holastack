@@ -292,8 +292,11 @@
       if (!view) return;
       Lc_ensureCss();
       // 模板由 PHP 服务端渲染（/api/view/loracalc，已做 i18n 翻译）
+      // 关键：必须带 X-Elw-Token 头，否则 Auth::guardApi 401。
+      // 反向代理 + HTTPS 下自定义 header 是 SPA 已验证的可靠通道。
       try {
-        const res = await fetch('/api/view/loracalc');
+        const tok = (window.state && window.state.token) || localStorage.getItem('elw_token') || '';
+        const res = await fetch('/api/view/loracalc', tok ? { headers: { 'X-Elw-Token': tok } } : {});
         if (!res.ok) { view.innerHTML = '<p class="muted">' + (t('加载失败') || '加载失败') + '</p>'; return; }
         view.innerHTML = await res.text();
       } catch (e) {

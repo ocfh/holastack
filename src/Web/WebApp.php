@@ -286,7 +286,7 @@ class WebApp
         return $out;
     }
 
-    private static function demoEvents(int $n = 25, ?int $devId = null, ?string $gwId = null): array
+    private static function demoEvents(int $n = 25, ?int $devId = null, ?string $gwId = null, ?string $type = null): array
     {
         $gws = self::demoGateways();
         if ($gwId !== null && $gwId !== '') {
@@ -303,23 +303,33 @@ class WebApp
             }
         }
         $now = time();
+        // pool 的 type 与 NetworkServer::logEvent 写入的真实 type 对齐（gateway/join/uplink/downlink/txack/ack/fuota/status），
+        // 保证 demo 模式的类型下拉筛选与真实数据行为一致
         $pool = [
-            ['UPLINK', 'info', '上行数据帧'],
-            ['JOIN', 'ok', '设备完成 OTAA 入网'],
-            ['GW_ONLINE', 'ok', '网关连接建立（Semtech UDP）'],
-            ['GW_OFFLINE', 'warn', '网关心跳超时'],
-            ['DOWNLINK', 'info', '下行帧已发送'],
-            ['ERROR', 'error', 'MIC 校验失败，丢弃数据帧'],
-            ['PUSH_ACK', 'info', 'PUSH_ACK 已应答'],
+            ['uplink',   'info',  '上行数据帧'],
+            ['join',     'info',  '设备完成 OTAA 入网'],
+            ['gateway',  'info',  '网关连接建立（Semtech UDP）'],
+            ['gateway',  'warn',  '网关心跳超时'],
+            ['downlink', 'info',  '下行帧已发送'],
+            ['uplink',   'error', 'MIC 校验失败，丢弃数据帧'],
+            ['txack',    'warn',  '网关下行发射失败'],
+            ['ack',      'info',  '设备已确认下行帧'],
         ];
         // 按设备筛选时只生成设备类事件（网关事件 dev_id=0 会污染筛选结果）
         if ($devId !== null && $devId > 0) {
-            $pool = array_values(array_filter($pool, static fn($p) => !in_array($p[0], ['GW_ONLINE', 'GW_OFFLINE', 'PUSH_ACK'], true)));
+            $pool = array_values(array_filter($pool, static fn($p) => !in_array($p[0], ['gateway', 'txack'], true)));
+        }
+        // 按 type 筛选（与前端 typeValues 下拉值一致）
+        if ($type !== null && $type !== '') {
+            $pool = array_values(array_filter($pool, static fn($p) => $p[0] === $type));
+            if (!$pool) {
+                return [];
+            }
         }
         $out = [];
         for ($i = 0; $i < $n; $i++) {
             [$type, $level, $msg] = $pool[array_rand($pool)];
-            $isGw = in_array($type, ['GW_ONLINE', 'GW_OFFLINE', 'PUSH_ACK'], true);
+            $isGw = in_array($type, ['gateway', 'txack'], true);
             $g = $gws[array_rand($gws)];
             $d = $devs[array_rand($devs)];
             $created = $now - $i * mt_rand(3, 120);
@@ -512,12 +522,13 @@ class WebApp
         return $rows;
     }
 
-    public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null): array
+    public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null, int $offset = 0): array
     {
         if (self::scope()['demo']) {
             return self::demoUplinks($limit > 50 ? 30 : max(1, $limit), $devId, $appId);
         }
-        $limit = (int) $limit;
+        $limit = max(1, (int) $limit);
+        $offset = max(0, (int) $offset);
         $sql = "SELECT * FROM uplinks";
         $params = [];
         $where = [];
@@ -539,16 +550,17 @@ class WebApp
         if ($where) {
             $sql .= " WHERE " . implode(" AND ", $where);
         }
-        $sql .= " ORDER BY id DESC LIMIT $limit";
+        $sql .= " ORDER BY id DESC LIMIT $limit OFFSET $offset";
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null): array
+    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null, int $offset = 0): array
     {
         if (self::scope()['demo']) {
             return self::demoDownlinks($limit > 50 ? 20 : max(1, $limit), $devId, $appId);
         }
-        $limit = (int) $limit;
+        $limit = max(1, (int) $limit);
+        $offset = max(0, (int) $offset);
         $sql = "SELECT * FROM downlinks";
         $params = [];
         $where = [];
@@ -570,16 +582,18 @@ class WebApp
         if ($where) {
             $sql .= " WHERE " . implode(" AND ", $where);
         }
-        $sql .= " ORDER BY id DESC LIMIT $limit";
+        $sql .= " ORDER BY id DESC LIMIT $limit OFFSET $offset";
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listEvents(?int $devId = null, ?string $gwId = null, int $limit = 200, ?int $tenantId = null): array
+    public static function listEvents(?int $devId = null, ?string $gwId = null, ?string $type = null, int $limit = 200, ?int $tenantId = null, int $offset = 0): array
     {
         if (self::scope()['demo']) {
-            return self::demoEvents($limit > 50 ? 25 : max(1, $limit), $devId, $gwId);
+            return self::demoEvents($limit > 50 ? 25 : max(1, $limit), $devId, $gwId, $type);
         }
-        $limit = (int) $limit;
+        $limit = max(1, (int) $limit);
+        $offset = max(0, (int) $offset);
+        $type = ($type !== null && $type !== '') ? $type : null;
         $sql = "SELECT * FROM events";
         $params = [];
         $where = [];
@@ -591,6 +605,10 @@ class WebApp
             $where[] = "gateway_id=?";
             $params[] = $gwId;
         }
+        if ($type) {
+            $where[] = "type=?";
+            $params[] = $type;
+        }
         $appIds = self::visibleAppIds($tenantId);
         if ($appIds !== null) {
             if (!$appIds) {
@@ -601,8 +619,50 @@ class WebApp
         if ($where) {
             $sql .= " WHERE " . implode(" AND ", $where);
         }
-        $sql .= " ORDER BY id DESC LIMIT $limit";
+        $sql .= " ORDER BY id DESC LIMIT $limit OFFSET $offset";
         return Database::fetchAll($sql, $params);
+    }
+
+    /**
+     * 三个 count 方法：与同名 list 方法的 WHERE 条件完全对齐，用于前端分页（total / 总页数）。
+     *  复用 list 方法的过滤逻辑（应用/设备/网关/租户）。
+     */
+    public static function countUplinks(?int $devId = null, ?int $appId = null, ?int $tenantId = null): int
+    {
+        if (self::scope()['demo']) { return 120; }
+        $where = []; $params = [];
+        if ($devId) { $where[] = 'dev_id=?'; $params[] = $devId; }
+        if ($appId) { $where[] = 'app_id=?'; $params[] = $appId; }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) { if (!$appIds) return 0; $where[] = 'app_id IN (' . implode(',', $appIds) . ')'; }
+        $sql = 'SELECT COUNT(*) AS c FROM uplinks' . ($where ? ' WHERE ' . implode(' AND ', $where) : '');
+        return (int) Database::fetch($sql, $params)['c'];
+    }
+
+    public static function countDownlinks(?int $devId = null, ?int $appId = null, ?int $tenantId = null): int
+    {
+        if (self::scope()['demo']) { return 60; }
+        $where = []; $params = [];
+        if ($devId) { $where[] = 'dev_id=?'; $params[] = $devId; }
+        if ($appId) { $where[] = 'app_id=?'; $params[] = $appId; }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) { if (!$appIds) return 0; $where[] = 'app_id IN (' . implode(',', $appIds) . ')'; }
+        $sql = 'SELECT COUNT(*) AS c FROM downlinks' . ($where ? ' WHERE ' . implode(' AND ', $where) : '');
+        return (int) Database::fetch($sql, $params)['c'];
+    }
+
+    public static function countEvents(?int $devId = null, ?string $gwId = null, ?string $type = null, ?int $tenantId = null): int
+    {
+        if (self::scope()['demo']) { return 80; }
+        $type = ($type !== null && $type !== '') ? $type : null;
+        $where = []; $params = [];
+        if ($devId) { $where[] = 'dev_id=?';     $params[] = $devId; }
+        if ($gwId)  { $where[] = 'gateway_id=?'; $params[] = $gwId; }
+        if ($type)  { $where[] = 'type=?';       $params[] = $type; }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) { if (!$appIds) return 0; $where[] = 'app_id IN (' . implode(',', $appIds) . ')'; }
+        $sql = 'SELECT COUNT(*) AS c FROM events' . ($where ? ' WHERE ' . implode(' AND ', $where) : '');
+        return (int) Database::fetch($sql, $params)['c'];
     }
 
     public static function enqueueDownlink(int $devId, int $port, string $payloadHex, bool $confirmed): array

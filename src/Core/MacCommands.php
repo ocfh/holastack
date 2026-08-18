@@ -416,6 +416,8 @@ class MacCommands
         } else {
             $device['battery'] = -1;       // 不可用
         }
+        // 设备已响应 DevStatusReq，清除挂起请求（避免每次上行都重发）
+        self::clearPending($device, self::CID_DEV_STATUS_REQ);
         // 供上层 Webhook 上报：255(不可用) 映射为 null
         $device['mac_telemetry'] = [
             'battery' => ($battery === 255) ? null : $battery,
