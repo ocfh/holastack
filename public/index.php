@@ -952,9 +952,9 @@ async function applyLanguage(lang){
 const _origAlert = window.alert;
 const _toastType = (m) => {
   const s = String(m || '');
-  if (/失败|错误|不允许|不能|无法|forbidden|error|fail/i.test(s)) return 'err';
-  if (/成功|已|完成|ok|saved|created|updated|deleted/i.test(s)) return 'ok';
+  if (/失败|错误|不允许|不能|无法|不可用|无效|非法|禁止|禁用|权限|已存在|重复|冲突|找不到|不存在|已被|forbidden|error|fail|denied|conflict|not\s*found|invalid|exist/i.test(s)) return 'err';
   if (/警告|注意|小心|warn/i.test(s)) return 'warn';
+  if (/成功|已完成|已保存|已删除|已更新|已复制|已发送|已提交|ok|saved|created|updated|deleted|submitted/i.test(s)) return 'ok';
   return 'info';
 };
 window.alert = (m) => {
