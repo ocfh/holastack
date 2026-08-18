@@ -965,7 +965,7 @@ window.alert = (m) => {
 const _origConfirm = window.confirm;
 window.confirm = (q) => _origConfirm.call(window, t(q));
 
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, dpsSort:{col:null,dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', devsFActivation:'', devsFCls:'', devsFOnline:'', devsFStatus:'', gwsFOnline:'', dpsFRegion:'', dpsFCls:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, appsPage:1, devsPage:1, gwsPage:1, usersPage:1, apiKeysPage:1, intgPage:1, dpsPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, appsLimit:50, devsLimit:50, gwsLimit:50, usersLimit:50, apiKeysLimit:50, intgLimit:50, dpsLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, appsOffset:0, devsOffset:0, gwsOffset:0, usersOffset:0, apiKeysOffset:0, intgOffset:0, dpsOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0, appsTotal:0, devsTotal:0, gwsTotal:0, usersTotal:0, apiKeysTotal:0, intgTotal:0, dpsTotal:0};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -1216,6 +1216,60 @@ async function busy(label, fn){ showLoader(label); try { return await fn(); } fi
  *  - filterStatus: {col, value}   ← 当前状态过滤
  *  - onSortChange: (newSort) => void   ← 可选：排序变化时通知外层（用于持久化或重新 fetch）
  */
+// 管理列表页做「全量筛选+排序后分页」时使用：返回 [filteredSortedRows, total]
+// 与 buildSortableTable 内部逻辑保持一致（cfg 结构相同），避免两处实现漂移
+function filterAndSortRows(cfg){
+  const filterList = cfg.filterStatusList
+    ? cfg.filterStatusList
+    : (cfg.filterStatus ? [cfg.filterStatus] : []);
+  let rows = (cfg.rows || []).slice();
+  for (const f of filterList) {
+    if (!f || !f.col || !f.value) continue;
+    const fcol = cfg.cols.find(c => c.key === f.col);
+    if (fcol && fcol.opts && fcol.opts.getValue) {
+      const getV = fcol.opts.getValue;
+      const opt = fcol.opts.values.find(o => o.value === f.value);
+      const matchFn = opt && opt.match ? opt.match : (v => String(v) === f.value);
+      rows = rows.filter(r => matchFn(getV(r)));
+    }
+  }
+  const sort = cfg.state[cfg.stateKey] || cfg.defaultSort;
+  if (sort && sort.col) {
+    const c = cfg.cols.find(x => x.key === sort.col);
+    if (c) {
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      rows = rows.sort((a,b) => {
+        let va, vb;
+        if (c.type === 'time' || c.type === 'num') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
+        else if (c.type === 'status') {
+          const vals = c.opts && c.opts.values ? c.opts.values : [];
+          const getV = c.opts && c.opts.getValue ? c.opts.getValue : (r => r[c.key]);
+          const vaRaw = getV(a), vbRaw = getV(b);
+          const ia = vals.findIndex(o => String(o.value) === String(vaRaw));
+          const ib = vals.findIndex(o => String(o.value) === String(vbRaw));
+          const idxA = ia >= 0 ? ia : Number.MAX_SAFE_INTEGER;
+          const idxB = ib >= 0 ? ib : Number.MAX_SAFE_INTEGER;
+          if (idxA === idxB) return String(vaRaw ?? '').localeCompare(String(vbRaw ?? '')) * dir;
+          va = idxA; vb = idxB;
+        }
+        else { va = String(cfg.cellValue(a, c.key) ?? ''); vb = String(cfg.cellValue(b, c.key) ?? ''); }
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+        return 0;
+      });
+    }
+  }
+  return [rows, rows.length];
+}
+// 分页切片：rows 全量 → [当前页 rows, total, page, limit, offset]
+function paginateRows(rows, state, keys){
+  const page = Math.max(1, +(state[keys.pageKey] || 1));
+  const limit = Math.max(1, Math.min(500, +(state[keys.limitKey] || 50)));
+  const total = rows.length;
+  const offset = Math.max(0, (page - 1) * limit);
+  state[keys.offsetKey] = offset;
+  return [rows.slice(offset, offset + limit), total, page, limit, offset];
+}
 function buildSortableTable(cfg){
   // 把 cfg 暴露到 window 上，让 _tableToggleSort 能在点表头时查 firstDir
   if (cfg.refresh) {
@@ -1223,6 +1277,11 @@ function buildSortableTable(cfg){
     window.__tableCfg[cfg.refresh] = cfg;
   }
   const sort = cfg.state[cfg.stateKey] || cfg.defaultSort;
+  // presorted: 管理列表页已用 filterAndSortRows 完成筛选+排序+分页切片，
+  // 这里直接渲染传入的 rows（cfg.rows 已是当前页），不再重复筛选/排序。
+  if (cfg.presorted) {
+    return renderTable(cfg, sort);
+  }
   // 状态筛选：支持多列同时筛（cfg.filterStatusList 数组），单列 cfg.filterStatus 兼容
   //   形如 [{col:'level', value:'error'}, {col:'type', value:'uplink'}]
   const filterList = cfg.filterStatusList
@@ -1275,6 +1334,16 @@ function buildSortableTable(cfg){
       });
     }
   }
+  return renderTable(cfg, sort);
+}
+// 表格 HTML 渲染（表头 + 行）。cfg.rows 即待渲染行：
+//   - 日志页：buildSortableTable 内部筛选/排序后的当前页
+//   - 管理列表页（presorted）：已由 filterAndSortRows + paginateRows 处理过的当前页
+function renderTable(cfg, sort){
+  const rows = cfg.rows || [];
+  const filterList = cfg.filterStatusList
+    ? cfg.filterStatusList
+    : (cfg.filterStatus ? [cfg.filterStatus] : []);
   // 表头
   const arrow = (k) => {
     if (!sort || sort.col !== k) return '<span class="sort-arrow" style="opacity:.3;margin-left:4px">↕</span>';
@@ -1553,7 +1622,7 @@ async function viewApplications(){
   const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
   const [r, tf] = await Promise.all([api('GET','/api/applications'+q), tenantFilterHtml()]);
   state.apps = r.data||[];
-  const table = buildSortableTable({
+  const cfg = {
     state, stateKey:'appsSort',
     defaultSort:{col:'time',dir:'desc'},
     cellValue: (a, k) => ({id:a.id, name:a.name, app_eui:a.app_eui, cb:a.callback_url||'', time:a.created_at}[k]),
@@ -1569,11 +1638,20 @@ async function viewApplications(){
     rowHtml: a => `<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${esc(a.callback_url||'')}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
      <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`,
     emptyText:'暂无应用',
-  });
+  };
+  // 管理列表页分页通用套路：全量筛选+排序 → 取总数 → 切片当前页 → presorted 渲染 + buildPager
+  const [filteredRows, filteredTotal] = filterAndSortRows(cfg);
+  cfg.rows = paginateRows(filteredRows, state, {pageKey:'appsPage', limitKey:'appsLimit', offsetKey:'appsOffset'})[0];
+  cfg.presorted = true;
+  const table = buildSortableTable(cfg);
+  const pager = buildPager({ total: filteredTotal, limit: state.appsLimit, offset: state.appsOffset, pageKey:'appsPage', limitKey:'appsLimit', offsetKey:'appsOffset', totalKey:'appsTotal', refresh:'viewApplications' });
   window.appsSort_sort = col => _tableToggleSort('appsSort','viewApplications',col);
+  window.viewApplications__page = p => _pagerGo({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',p);
+  window.viewApplications__limit = l => _pagerSetLimit({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>应用</h2>${adminBtn('<button onclick="newApplication()">+ 新建应用</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
-    ${table}`;
+    ${table}
+    ${pager}`;
 }
 async function viewDevices(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
@@ -1587,22 +1665,51 @@ async function viewDevices(){
   const apps = ar.data||[];
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? esc(a.name) : ('#'+id); };
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.devAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  const table = buildSortableTable({
+  // 分类下拉筛选：激活方式 / Class / 在线状态 / 入网状态（全部在最前）
+  const activationValues = [
+    {value:'', label:'全部'},
+    {value:'OTAA', label:'OTAA'},
+    {value:'ABP',  label:'ABP'},
+  ];
+  const classValues = [
+    {value:'', label:'全部'},
+    {value:'A', label:'Class A'},
+    {value:'B', label:'Class B'},
+    {value:'C', label:'Class C'},
+  ];
+  const onlineValues = [
+    {value:'', label:'全部'},
+    {value:'online',  label:'在线'},
+    {value:'offline', label:'离线'},
+  ];
+  const devStatusValues = [
+    {value:'', label:'全部'},
+    {value:'active',   label:'active · 已入网'},
+    {value:'pending',  label:'pending · 待入网'},
+    {value:'disabled', label:'disabled · 已禁用'},
+  ];
+  const devCfg = {
     state, stateKey:'devsSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (d, k) => ({id:d.id, name:d.name, app:appName(d.app_id), activation:d.activation, cls:d.class, online:d.online==='online'?1:0, dev_eui:d.dev_eui, dev_addr:d.dev_addr, status:d.status, time:+d.last_seen||0}[k]),
+    cellValue: (d, k) => ({id:d.id, name:d.name, app:appName(d.app_id), activation:d.activation, cls:d.class, online:d.online==='online'?'online':'offline', dev_eui:d.dev_eui, dev_addr:d.dev_addr, status:d.status, time:+d.last_seen||0}[k]),
     cols:[
       {key:'id',         label:'ID',      type:'num', firstDir:'asc', sortable:false},
       {key:'name',       label:'名称',     type:'str', firstDir:'asc', sortable:false},
       {key:'app',        label:'应用',     type:'str', firstDir:'asc', sortable:false},
-      {key:'activation', label:'激活',     type:'str', firstDir:'asc', sortable:false},
-      {key:'cls',        label:'Class',   type:'str', firstDir:'asc', sortable:false},
-      {key:'online',     label:'状态',     type:'num', firstDir:'asc', sortable:false},
+      {key:'activation', label:'激活',     type:'status', firstDir:'asc', sortable:false, opts:{getValue:d=>d.activation, values:activationValues}},
+      {key:'cls',        label:'Class',   type:'status', firstDir:'asc', sortable:false, opts:{getValue:d=>d.class, values:classValues}},
+      {key:'online',     label:'状态',     type:'status', firstDir:'asc', sortable:false, opts:{getValue:d=>d.online==='online'?'online':'offline', values:onlineValues}},
       {key:'dev_eui',    label:'DevEUI',  type:'str', firstDir:'asc', sortable:false},
       {key:'dev_addr',   label:'DevAddr', type:'str', firstDir:'asc', sortable:false},
-      {key:'status',     label:'入网',     type:'str', firstDir:'asc', sortable:false},
+      {key:'status',     label:'入网',     type:'status', firstDir:'asc', sortable:false, opts:{getValue:d=>d.status, values:devStatusValues}},
       {key:'time',       label:'最近/遥测', type:'time', firstDir:'desc'},
       {key:'_raw',       label:'',        type:'raw'},
+    ],
+    filterStatusList: [
+      {col:'activation', value: state.devsFActivation},
+      {col:'cls',        value: state.devsFCls},
+      {col:'online',     value: state.devsFOnline},
+      {col:'status',     value: state.devsFStatus},
     ],
     rows: state.devs,
     rowHtml: d => {
@@ -1625,11 +1732,25 @@ async function viewDevices(){
         <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
     },
     emptyText:'暂无设备',
-  });
+  };
+  const [filteredDevs, devsTotal] = filterAndSortRows(devCfg);
+  devCfg.rows = paginateRows(filteredDevs, state, {pageKey:'devsPage', limitKey:'devsLimit', offsetKey:'devsOffset'})[0];
+  devCfg.presorted = true;
+  const table = buildSortableTable(devCfg);
+  const pager = buildPager({ total: devsTotal, limit: state.devsLimit, offset: state.devsOffset, pageKey:'devsPage', limitKey:'devsLimit', offsetKey:'devsOffset', totalKey:'devsTotal', refresh:'viewDevices' });
   window.devsSort_sort = col => _tableToggleSort('devsSort','viewDevices',col);
+  // 4 个分类列的下拉筛选：colKey → state 字段
+  window.devsSort_fstatus = (col, v) => {
+    const map = {activation:'devsFActivation', cls:'devsFCls', online:'devsFOnline', status:'devsFStatus'};
+    _tableSetFStatus(map[col] || 'devsFStatus', 'viewDevices', v);
+  };
+  window.viewDevices__page = p => _pagerGo({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',p);
+  window.viewDevices__limit = l => _pagerSetLimit({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备</h2>${adminBtn('<button onclick="newDevice()">+ 添加设备</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div></div>
-    ${table}`;
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
+    <button class="btn ghost" onclick="state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};viewDevices()">重置</button></div>
+    ${table}
+    ${pager}`;
 }
 async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
@@ -1667,19 +1788,25 @@ async function viewGateways(){
   const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
   const [r, tf] = await Promise.all([api('GET','/api/gateways'+q), tenantFilterHtml()]);
   state.gws = r.data||[];
-  const table = buildSortableTable({
+  const onlineValues = [
+    {value:'', label:'全部'},
+    {value:'online',  label:'在线'},
+    {value:'offline', label:'离线'},
+  ];
+  const gwCfg = {
     state, stateKey:'gwsSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?1:0, region:g.region||'', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
+    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?'online':'offline', region:g.region||'', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
     cols:[
       {key:'gw_id',   label:'GatewayID', type:'str', firstDir:'asc', sortable:false},
       {key:'name',    label:'名称',       type:'str', firstDir:'asc', sortable:false},
-      {key:'online',  label:'状态',       type:'num', firstDir:'asc', sortable:false},
+      {key:'online',  label:'状态',       type:'status', firstDir:'asc', sortable:false, opts:{getValue:g=>g.status==='online'?'online':'offline', values:onlineValues}},
       {key:'region',  label:'区域',       type:'str', firstDir:'asc', sortable:false},
       {key:'uplinks', label:'上行数',     type:'num', firstDir:'asc', sortable:false},
       {key:'time',    label:'最近心跳',   type:'time', firstDir:'desc'},
       {key:'_raw',    label:'',          type:'raw'},
     ],
+    filterStatus: {col:'online', value: state.gwsFOnline},
     rows: state.gws,
     rowHtml: g => {
       const online = g.status==='online';
@@ -1690,11 +1817,21 @@ async function viewGateways(){
         <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">删除</button>`)}</td></tr>`;
     },
     emptyText:'暂无网关（网关连接后自动出现，亦可手动添加）',
-  });
+  };
+  const [filteredGws, gwsTotal] = filterAndSortRows(gwCfg);
+  gwCfg.rows = paginateRows(filteredGws, state, {pageKey:'gwsPage', limitKey:'gwsLimit', offsetKey:'gwsOffset'})[0];
+  gwCfg.presorted = true;
+  const table = buildSortableTable(gwCfg);
+  const pager = buildPager({ total: gwsTotal, limit: state.gwsLimit, offset: state.gwsOffset, pageKey:'gwsPage', limitKey:'gwsLimit', offsetKey:'gwsOffset', totalKey:'gwsTotal', refresh:'viewGateways' });
   window.gwsSort_sort = col => _tableToggleSort('gwsSort','viewGateways',col);
+  window.gwsSort_fstatus = (col, v) => _tableSetFStatus('gwsFOnline', 'viewGateways', v);
+  window.viewGateways__page = p => _pagerGo({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',p);
+  window.viewGateways__limit = l => _pagerSetLimit({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>网关</h2>${adminBtn('<button onclick="newGateway()">+ 新建网关</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
-    ${table}`;
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
+      <button class="btn ghost" onclick="state.gwsFOnline='';state.gwsSort={col:'time',dir:'desc'};viewGateways()">重置</button></div>
+    ${table}
+    ${pager}`;
 }
 
 async function viewUplinks(){
@@ -1991,7 +2128,7 @@ async function showEventRaw(id){
 async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/users'); state.users = r.data||[];
-  const table = buildSortableTable({
+  const userCfg = {
     state, stateKey:'usersSort',
     defaultSort:{col:'time',dir:'desc'},
     cellValue: (u, k) => ({id:u.id, username:u.username, role:u.role, tenant:u.tenant_id||0, time:u.created_at}[k]),
@@ -2009,10 +2146,18 @@ async function viewUsers(){
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
      <td><button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`,
     emptyText:'暂无用户',
-  });
+  };
+  const [filteredUsers, usersTotal] = filterAndSortRows(userCfg);
+  userCfg.rows = paginateRows(filteredUsers, state, {pageKey:'usersPage', limitKey:'usersLimit', offsetKey:'usersOffset'})[0];
+  userCfg.presorted = true;
+  const table = buildSortableTable(userCfg);
+  const pager = buildPager({ total: usersTotal, limit: state.usersLimit, offset: state.usersOffset, pageKey:'usersPage', limitKey:'usersLimit', offsetKey:'usersOffset', totalKey:'usersTotal', refresh:'viewUsers' });
   window.usersSort_sort = col => _tableToggleSort('usersSort','viewUsers',col);
+  window.viewUsers__page = p => _pagerGo({pageKey:'usersPage',limitKey:'usersLimit',offsetKey:'usersOffset',totalKey:'usersTotal'},'viewUsers',p);
+  window.viewUsers__limit = l => _pagerSetLimit({pageKey:'usersPage',limitKey:'usersLimit',offsetKey:'usersOffset',totalKey:'usersTotal'},'viewUsers',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户管理</h2><button onclick="newUser()">+ 新建用户</button></div>
-    ${table}`;
+    ${table}
+    ${pager}`;
 }
 
 // ================= API 调用日志 =================
@@ -2375,16 +2520,62 @@ async function viewDeviceProfiles(){
   const q = state.tenantFilter ? ('?tenant_id='+state.tenantFilter) : '';
   const [r, tf] = await Promise.all([api('GET','/api/device-profiles'+q), tenantFilterHtml()]);
   state.dps = r.data||[];
-  const rows = state.dps.map(d=>{
-    const cls = []; if(d.supports_class_b) cls.push('B'); if(d.supports_class_c) cls.push('C');
-    return `<tr><td>${d.id}</td><td>${esc(d.name)}</td><td class="muted">${esc(d.region)}</td>
+  // Class 列显示：A / B / C / B+C（由 supports_class_b / supports_class_c 组合）
+  const clsOf = d => {
+    const cls = []; if(+d.supports_class_b) cls.push('B'); if(+d.supports_class_c) cls.push('C');
+    return cls.length ? cls.join('+') : 'A';
+  };
+  // 区域筛选：从数据去重（EU868 / CN470 / ...）
+  const regions = [...new Set((state.dps||[]).map(d=>d.region).filter(Boolean))].sort();
+  const regionValues = [{value:'', label:'全部'}, ...regions.map(rg=>({value:rg, label:rg}))];
+  const classValues = [
+    {value:'', label:'全部'},
+    {value:'A',   label:'Class A'},
+    {value:'B',   label:'Class B'},
+    {value:'C',   label:'Class C'},
+    {value:'B+C', label:'Class B+C'},
+  ];
+  const dpsCfg = {
+    state, stateKey:'dpsSort',
+    defaultSort:{col:null,dir:'desc'},
+    cellValue: (d, k) => ({id:d.id, name:d.name, region:d.region, mac:d.mac_version, adr:d.adr_algorithm, codec:d.payload_codec_runtime, cls:clsOf(d)}[k]),
+    cols:[
+      {key:'id',     label:'ID',    type:'num',  firstDir:'asc', sortable:false},
+      {key:'name',   label:'名称',   type:'str',  firstDir:'asc', sortable:false},
+      {key:'region', label:'区域',   type:'status', firstDir:'asc', sortable:false, opts:{getValue:d=>d.region, values:regionValues}},
+      {key:'mac',    label:'MAC',    type:'str',  firstDir:'asc', sortable:false},
+      {key:'adr',    label:'ADR',    type:'str',  firstDir:'asc', sortable:false},
+      {key:'codec',  label:'编解码',  type:'str',  firstDir:'asc', sortable:false},
+      {key:'cls',    label:'Class',  type:'status', firstDir:'asc', sortable:false, opts:{getValue:clsOf, values:classValues}},
+      {key:'_raw',   label:'',       type:'raw'},
+    ],
+    filterStatusList: [
+      {col:'region', value: state.dpsFRegion},
+      {col:'cls',    value: state.dpsFCls},
+    ],
+    rows: state.dps,
+    rowHtml: d => `<tr><td>${d.id}</td><td>${esc(d.name)}</td><td class="muted">${esc(d.region)}</td>
       <td class="muted">${esc(d.mac_version)}</td><td class="muted">${esc(d.adr_algorithm)}</td>
-      <td class="muted">${esc(d.payload_codec_runtime)}</td><td class="muted">${cls.join('/')||'A'}</td>
-      <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDeviceProfile(${d.id}))">删除</button>`)}</td></tr>`;
-  }).join('')||`<tr><td colspan="8" class="muted">暂无设备模板</td></tr>`;
+      <td class="muted">${esc(d.payload_codec_runtime)}</td><td class="muted">${clsOf(d)}</td>
+      <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDeviceProfile(${d.id}))">删除</button>`)}</td></tr>`,
+    emptyText:'暂无设备模板',
+  };
+  const [filteredDps, dpsTotal] = filterAndSortRows(dpsCfg);
+  dpsCfg.rows = paginateRows(filteredDps, state, {pageKey:'dpsPage', limitKey:'dpsLimit', offsetKey:'dpsOffset'})[0];
+  dpsCfg.presorted = true;
+  const table = buildSortableTable(dpsCfg);
+  const pager = buildPager({ total: dpsTotal, limit: state.dpsLimit, offset: state.dpsOffset, pageKey:'dpsPage', limitKey:'dpsLimit', offsetKey:'dpsOffset', totalKey:'dpsTotal', refresh:'viewDeviceProfiles' });
+  window.dpsSort_fstatus = (col, v) => {
+    const map = {region:'dpsFRegion', cls:'dpsFCls'};
+    _tableSetFStatus(map[col] || 'dpsFRegion', 'viewDeviceProfiles', v);
+  };
+  window.viewDeviceProfiles__page = p => _pagerGo({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',p);
+  window.viewDeviceProfiles__limit = l => _pagerSetLimit({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
-    <table><thead><tr><th>ID</th><th>名称</th><th>区域</th><th>MAC</th><th>ADR</th><th>编解码</th><th>Class</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
+      <button class="btn ghost" onclick="state.dpsFRegion='';state.dpsFCls='';state.dpsSort={col:null,dir:'desc'};viewDeviceProfiles()">重置</button></div>
+    ${table}
+    ${pager}`;
 }
 
 // ---------------- 用户配置 ----------------
@@ -2519,7 +2710,7 @@ async function viewApiKeys(){
   if(state.appSel){
     const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); ks=r.data||[];
   }
-  const table = buildSortableTable({
+  const akCfg = {
     state, stateKey:'apiKeysSort',
     defaultSort:{col:'time',dir:'desc'},
     cellValue: (k, ck) => ({id:k.id, name:k.name, token:k.token_preview||'', time:k.created_at}[ck]),
@@ -2534,11 +2725,19 @@ async function viewApiKeys(){
     rowHtml: k => `<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
       <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`,
     emptyText: state.appSel ? '该应用暂无 API 密钥' : '请先在上方选择应用',
-  });
+  };
+  const [filteredKeys, keysTotal] = filterAndSortRows(akCfg);
+  akCfg.rows = paginateRows(filteredKeys, state, {pageKey:'apiKeysPage', limitKey:'apiKeysLimit', offsetKey:'apiKeysOffset'})[0];
+  akCfg.presorted = true;
+  const table = buildSortableTable(akCfg);
+  const pager = buildPager({ total: keysTotal, limit: state.apiKeysLimit, offset: state.apiKeysOffset, pageKey:'apiKeysPage', limitKey:'apiKeysLimit', offsetKey:'apiKeysOffset', totalKey:'apiKeysTotal', refresh:'viewApiKeys' });
   window.apiKeysSort_sort = col => _tableToggleSort('apiKeysSort','viewApiKeys',col);
+  window.viewApiKeys__page = p => _pagerGo({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',p);
+  window.viewApiKeys__limit = l => _pagerSetLimit({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',l);
   document.getElementById('view').innerHTML=`<h2>API 密钥</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
-   ${table}`;
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
+   ${table}
+   ${pager}`;
 }
 function newApiKey(){
   if(!state.appSel){alert('请先选择应用');return;}
@@ -2569,7 +2768,7 @@ async function viewIntegrations(){
     let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
     return it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
   };
-  const table = buildSortableTable({
+  const intgCfg = {
     state, stateKey:'intgSort',
     defaultSort:{col:'time',dir:'desc'},
     cellValue: (it, k) => ({kind:it.kind, enabled:it.enabled?1:0, summary:summaryOf(it), time:it.created_at}[k]),
@@ -2587,11 +2786,19 @@ async function viewIntegrations(){
         <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
         <td>${adminBtn(`<button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`,
     emptyText: state.intAppSel ? '该应用暂无外部集成' : '请先在上方选择应用',
-  });
+  };
+  const [filteredInts, intgTotal] = filterAndSortRows(intgCfg);
+  intgCfg.rows = paginateRows(filteredInts, state, {pageKey:'intgPage', limitKey:'intgLimit', offsetKey:'intgOffset'})[0];
+  intgCfg.presorted = true;
+  const table = buildSortableTable(intgCfg);
+  const pager = buildPager({ total: intgTotal, limit: state.intgLimit, offset: state.intgOffset, pageKey:'intgPage', limitKey:'intgLimit', offsetKey:'intgOffset', totalKey:'intgTotal', refresh:'viewIntegrations' });
   window.intgSort_sort = col => _tableToggleSort('intgSort','viewIntegrations',col);
+  window.viewIntegrations__page = p => _pagerGo({pageKey:'intgPage',limitKey:'intgLimit',offsetKey:'intgOffset',totalKey:'intgTotal'},'viewIntegrations',p);
+  window.viewIntegrations__limit = l => _pagerSetLimit({pageKey:'intgPage',limitKey:'intgLimit',offsetKey:'intgOffset',totalKey:'intgTotal'},'viewIntegrations',l);
   document.getElementById('view').innerHTML=`<h2>外部集成</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建外部集成</button>'):''}</div>
-   ${table}`;
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;state.intgPage=1;state.intgOffset=0;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建外部集成</button>'):''}</div>
+   ${table}
+   ${pager}`;
 }
 function newIntegration(){
   if(!state.intAppSel){alert('请先选择应用');return;}
