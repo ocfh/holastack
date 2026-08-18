@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_at INT NOT NULL
 );
 
--- ---- ChirpStack-port: 设备配置模板（Device Profile） ----
+-- ---- 设备配置模板（Device Profile） ----
 CREATE TABLE IF NOT EXISTS device_profiles (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,
@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     created_at INT NOT NULL
 );
 
--- ---- ChirpStack-port: 应用级 API Key ----
+-- ---- 应用级 API Key ----
 CREATE TABLE IF NOT EXISTS api_keys (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,
@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at INT NOT NULL DEFAULT 0
 );
 
--- ---- ChirpStack-port: 集成配置（HTTP/MQTT/InfluxDB/...） ----
+-- ---- 集成配置（HTTP/MQTT/InfluxDB/...） ----
 CREATE TABLE IF NOT EXISTS integrations (
     id INT AUTO_INCREMENT PRIMARY KEY,
     application_id INT NOT NULL,
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS integrations (
     INDEX idx_integrations_app (application_id)
 );
 
--- ---- ChirpStack-port: 组播组（Multicast Group, Class B/C） ----
+-- ---- 组播组（Multicast Group, Class B/C） ----
 CREATE TABLE IF NOT EXISTS multicast_groups (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,
@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS multicast_queue (
     INDEX idx_mq_mg (multicast_group_id)
 );
 
--- ---- ChirpStack-port: Basic Station / LNS（WebSocket 后端） ----
+-- ---- Basic Station / LNS（WebSocket 后端） ----
 CREATE TABLE IF NOT EXISTS stations (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,
@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS stations (
     created_at INT NOT NULL
 );
 
--- ---- ChirpStack-port: 中继（Relay, TS011 / LoRaWAN 1.1 Relay） ----
+-- ---- 中继（Relay, TS011 / LoRaWAN 1.1 Relay） ----
 CREATE TABLE IF NOT EXISTS relay_gateways (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,
@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS relay_devices (
     created_at INT NOT NULL
 );
 
--- ---- ChirpStack-port: FUOTA（固件分片 + 组播 + 时钟同步） ----
+-- ---- FUOTA（固件分片 + 组播 + 时钟同步） ----
 CREATE TABLE IF NOT EXISTS fuota_campaigns (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,
@@ -365,7 +365,7 @@ CREATE TABLE IF NOT EXISTS fuota_frames (
     INDEX idx_ff_campaign (campaign_id)
 );
 
--- ---- ChirpStack-port: 漫游（Roaming, Backend Interface） ----
+-- ---- 漫游（Roaming, Backend Interface） ----
 CREATE TABLE IF NOT EXISTS roaming_servers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     tenant_id INT DEFAULT 0,

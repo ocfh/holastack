@@ -37,7 +37,7 @@ for ($i = 1; $i < count($argv); $i++) {
     }
 }
 
-echo "holastack LNS (Basic Station backend, pure PHP WebSocket)\n";
+echo "HolaStack LNS (Basic Station backend, pure PHP WebSocket)\n";
 echo "DB: " . ELW_DB_DSN . "\n";
 
 Database::migrate();

@@ -10,10 +10,10 @@ use holastack\DB\Database;
 class Setting
 {
     /** 全部可配置键。 */
-    const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url'];
+    const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang'];
 
     /** 对未登录用户（登录页）安全的公开键。 */
-    const PUBLIC_KEYS = ['site_name', 'site_logo_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url'];
+    const PUBLIC_KEYS = ['site_name', 'site_logo_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang'];
 
     /** 读取单个设置，缺失返回默认值。 */
     public static function get(string $key, string $default = ''): string
@@ -63,7 +63,7 @@ class Setting
             $out[$k] = $all[$k] ?? '';
         }
         if (($out['site_name'] ?? '') === '') {
-            $out['site_name'] = 'holastack';
+            $out['site_name'] = 'HolaStack';
         }
         if (($out['login_logo_text'] ?? '') === '') {
             $out['login_logo_text'] = $out['site_name'];

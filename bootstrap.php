@@ -22,3 +22,6 @@ require_once __DIR__ . '/config/config.php';
 if (!is_dir(ELW_LOG_DIR)) {
     @mkdir(ELW_LOG_DIR, 0777, true);
 }
+
+// 全局服务端翻译助手（elw_t 等），定义于独立的无命名空间文件。
+require_once __DIR__ . '/src/langHelpers.php';

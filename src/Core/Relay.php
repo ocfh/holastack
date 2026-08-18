@@ -5,12 +5,12 @@ use holastack\DB\Database;
 use holastack\Crypto\AES;
 
 /**
- * LoRaWAN 中继（Relay, TS011-1.0.0）—— 仿 ChirpStack lrwn/src/relay.rs + maccommand/relay_conf.rs 移植。
+ * LoRaWAN 中继（Relay, TS011-1.0.0）实现。
  *
  * Relay 让信号不佳的终端（End-Device）借助附近「中继节点」转发上下行。协议层：
  *   - Relay 与 NS 之间用 Relay MAC 命令（RelayConfReq/Ans CID 0x40、EndDeviceConfReq/Ans 0x41、
  *     FilterListReq/Ans 0x42、UpdateUplinkListReq/Ans 0x43、CtrlUplinkListReq/Ans 0x44、
- *     ConfigureFwdLimitReq/Ans 0x45、NotifyNewEndDeviceReq 0x46；对齐 lrwn CID::to_u8）
+ *     ConfigureFwdLimitReq/Ans 0x45、NotifyNewEndDeviceReq 0x46；CID 取值对齐 LoRaWAN Relay 规范）
  *     完成中继会话配置与终端登记；
  *   - 终端→中继的上行帧由中继封装为 ForwardUplinkReq（UplinkMetadata 3B + 频率 3B + PHYPayload），
  *     中继→终端的下行帧封装为 ForwardDownlinkReq（PHYPayload）。

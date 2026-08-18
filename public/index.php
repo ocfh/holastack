@@ -45,7 +45,7 @@ if ($path === '/install') {
 // 已安装：确保表结构存在（含 auth_tokens 等新增表，对已存在库兜底）
 Database::migrate();
 
-// ---- 应用级开放 API（/v1/，使用应用 API Key 鉴权，作用域限定到该 Key 所属应用）----
+// ---- 应用级开放 API（/v1/，使用 API 密钥鉴权，作用域限定到该 Key 所属应用）----
 // 注意：$path 已 rtrim('/')，根路径为 '/v1'（对应请求 '/v1/'）
 if ($path === '/v1' || strpos($path, '/v1/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
@@ -54,6 +54,27 @@ if ($path === '/v1' || strpos($path, '/v1/') === 0) {
     } catch (\Throwable $e) {
         http_response_code(500);
         echo json_encode(['error' => 'server_error: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ---- 视图渲染端点：返回后台视图的 HTML 片段（服务端翻译/样式统一） ----
+if (strpos($path, '/api/view/') === 0) {
+    $viewName = substr($path, strlen('/api/view/'));
+    header('Content-Type: text/html; charset=utf-8');
+    try {
+        Auth::guardApi(Auth::ROLE_OPERATOR);
+        if ($viewName === 'loracalc') {
+            echo holastack\Web\ViewRenderer::renderLoraCalc();
+        } elseif ($viewName === 'apidocs') {
+            echo holastack\Web\ViewRenderer::renderApiDocs();
+        } else {
+            http_response_code(404);
+            echo 'not found';
+        }
+    } catch (\Throwable $e) {
+        http_response_code(403);
+        echo 'unauthorized';
     }
     exit;
 }
@@ -126,13 +147,24 @@ function handleApi(string $method, string $path): array
     if ($resource === 'public-settings') {
         return ['data' => Setting::getPublic()];
     }
+    // 公开接口：语言包（无需登录即可访问，仅含界面译文）
+    if ($resource === 'i18n') {
+        $lang = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($get['lang'] ?? ''));
+        $lang = $lang !== '' ? $lang : 'zh';
+        $file = dirname(__DIR__) . '/lang/' . $lang . '.php';
+        $dict = is_file($file) ? require $file : [];
+        if (!is_array($dict)) {
+            $dict = [];
+        }
+        return ['lang' => $lang, 'dict' => $dict, 'langs' => ELW_langOptions()];
+    }
     if ($resource === 'regions') {
         return ['regions' => WebApp::regions()];
     }
 
     // 其余需登录。权限模型：
     //  - users/tenants/settings 为系统管理资源 → 仅 admin
-    //  - 其他写操作（应用/设备/网关/模板/Key/集成/组播）→ admin 或 tenant（guardWrite），WebApp 层再按租户细粒度拦截
+    //  - 其他写操作（应用/设备/网关/模板/Key/外部集成/组播）→ admin 或 tenant（guardWrite），WebApp 层再按租户细粒度拦截
     //  - 只读 + 下行/组播入队 + 改自己密码 → operator 及以上
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
     $isDownlink = ($resource === 'devices' && ($segs[2] ?? '') === 'downlink');
@@ -355,7 +387,7 @@ function handleApi(string $method, string $path): array
 }
 
 /**
- * 应用级开放 API（/v1/）：使用「应用 API Key」鉴权，所有数据作用域限定到该 Key 所属应用。
+ * 应用级开放 API（/v1/）：使用「API 密钥」鉴权，所有数据作用域限定到该 Key 所属应用。
  * 鉴权头：Authorization: Bearer <API_KEY>  或  ?api_key=<API_KEY>
  * 设备响应已剥离 app_key / nwk_s_key / app_s_key 等敏感密钥。
  */
@@ -367,7 +399,7 @@ function handleAppApi(string $method, string $path): array
     $body = in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true) ? getJsonBody() : [];
     $get = $_GET;
 
-    // ---- 鉴权：API Key -> application_id ----
+    // ---- 鉴权：API 密钥 -> application_id ----
     $token = ApiKey::tokenFromRequest();
     $appId = $token ? ApiKey::validate($token) : 0;
     if (!$appId) {
@@ -413,7 +445,7 @@ function handleAppApi(string $method, string $path): array
     switch ($sub) {
         case '':
             return [
-                'service' => 'holastack application API',
+                'service' => 'HolaStack application API',
                 'version' => 'v1',
                 'auth' => 'Authorization: Bearer <API_KEY> 或 ?api_key=<API_KEY>',
                 'endpoints' => [
@@ -504,13 +536,34 @@ function handleAppApi(string $method, string $path): array
 
 function renderPage(): string
 {
-    return <<<'HTML'
+    // 注入当前语言包：window.UI_LANG（当前语言）/ window.I18N（中文→译文 字典）。
+    // 放在 <!DOCTYPE> 之前，确保 <head> 内的 FOUC 脚本能据此设置 <html lang>。
+    $lang = Setting::get('ui_lang', 'zh');
+    // 语言白名单放开为「任意合法语言标识」，以支持 lang/ 下新增的多语言文件；含非法字符回退 zh
+    $lang = preg_replace('/[^A-Za-z0-9_-]/', '', (string)$lang);
+    if ($lang === '') {
+        $lang = 'zh';
+    }
+    $dict = [];
+    $dictFile = dirname(__DIR__) . '/lang/' . $lang . '.php';
+    if (is_file($dictFile)) {
+        $loaded = require $dictFile;
+        if (is_array($loaded)) {
+            $dict = $loaded;
+        }
+    }
+    $dictJson = json_encode($dict, JSON_UNESCAPED_UNICODE);
+    if ($dictJson === false) {
+        $dictJson = '[]';
+    }
+    $i18nHead = '<script>window.UI_LANG=' . json_encode($lang) . ';window.I18N=' . $dictJson . ';</script>';
+    return $i18nHead . <<<'HTML'
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>holastack</title>
+<title>HolaStack</title>
 <link id="faviconLink" rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cimage%20href%3D%22data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAOiUlEQVR4AdxaCXgURRb%2BqzqQRARiQA5ZAdGIICL3oYmg4oGI5wp4oCIerLh4gecnsOq6Kiq4q%2BuC56e4Joh4oMKyHisg4geCq%2BCtoHhwe6AgJN21%2Fz9h4mSYnplMgpLtb2q6u%2BrVu%2BrVq1ev2qKK1yHTXKfCYv%2BKouKyZwqLSxexfFhYXLa6sKRsc1FJmfs1imhFaBaXknbpIvFSVOJfLt6qKA7SUkDRNNeeBB8g4Q2e85ca4%2B6EwYnGmG4s%2BxuDpgbIrSrxTOFFK0LTGNI23cQL4O4Sb%2BRxrXgVz%2BngT6qAwpLSfkQ4C85fToLDSTg%2FHaS%2FJQx53FO8imcq4sVDS0oPT8ZPYgU4ZwqL%2FesNzGwDHJsMQbptIrR7HaB5PaBnM%2BD4fYCT9jM4cm%2BgQyOgUQ6Q7aWLLT04KqK%2Fhfk3p8e1oEyJetn4yu7TXLPCEv8FmvnNbKsRlnpQ4NuKDB462uLRYy1uL7K4qruHK7pYjOvt4Z4jLB4nq5P7WYzqbNAom5Rr7kcZ3C2Sqfc0lx%2BPtpICuk52dXJc2XPSXDxgVd9pOejYGJjYx2ACBe7Z3KJZPcNRNjDGVEJn%2Bb5bHYM2DQ1%2BX2DxxACL0woM6tFiKgFW44Uk%2Bme5slntp7m6sWhs7Etuw7IJgOmOal4S7%2BKDDSb2tejSxOwgcCr0OVkGIzsZTBtg0Kp%2BKuiqtJse%2BUHZ7bE9KhTQe7rrTE5HxTZm8pxP8%2F1Tb4PT9jeoY6sufJSm5ZDVr2txZx%2BLXpxC0fpq340ZVVTsukTxVCggq8wfZwD%2BkPFl2fuyLgZ997awFCBjRDEdm%2BxmcE0Pi2a7xVRW45Es8uePjaKIKECj7wxOiFZmcidW%2FJFme9jv9JQJhvA%2B%2BTkGdxxmoFUkHCr9Fsl62HRXoB4RBXD0rybb%2FKkqs9KO%2FnXAPqbGRh5xV8sGFsMPrBaLFRiJxTjfv14Vtu%2FDLocPJ7Jk%2FCNCjDzYQs4rYyRpdDyRcUONWQEwiMtiri3NRSfOfCkBmV6dmgAdGksNmWJIr1%2BWNbiUcUJ60MmhyG2uDcBhQ9ArOWjyViLCgNYGNeTzkhNja1ELgwZ1EYkRFD3ukQ3slgVOPTZW%2BRf0shauygrIp70U7gUM45w8vS3QNt9UmXSmHXIorCJHRZWx5e9HMKxuiSopQrJbB9c6HWZyPGBgG%2BBuBjczBlrcUuhRARYjDvbQqoFJB0WNwFiaWmvSa86ocg%2BuDo1yDfba3aB9I4uxPS3u72fQu3k4qdgWyW5hkIcUV10K%2F5dCgzHdPHRmZCcmUnT5TZqNMSjYw%2BK2Ig9nHQCKhuQXZacVmKQKaM4A5IGjLLo2tcmR7WKt53WwOHk%2Fk5wrZ%2FI0mKEKqF8HuOlQC5kcatmlFWNUZxvZkIWxToPJ07BmhwEont9%2FjxRaDOu8C9Rbsj60nUQMZSY7tDWLLUe1IobQvrWjoXMToAWTMGHcUszETT2bsiO9a%2BLW2lNb1zM4%2FYDwgQxVgNJVtUfM5Jz2a2nAnXVCIJuolvkI7MPsTKK22linbFNYdimhAjzWhnWojQoQz3UZy%2BgeXyhqfBXgO%2BCnUv7t2FQra5xzlCcx6wkVUBYAH25M3KE21q7apAFNzHlCBQh0xieMlPXwf1BKPgyXJVQBS9YCK76v%2FdNg%2FWaHWZ%2BHyxGqAHWZ%2FhHnQi23gNkrHTSlw8QIVYA6zF4JzFkZQE5E77WpaACXrAkw9QM9hXOeVAFl7DvhLYf%2FrnMI6EnD0exaLRqwlZy%2B4xY6bC5LzltSBajrVh%2B4cq7DxCW1ZzpMfT%2FAiJcDfL9VEiQvKRWg7qWU%2FdlPgX7TfQj53C8DfPqdw8af0y8btjhsILxKbD%2FVr6OjWsf2jSqEiW1P9az%2B4mXB1wGe%2FjjAqc%2F5uH8ZsCXFyEsulbQUIECVbVTElHcdbljgcNFLAU5%2FMf1yxqwAZxBeJbaf6s9k25lsO5332LZ0noVPvFz3Oq10qcO6n8Vp%2BiVUATrjO7%2BDiZzbx6Oja4CUIS3XRPmZ00wlI1zsK14CMRXHaENmj89pb9CyflxDzGuoAhrlAme3t5g%2B0MONPOxs0wDQJimm7y75qI1vi90ROUV6isnb4UyNtU2S1LGppOB2Gjrs1McLkw63aWdcU%2BHdGe1tmdzTxxdT%2BlmcfaBFXTFPQltoJbwl%2FIUqIH7Vy%2Bbwd%2BTpz61Mhz9yjIXOAfeklSTE%2BitW6qisX0vgr30NJh%2FloWdzg%2Fp1TaWMcEDfFcZSqALCOjCRCH3JcXV3i5IBHnQcHpZsCMNRE%2FViXIcyMzhFx%2Fby0KmJrdKhSJQH4Yk%2BV7p%2F9j0PQZb4WP2TYyRYqaniRXnDk%2Fe1eOYEixt6msjHThWNO%2Blhb87vMV0NZpDmiI4eD2TDCf24zeGBZT4WrUngIbd3C1WArOapTwAtU%2Fe87WPVJpcwGpRF7E6TO6qVxb1HepjEk6N9GwK5Wdsp1MBNFta6ATC%2Bl8Fj%2FT0MpNLzeSok2vHoFQV%2B9aPD4wyGTn0%2BwKPvAYpj4uGi76EKiAJoI%2FHkx%2FSqcwJc%2FEqApWulmmhr5bvhq74J0kGKHNGZTEaqjtUZ%2F45hZvo%2BOrUHeThzeMvkZv7BxgCX%2FifAcPI6mfGKltVUhEMVUJ9r6AltDPKyy1FonX5vA3D5aw5%2FeNnHs58G%2BJZRW3lr5X%2BPCXmdF154UPn0GMa1uCCvMkyytya5PLwvMHjiOItre1gU5BnUoUdPpMzvtzrM%2FCzAJa%2F4DH8d3l4HROP%2F%2FBxEnHVTnm6F0QtVgHLpo7sxDjje4jKeyUshYkABx3Iq4k5ukoa8EOCR5T42ca7J9OKJyER1gDmMa%2FH99NB3HGYh4aifeNDIu%2FKQF3eU4B4u4alOC6blE8GK1mam7BSWDyIPExY7vLMenKIRNJFPaS48yKCYCpSz3jdJglcKSLhlkOkLndbSU%2FTtXn%2BL63oYdOVBg%2BpVtL4%2BtBw4iyHshMUBPuMOTPWJigTp0cxgKvHcfIiBjtejcO3ygWu6lzM85ADL0Ubo9Q3n9yRuzIbODqCwPNbMC%2FKA0XSQ%2BujyzHaWDlJDFopKDVst1%2Fvv9JSqNMg2OKa1xV19PB5BW%2BhzV50dqt%2B3VOHzK4Bh%2Fwpw1VyfoxEwCZnY8%2BYwnihsYfHnQz1Mp3VNPdbiPjrP4%2FaxaEgawhdftjJL%2B%2F4Gh5vf9CP7j6e5MVu3pRxKzrZjY0Q%2BxpzSz8MJdJCyupSis7tktzAuLQUQPvKTWe%2Bfb3BrocWDR1sMbQfUsZEmON4WrgZGveoiylBGKSyPIDz6BK5lA5N0%2FX6NO88L6NRGvhpgzuc0c5RfIjmwDSCHO4krj6zLs0B5a%2BV%2F8VW5JvrmVltynVABK38AHnsvwOc%2FuB3iAGnXo003q2dwfgePAZHFeQeaik2H%2FMTqzcDf3nbQbu2JDwJoadLcjZJOdtcWV052%2BBwf495wWMmsbnRKNs4FTuGx98OMRkd39bB3fYMs8iKFxuLk6ELb7Ke4RX4rJA4wxlABxrwd2zH6rGzQ%2FcsczqVZ30TTE1O%2BsEYBtt%2BNARrnGpzL2FtrtDZOeVw56LSpW%2BDrn4D73nHQlvfGhQHWc8%2BfCI%2BUo7OIye%2F4kGOTk%2F2YQyNlkkTkm6CRBxs8ebyiTwudXIn2djYqbrI4rQyTlpRPl7u5RdZusQIg5oGWsdISycKYuh0eOf3w0hflAdFVcwO8%2BkVQ4W3jgcWoNk5Pcm7f1cfimFaoiMklyMuriIf7fuGZ%2FxXJo%2Fx6lym38W8EGEyP%2FvgHqBS4dG8K3HyoxZMDLAa1tZBiy3vt%2BL90rcPYBeV5B%2FmJMMGjPSW7LbNeUgVEgeVtF60Bxi10OGe2jxe49ipMjrbH3rPJZecmhquGR69vcCLjieinroonhOe61wOcMtPHaSyXcH6%2F%2BiXww7ZyLNrH92kB6MOn24s8FLUwULQpBZdD%2FPL%2FHWORuV8FkTjgMgZBc78CNpX%2B0p7sSbLbN5bhI9rq%2BmSA8W2fc07ezrV3BPNuk94KoDggHkbv1DDnqMXlXJqmMJob081AwqlNZT09%2BRqWqC1wgcBQRo9yruN6W3RozBGXtxNwXCmlaZbQt1xIHsYyQ6U4IIonDjTsdYNktxhvAmfwFKp4idhGpp9mfOqggEhxwFKGyYnmt%2BZZHmP3gW0simnK13LN7xITT%2BzH9fsiBi7%2FZOByQUcLrQ5ybPEsyU%2FosGbyOwHOYOxxL33LavqYQMzEA6d4Z5fpGG%2BCiH6t8%2B5mBX%2FI6JLJzfzMMQ53XAIDfPRtwKRkYnT16hj055o%2Fqa8HhboPcyl9gFGiAhetKokY2MbRXrUpwFj6iXPolB9nrn8NV5lEsOnUkTPnjDdRsBEFzB1i3uf8mqOK6pZ314MJU4cRTJpqR1aaZHgU6u7LON%2BSeBjdF1cEVGzAuMLhNfqJMLiq1JPcnNcHmQ%2FVJ6IAPfjOG01fQIPSW%2FUKBwwrGEdoRybPrph9JeMJLVGpMMvM1zBNLic7dJaPWxc5LOfeI5VHT4U32s7R3wzjXRF9r1DAgiFmGYwZHW2oqbscnWL28xnNXTc%2FwFoKF4ZbCYw7FgdcZQLIycrZhsFmWm8MRs4bZN6L9q9QgCrmDfb%2BwXuVHSL7pPxpBBd8g0hAdM18H6%2BsCqAY3%2BcUefObAOMW%2BJEAaCb3FNrOcqRS4qwygEPJvEFZj8T2q6QANZQZbyinQomed0bRUduCr4HxDHFPejbAyTMDjJnnoDjgxzTX74z4ovBc94fF991BAW8MMlvmDckaAhjNkyQJZVT7%2BonHV99xJ1ltRMkR%2BAHMGMkk2eJBd1BAFIDTYWJgvAOdw2Os26mKIP6d8RPPUyXD64O9O8IIhCpAHbRUzB%2BSdbYxXgEVMYXzcpf%2Fckg8ilfxPG9w1lDJIFnCSlIFRDvNHWRWUBEXzR%2Bc1cg3XmeA08PhWS5Zi1k%2BArCahBnU8ulX%2BIkWhVwj2iyL6bPIi7lSvIlH8Sqe02HlfwAAAP%2F%2Ffv%2BGxAAAAAZJREFUAwCEfganlN6elQAAAABJRU5ErkJggg%3D%3D%22%20width%3D%2264%22%20height%3D%2264%22%2F%3E%3C%2Fsvg%3E">
 <style>
   /* ===== 主题变量：深色（默认） ===== */
@@ -574,6 +627,21 @@ function renderPage(): string
   button,.btn{background:var(--acc);color:var(--txt-on-acc);border:0;padding:8px 14px;border-radius:7px;cursor:pointer;font-weight:600}
   button.ghost{background:var(--bg-chip);color:var(--txt)} button.danger{background:var(--tag-err-bg);color:var(--err)}
   input,select,textarea{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;font-family:inherit}
+  /* 自定义单选框 / 复选框（与主题一致；覆盖全局 width:100% 防止被拉伸成宽块） */
+  input[type="checkbox"], input[type="radio"]{
+    -webkit-appearance:none;appearance:none;-moz-appearance:none;
+    width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;
+    background:var(--bg-deep);border:1.5px solid var(--line);border-radius:6px;
+    display:inline-block;vertical-align:-2px;cursor:pointer;position:relative;flex:0 0 auto;
+    transition:background .15s ease,border-color .15s ease,box-shadow .15s ease;
+  }
+  input[type="radio"]{border-radius:50%}
+  input[type="checkbox"]:checked, input[type="radio"]:checked{background:var(--acc);border-color:var(--acc)}
+  input[type="checkbox"]:checked::after{content:"";position:absolute;left:5px;top:1px;width:5px;height:10px;border:solid var(--txt-on-acc);border-width:0 2px 2px 0;transform:rotate(45deg)}
+  input[type="radio"]:checked::after{content:"";position:absolute;left:5px;top:5px;width:6px;height:6px;border-radius:50%;background:var(--txt-on-acc)}
+  input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
+  label:has(input[type="checkbox"]), label:has(input[type="radio"]), .check{display:inline-flex;align-items:center;gap:8px;margin:10px 0 4px;color:var(--txt);font-size:13px;cursor:pointer}
+  .mp-grid a.mp-danger{color:var(--err)}
   label{display:block;color:var(--mut);margin:10px 0 4px;font-size:12px}
   .row{display:flex;gap:12px;flex-wrap:wrap} .row>div{flex:1;min-width:200px}
   .modal{position:fixed;inset:0;background:rgba(var(--shadow-rgba),.55);display:none;align-items:center;justify-content:center}
@@ -582,11 +650,12 @@ function renderPage(): string
   .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:var(--bg-chip);color:var(--mut)}
   .tag.ok{background:var(--tag-ok-bg);color:var(--ok)} .tag.pending{background:var(--tag-pending-bg);color:var(--warn)} .tag.err{background:var(--tag-err-bg);color:var(--err)} .tag.off{background:var(--tag-off-bg);color:var(--mut)}
   .tag.A{background:var(--tag-a-bg);color:var(--acc)} .tag.B{background:var(--tag-b-bg);color:var(--warn)} .tag.C{background:var(--tag-c-bg);color:var(--ok)}
-  .muted{color:var(--mut)} pre{background:var(--bg-deep);padding:10px;border-radius:8px;overflow:auto;font-size:12px} .hidden{display:none}
+  .muted{color:var(--mut)} pre{background:var(--bg-deep);padding:10px;border-radius:8px;overflow:auto;font-size:12px} .hidden{display:none !important}
   #login{display:flex;align-items:center;justify-content:center;min-height:100vh}
   #login.hidden{display:none}
   #login .box{width:min(380px,92vw)}
   .login-notice{margin-top:14px;display:flex;gap:10px;align-items:flex-start;background:linear-gradient(135deg,var(--bg-subtle),var(--panel));border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.6;word-break:break-word}
+  .login-notice.single{justify-content:center;align-items:center}
   .login-notice .ln-ico{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc);margin-top:1px}
   /* ===== 概览页增强：三环形图 / 消息总览 / 日志两栏 ===== */
   .rings{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px}
@@ -615,6 +684,7 @@ function renderPage(): string
     .hamburger{display:block}
     header{gap:10px;position:relative}
     .who{display:none}
+    .tb-account{display:none}
     .mobile-panel{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(var(--shadow-rgba),.12);padding:14px;max-height:82vh;overflow:auto}
     .mobile-panel.open{display:block}
     .mp-group{margin-bottom:14px}
@@ -652,18 +722,21 @@ function renderPage(): string
     saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   document.documentElement.setAttribute('data-theme', saved);
+  // i18n：跟随站点语言设置 <html lang>，与当前界面语言保持一致（可为任意语言）
+  var _ul = window.UI_LANG || 'zh';
+  document.documentElement.setAttribute('lang', _ul === 'en' ? 'en' : (_ul === 'zh' ? 'zh-CN' : _ul));
 })();
 </script>
 </head>
 <body>
 <header class="hidden" id="topbar">
-  <h1 id="brand"><a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">holastack</a></h1>
+  <h1 id="brand"><a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">HolaStack</a></h1>
   <nav id="deskNav" class="desk-nav"></nav>
   <div class="spacer"></div>
   <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 10px;font-size:16px;line-height:1">🌙</button>
   <span class="who" id="who"></span>
-  <button class="ghost" onclick="changePw()">修改密码</button>
-  <button class="ghost" onclick="logout()">退出</button>
+  <button class="ghost tb-account" onclick="changePw()">修改密码</button>
+  <button class="ghost tb-account" onclick="logout()">退出</button>
   <button class="hamburger" id="navToggle" aria-label="菜单" onclick="toggleNav()">☰</button>
   <div id="mobilePanel" class="mobile-panel"></div>
 </header>
@@ -710,6 +783,65 @@ function updateThemeIcon(t){
 // 页面加载时同步按钮图标
 updateThemeIcon(getTheme());
 
+// ===== 国际化（i18n）=====
+// t(s)：取当前语言译文；未命中则回退原文（中文）。DOM walker 与 alert/confirm 共用。
+function t(s){
+  if (typeof s !== 'string' || s === '') return s;
+  return (window.I18N && window.I18N[s] !== undefined) ? window.I18N[s] : s;
+}
+// 遍历 root 下的文本节点 / placeholder / title / aria-label / 按钮 value，按中文原文替换为译文。
+// 不在字典中的字符串保持原样（中文），安全回退。
+function applyI18n(root){
+  root = root || document;
+  if (!window.I18N) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(node => {
+    const raw = node.nodeValue;
+    if (!raw || !raw.trim()) return;
+    const tr = t(raw);
+    if (tr !== raw) node.nodeValue = tr;
+  });
+  if (root.querySelectorAll){
+    root.querySelectorAll('[placeholder],[title],[aria-label],button,option,input[type=button],input[type=submit]').forEach(el => {
+      if (el.placeholder){ const tr = t(el.placeholder); if (tr !== el.placeholder) el.placeholder = tr; }
+      if (el.title){ const tr = t(el.title); if (tr !== el.title) el.title = tr; }
+      const al = el.getAttribute && el.getAttribute('aria-label');
+      if (al){ const tr = t(al); if (tr !== al) el.setAttribute('aria-label', tr); }
+      if ((el.tagName === 'BUTTON' || el.type === 'button' || el.type === 'submit') && el.value){ const tr = t(el.value); if (tr !== el.value) el.value = tr; }
+    });
+  }
+}
+// 动态内容（列表刷新、模态框、导航）自动翻译：监听 body 子树新增节点。
+// 仅监听 childList（不监听 characterData/attributes），翻译文本节点不会触发回环。
+const _i18nObserver = new MutationObserver(muts => {
+  muts.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) applyI18n(n); }));
+});
+function startI18nObserver(){ _i18nObserver.observe(document.body, { childList: true, subtree: true }); }
+// 切换语言：拉取对应字典 → 设置全局变量与 <html lang> → 静默重渲染当前页
+// （模板源语言为中文，en 字典翻译、zh 字典保留中文，因此双向切换都正确）。
+async function loadDict(lang){
+  try {
+    const r = await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
+    const j = await r.json();
+    window.UI_LANG = (j.lang || lang);
+    window.I18N = (j.dict && typeof j.dict === 'object') ? j.dict : {};
+    window.LANGS = (j.langs && typeof j.langs === 'object') ? j.langs : {zh:'中文'};
+  } catch(e){ window.UI_LANG = lang; window.I18N = {}; window.LANGS = {zh:'中文'}; }
+}
+function langAttr(lang){ return (lang === 'en') ? 'en' : (lang === 'zh' ? 'zh-CN' : lang); }
+async function applyLanguage(lang){
+  await loadDict(lang);
+  document.documentElement.setAttribute('lang', langAttr(window.UI_LANG));
+  nav(state.view, true);
+}
+// 让原生 alert/confirm 也走 i18n：浏览器对话框不在 DOM 中，walker 无法翻译。
+const _origAlert = window.alert;
+window.alert = (m) => _origAlert.call(window, t(m));
+const _origConfirm = window.confirm;
+window.confirm = (q) => _origConfirm.call(window, t(q));
+
 let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:''};
 
 async function boot(){
@@ -720,6 +852,8 @@ async function boot(){
     if (r.ok) { const j = await r.json(); state.user = j.user; }
   } catch(e){}
   try { const rr = await fetch('/api/regions'); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
+  // 预取当前语言字典与可用语言清单，供界面渲染与「界面语言」下拉使用
+  if (!window.LANGS) { try { await loadDict(window.UI_LANG || 'zh'); } catch(e){} }
   renderShell();
 }
 const regionOptions = (sel) => state.regions.map(r=>`<option ${r===sel?'selected':''}>${r}</option>`).join('');
@@ -739,6 +873,9 @@ function renderShell(){
   applyPublicSettings();
   // 支持直接访问 #hash 页面（如 /#settings）；无 hash 默认概览
   nav((location.hash||'').slice(1)||'dashboard');
+  // 首次渲染完成后翻译整个文档，并启动动态内容自动翻译
+  applyI18n(document);
+  startI18nObserver();
 }
 const isAdmin = () => state.user && state.user.role === 'admin';
 const isTenant = () => state.user && state.user.role === 'tenant';
@@ -760,19 +897,19 @@ const NAV_GROUPS = [
     {v:'applications', text:'应用'},
     {v:'devices', text:'设备'},
     {v:'gateways', text:'网关'},
-    {v:'device-profiles', text:'设备模板（Device Profile）'},
-    {v:'multicast-groups', text:'组播组（Multicast）'},
+    {v:'device-profiles', text:'设备模板'},
+    {v:'multicast-groups', text:'组播组'},
   ]},
-  { label:'工具与集成', items:[
-    {v:'integrations', text:'集成（Integrations）'},
-    {v:'api-keys', text:'API Keys（应用密钥）'},
+  { label:'工具集成', items:[
+    {v:'integrations', text:'外部集成'},
+    {v:'api-keys', text:'API 密钥'},
     {v:'loracalc', text:'LoRa 计算器'},
     {v:'apidocs', text:'API 文档'},
   ]},
   { label:'系统管理', admin:true, items:[
-    {v:'tenants', text:'租户（Tenant）'},
-    {v:'users', text:'用户'},
-    {v:'settings', text:'设置'},
+    {v:'tenants', text:'用户配置'},
+    {v:'users', text:'用户管理'},
+    {v:'settings', text:'站点设置'},
   ]},
 ];
 
@@ -785,10 +922,12 @@ function renderNav(){
     const sub = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${it.text}</a>`).join('');
     return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${g.label}<span class="caret">▾</span></button><div class="navsub">${sub}</div></div>`;
   }).join('');
+  const accountGrid = `<a href="javascript:void(0)" onclick="closeNav();changePw()">修改密码</a>`
+    + `<a href="javascript:void(0)" class="mp-danger" onclick="closeNav();logout()">退出登录</a>`;
   mob.innerHTML = groups.map(g => {
     const grid = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${it.text}</a>`).join('');
     return `<div class="mp-group"><div class="mp-glabel">${g.label}</div><div class="mp-grid">${grid}</div></div>`;
-  }).join('');
+  }).join('') + `<div class="mp-group"><div class="mp-glabel">账户</div><div class="mp-grid">${accountGrid}</div></div>`;
   bindNavLinks();
   document.querySelectorAll('.nav').forEach(a => a.classList.toggle('active', a.dataset.v === state.view));
 }
@@ -849,7 +988,9 @@ const api = async (m,p,body) => {
   }
   let j;
   try { j = JSON.parse(text); } catch (e) { throw new Error('JSON 解析失败：' + text.slice(0, 300)); }
-  if (j && j.error) throw new Error(j.error);
+  // 业务错误（HTTP 200 且带 error 字段，如「名称已存在」）：不抛异常，作为正常返回值交给调用方，
+  // 以便前端 `if(r.error){alert(t(r.error));return;}` 能展示友好提示（此前抛异常被 busy 吞掉→无提示）。
+  if (j && j.error) return j;
   return j;
 };
 const hex = s => s || '-';
@@ -994,7 +1135,7 @@ function dashLogRow(ev, who){
     <div class="log-msg">${esc(ev.message||'')}</div>
   </div>`;
 }
-// 租户筛选下拉（仅 admin 可见；tenant 用户由后端强制过滤，无需此控件）
+// 用户配置筛选下拉（仅 admin 可见；tenant 角色用户由后端强制过滤，无需此控件）
 async function tenantFilterHtml(){
   if (!isAdmin()) return '';
   let opts = '';
@@ -1002,7 +1143,7 @@ async function tenantFilterHtml(){
     const r = await api('GET','/api/tenants');
     opts = (r.data||[]).map(t=>`<option value="${t.id}" ${String(state.tenantFilter)===String(t.id)?'selected':''}>${esc(t.name)}</option>`).join('');
   } catch(e){}
-  return `<div style="flex:0 0 220px"><label>租户筛选</label><select id="tf" onchange="state.tenantFilter=this.value;nav(state.view)"><option value="">全部租户</option>${opts}</select></div>`;
+  return `<div style="flex:0 0 220px"><label>用户配置筛选</label><select id="tf" onchange="state.tenantFilter=this.value;nav(state.view)"><option value="">全部用户配置</option>${opts}</select></div>`;
 }
 async function viewApplications(){
   const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
@@ -1053,7 +1194,7 @@ async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
   const d=(state.devs||[]).find(x=>x.id===id); if(!d)return;
   const kv=(label,val)=>`<label>${label}</label><input value="${esc(val||'')}" readonly onclick="this.select()">`;
-  openModal(`<h3>设备密钥 #${id} ${esc(d.name)}</h3>
+  openModal(`<h3>${t('设备密钥')} #${id} ${esc(d.name)}</h3>
     ${kv('DevEUI', d.dev_eui)}
     ${d.activation==='OTAA'
       ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
@@ -1116,7 +1257,7 @@ async function viewUplinks(){
 async function showRaw(id){
   const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
   let j={}; try { j = u.raw_json ? JSON.parse(u.raw_json) : {}; } catch(e){}
-  openModal(`<h3>原始 JSON #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+  openModal(`<h3>${t('原始 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
 // ----------------------- 下行日志模块 -----------------------
@@ -1188,7 +1329,7 @@ async function showDownlinkRaw(id){
   };
   const pretty = esc(JSON.stringify(parsed, null, 2));
   const hexRows = bytes.length ? bytes.map((b,i)=>`<span class="mono">${hexStr.substr(i*2,2).toUpperCase()}</span>`).join(' ') : '(空)';
-  openModal(`<h3>下行 JSON #${id}</h3>
+  openModal(`<h3>${t('下行 JSON')} #${id}</h3>
     <p class="muted" style="margin:4px 0 10px">格式化结构（payload 已解析为字节数组与 ASCII）</p>
     <pre>${pretty}</pre>
     <h4 style="margin:16px 0 6px">Payload 十六进制字节</h4>
@@ -1241,17 +1382,17 @@ async function showEventRaw(id){
   const e=(state.evs||[]).find(x=>x.id===id); if(!e)return;
   let j={}; try { j = e.raw_json ? JSON.parse(e.raw_json) : {}; } catch(err){}
   if (!Object.keys(j).length) { j = e; delete j.raw_json; }
-  openModal(`<h3>事件 JSON #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+  openModal(`<h3>${t('事件 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/users'); state.users = r.data||[];
   const rows = state.users.map(u=>`<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td>
-     <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#租户'+u.tenant_id)) : '—'}</td>
+     <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
      <td><button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无用户</td></tr>`;
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户</h2><button onclick="newUser()">+ 新建用户</button></div>
-    <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>租户</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户管理</h2><button onclick="newUser()">+ 新建用户</button></div>
+    <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>用户配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // ================= 站点设置（仅 admin） =================
@@ -1261,13 +1402,14 @@ async function viewSettings(){
   const val = (k) => esc(s[k] || '');
   document.getElementById('view').innerHTML = `<h2>站点设置</h2>
    <div class="card" style="max-width:680px">
-     <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="holastack">
+     <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="HolaStack">
      <label>顶部图标 URL（可选，留空则显示文字名称）</label><input id="st_logo" value="${val('site_logo_url')}" placeholder="https://example.com/logo.png">
      <label>站点 Favicon URL（可选，浏览器标签页小图标，推荐 .ico/.png/.svg）</label><input id="st_favicon" value="${val('favicon_url')}" placeholder="https://example.com/favicon.ico">
      <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
-     <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="holastack">
+     <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="HolaStack">
      <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
-     <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://lora.mybug.cn">
+     <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
+     <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
        <button class="ghost" onclick="nav('dashboard')">取消</button>
        <button onclick="busy('保存中…', saveSettings)">保存</button>
@@ -1275,6 +1417,7 @@ async function viewSettings(){
    </div>`;
 }
 async function saveSettings(){
+  const langSel = document.getElementById('st_lang');
   const body = {
     site_name: v('st_name'),
     site_logo_url: v('st_logo'),
@@ -1283,12 +1426,14 @@ async function saveSettings(){
     login_logo_text: v('st_login_text'),
     login_notice: v('st_notice'),
     api_base_url: v('st_api_url'),
+    ui_lang: langSel ? langSel.value : 'zh',
   };
   const r = await api('POST','/api/settings', body);
   if (r.error) { alert(r.error); return; }
   await applyPublicSettings();
-  alert('设置已保存');
-  nav('dashboard');
+  // 应用新语言：拉取对应字典并静默重渲染当前页（模板源语言为中文，双向切换都正确）
+  await applyLanguage(body.ui_lang);
+  alert(t('设置已保存'));
 }
 // 拉取公开设置并应用到顶栏品牌、登录页 LOGO、页面标题（无需登录即可读取）
 async function applyPublicSettings(){
@@ -1298,7 +1443,7 @@ async function applyPublicSettings(){
     const brand = document.getElementById('brand');
     if (brand) {
       if (d.site_logo_url) brand.innerHTML = `<a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit"><img src="${esc(d.site_logo_url)}" alt="logo"></a>`;
-      else brand.innerHTML = `<a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">${esc(d.site_name || 'holastack')}</a>`;
+      else brand.innerHTML = `<a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">${esc(d.site_name || 'HolaStack')}</a>`;
     }
     const ll = document.getElementById('loginLogo');
     if (ll) {
@@ -1315,6 +1460,8 @@ async function applyPublicSettings(){
     if (ln) {
       if (d.login_notice && d.login_notice.trim()) {
         ln.innerHTML = `<span class="ln-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg></span><span class="ln-txt">${esc(d.login_notice)}</span>`;
+        // 单行公告整体居中；多行（含换行）保持左对齐便于阅读
+        ln.classList.toggle('single', !/(\r\n|\n|\r)/.test(d.login_notice.trim()));
         ln.classList.remove('hidden');
       }
       else { ln.innerHTML = ''; ln.classList.add('hidden'); }
@@ -1349,7 +1496,7 @@ async function savePw(){
   else alert('已修改该用户密码');
 }
 async function changePwFor(id){
-  openModal(`<h3>修改用户 #${id} 密码</h3>
+  openModal(`<h3>${t('修改用户')} #${id} ${t('密码')}</h3>
     <label>新密码（≥6 位）</label><input id="m_pw_new" type="password">
     <label>确认新密码</label><input id="m_pw_cfm" type="password">
     <div id="pw_err" class="muted" style="color:var(--err)"></div>
@@ -1370,39 +1517,39 @@ function newApplication(){ openModal(`<h3>新建应用</h3><label>名称</label>
   <label>回调 URL（可选，设备上行/遥测 Webhook，留空不回调）</label><input id="m_cb" placeholder="https://example.com/uplink">
   <label>描述</label><input id="m_desc">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveApp)">保存</button></div>`); }
-async function saveApp(){ const r = await api('POST','/api/applications',{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
+async function saveApp(){ const r = await api('POST','/api/applications',{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(t(r.error));return;} closeModal(); viewApplications(); }
 async function editApplication(id){ const r = await api('GET','/api/applications'); const a = (r.data||[]).find(x=>x.id===id); if(!a)return;
-  openModal(`<h3>编辑应用 #${id}</h3><label>名称</label><input id="m_name" value="${esc(a.name)}">
+  openModal(`<h3>${t('编辑应用')} #${id}</h3><label>名称</label><input id="m_name" value="${esc(a.name)}">
   <label>AppEUI</label><div class="row"><div><input id="m_app_eui" value="${esc(a.app_eui)}" oninput="hexOnly(this)"></div><div style="flex:0 0 auto"><button class="ghost" type="button" onclick="document.getElementById('m_app_eui').value=randHex(8)">随机生成</button></div></div></label>
   <label>回调 URL</label><input id="m_cb" value="${esc(a.callback_url||'')}" placeholder="https://example.com/uplink">
   <label>描述</label><input id="m_desc" value="${esc(a.description)}">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveAppEdit(${id}))">保存</button></div>`); }
-async function saveAppEdit(id){ const r = await api('PUT',`/api/applications/${id}`,{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(r.error);return;} closeModal(); viewApplications(); }
-async function delApplication(id){ if(!confirm('确认删除该应用及其下所有设备？'))return; const r = await api('DELETE',`/api/applications/${id}`); if(r.error){alert(r.error);return;} viewApplications(); }
+async function saveAppEdit(id){ const r = await api('PUT',`/api/applications/${id}`,{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(t(r.error));return;} closeModal(); viewApplications(); }
+async function delApplication(id){ if(!confirm('确认删除该应用及其下所有设备？'))return; const r = await api('DELETE',`/api/applications/${id}`); if(r.error){alert(t(r.error));return;} viewApplications(); }
 
 async function newDevice(appId){ const regions=regionOptions(""); const dps=await dpOptions(0);
   const ar = await api('GET','/api/applications'); const apps = ar.data||[];
   const appOpts = apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(appId)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
   const appSel = apps.length ? `<label>应用</label><select id="m_app_sel" ${appId?'disabled':''}>${appOpts}</select>` : '<p class="muted">系统中暂无应用，请先在「应用」页面创建应用。</p>';
-  openModal(`<h3>新建设备${appId?` (应用 #${appId})`:''}</h3>${appSel}<label>名称</label><input id="m_name"><label>DevEUI (16 hex)</label><input id="m_dev_eui" oninput="hexOnly(this)"><label>激活方式</label><select id="m_act" onchange="toggleAct()"><option value="OTAA">OTAA</option><option value="ABP">ABP</option></select>
+  openModal(`<h3>${t('新建设备')}${appId?` (${t('应用')} #${appId})`:''}</h3>${appSel}<label>名称</label><input id="m_name"><label>DevEUI (16 hex)</label><input id="m_dev_eui" oninput="hexOnly(this)"><label>激活方式</label><select id="m_act" onchange="toggleAct()"><option value="OTAA">OTAA</option><option value="ABP">ABP</option></select>
     <div id="otaa"><label>JoinEUI (16 hex)</label><input id="m_join_eui" oninput="hexOnly(this)"><label>AppKey (32 hex)</label><input id="m_app_key" oninput="hexOnly(this)"></div>
     <div id="abp" class="hidden"><label>DevAddr (8 hex)</label><input id="m_dev_addr" oninput="hexOnly(this)"><label>NwkSKey (32 hex)</label><input id="m_nwk" oninput="hexOnly(this)"><label>AppSKey (32 hex)</label><input id="m_app" oninput="hexOnly(this)"></div>
     <label>Class</label><select id="m_class"><option>A</option><option>B</option><option>C</option></select>
     <label>区域</label><select id="m_region">${regions}</select>
-    <label>设备模板 (Device Profile，可选)</label><select id="m_dp">${dps}</select>
+    <label>设备模板 (可选)</label><select id="m_dp">${dps}</select>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDevice(${appId||0}))">保存</button></div>`); }
 function toggleAct(){ const a=v('m_act')==='OTAA'; document.getElementById('otaa').classList.toggle('hidden',!a); document.getElementById('abp').classList.toggle('hidden',a); }
 async function saveDevice(appId){ const sel=document.getElementById('m_app_sel'); const finalAppId = appId ? appId : (sel ? +sel.value : 0); if(!finalAppId){alert('请先选择应用');return;}
   const act=v('m_act'); const body={app_id:finalAppId,name:v('m_name'),dev_eui:v('m_dev_eui'),activation:act,region:v('m_region'),class:v('m_class'),device_profile_id:+v('m_dp')};
   if(act==='OTAA'){ body.join_eui=v('m_join_eui'); body.app_key=v('m_app_key'); } else { body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
-  const r = await api('POST','/api/devices',body); if(r.error){alert(r.error);return;} closeModal(); viewDevices(); }
+  const r = await api('POST','/api/devices',body); if(r.error){alert(t(r.error));return;} closeModal(); viewDevices(); }
 async function editDevice(id){ const r = await api('GET','/api/devices'); const d=(r.data||[]).find(x=>x.id===id); if(!d)return;
   const otaa=d.activation==='OTAA'; const dps=await dpOptions(d.device_profile_id||0);
-  openModal(`<h3>编辑设备 #${id}</h3><label>名称</label><input id="m_name" value="${esc(d.name)}">
+  openModal(`<h3>${t('编辑设备')} #${id}</h3><label>名称</label><input id="m_name" value="${esc(d.name)}">
     <label>激活方式</label><input value="${d.activation}" disabled>
     <label>Class</label><select id="m_class"><option ${d.class==='A'?'selected':''}>A</option><option ${d.class==='B'?'selected':''}>B</option><option ${d.class==='C'?'selected':''}>C</option></select>
     <label>区域</label><select id="m_region">${regionOptions(d.region)}</select>
-    <label>设备模板 (Device Profile，可选)</label><select id="m_dp">${dps}</select>
+    <label>设备模板 (可选)</label><select id="m_dp">${dps}</select>
     ${otaa?`<label>DevEUI (16 hex，留空不改)</label><input id="m_dev_eui" value="${esc(d.dev_eui)}" placeholder="留空保持不变" oninput="hexOnly(this)"><label>JoinEUI (16 hex，留空不改)</label><input id="m_join_eui" value="${esc(d.join_eui)}" placeholder="留空保持不变" oninput="hexOnly(this)"><label>AppKey (32 hex，留空不改)</label><input id="m_app_key" placeholder="留空保持不变" oninput="hexOnly(this)">`:`<label>DevAddr (8 hex)</label><input id="m_dev_addr" value="${esc(d.dev_addr)}" oninput="hexOnly(this)"><label>NwkSKey (32 hex)</label><input id="m_nwk" value="${esc(d.nwk_s_key)}" oninput="hexOnly(this)"><label>AppSKey (32 hex)</label><input id="m_app" value="${esc(d.app_s_key)}" oninput="hexOnly(this)"`}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDeviceEdit(${id}))">保存</button></div>`); }
 async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class'),region:v('m_region'),device_profile_id:+v('m_dp')};
@@ -1410,21 +1557,21 @@ async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class
   if(document.getElementById('m_dev_eui')) body.dev_eui=v('m_dev_eui');
   if(document.getElementById('m_join_eui')) body.join_eui=v('m_join_eui');
   if(document.getElementById('m_dev_addr')){ body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
-  const r = await api('PUT',`/api/devices/${id}`,body); if(r.error){alert(r.error);return;} closeModal(); viewDevices(); }
-async function delDevice(id){ if(!confirm('确认删除该设备及其上下行记录？'))return; const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(r.error);return;} viewDevices(); }
+  const r = await api('PUT',`/api/devices/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewDevices(); }
+async function delDevice(id){ if(!confirm('确认删除该设备及其上下行记录？'))return; const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(t(r.error));return;} viewDevices(); }
 
 function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveGateway)">保存</button></div>`); }
-async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region')}); if(r.error){alert(r.error);return;} closeModal(); viewGateways(); }
+async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function editGateway(gwId){ const r = await api('GET','/api/gateways'); const g=(r.data||[]).find(x=>x.gw_id===gwId); if(!g)return;
-  openModal(`<h3>编辑网关 ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
+  openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveGatewayEdit('${gwId}'))">保存</button></div>`); }
-async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(r.error);return;} closeModal(); viewGateways(); }
-async function delGateway(gwId){ if(!confirm('确认删除该网关？'))return; const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(r.error);return;} viewGateways(); }
+async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+async function delGateway(gwId){ if(!confirm('确认删除该网关？'))return; const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }
 
-function downlink(devId){ openModal(`<h3>下发数据 (设备 #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><label><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label>
+function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><label class="check"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('发送中…', ()=>sendDown(${devId}))">发送</button></div>`); }
-async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked}); if(r.error){alert(r.error);return;} closeModal(); alert('已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。'); }
+async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked}); if(r.error){alert(t(r.error));return;} closeModal(); alert('已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。'); }
 
 async function newUser(){
   let tenants = '';
@@ -1432,11 +1579,11 @@ async function newUser(){
   openModal(`<h3>新建用户</h3><label>用户名</label><input id="m_user"><label>密码（≥6 位）</label><input id="m_pass" type="password">
     <label>角色</label><select id="m_role" onchange="roleTenantToggle()">
       <option value="operator">operator（演示：只读 + 模拟数据）</option>
-      <option value="tenant">tenant（仅本租户数据，可写）</option>
+      <option value="tenant">用户配置（仅本用户配置数据，可写）</option>
       <option value="admin">admin（全部权限）</option>
     </select>
-    <div id="m_tenant_box" class="hidden"><label>绑定租户（tenant 角色；留空则自动新建同名租户）</label>
-      <select id="m_tenant"><option value="">— 自动新建同名租户 —</option>${tenants}</select>
+    <div id="m_tenant_box" class="hidden"><label>绑定用户配置（用户配置角色；留空则自动新建同名用户配置）</label>
+      <select id="m_tenant"><option value="">— 自动新建同名用户配置 —</option>${tenants}</select>
     </div>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveUser)">保存</button></div>`);
   roleTenantToggle();
@@ -1453,9 +1600,9 @@ async function saveUser(){
     if (t && +t > 0) body.tenant_id = +t;
     else body.new_tenant_name = v('m_user'); // 未指定 → 自动新建同名租户
   }
-  const r = await api('POST','/api/users',body); if(r.error){alert(r.error);return;} closeModal(); viewUsers();
+  const r = await api('POST','/api/users',body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
-async function delUser(id){ if(!confirm('确认删除该用户？'))return; const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(r.error);return;} viewUsers(); }
+async function delUser(id){ if(!confirm('确认删除该用户？'))return; const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(t(r.error));return;} viewUsers(); }
 
 // 设备模板下拉（含“默认模板”）
 async function dpOptions(sel){
@@ -1463,7 +1610,7 @@ async function dpOptions(sel){
   return `<option value="0" ${(sel==0||sel===''||sel==null)?'selected':''}>默认模板</option>`+(state.dps||[]).map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
 }
 
-// ================= 设备模板（Device Profile） =================
+// ================= 设备模板 =================
 async function viewDeviceProfiles(){
   const q = state.tenantFilter ? ('?tenant_id='+state.tenantFilter) : '';
   const [r, tf] = await Promise.all([api('GET','/api/device-profiles'+q), tenantFilterHtml()]);
@@ -1475,18 +1622,18 @@ async function viewDeviceProfiles(){
       <td class="muted">${esc(d.payload_codec_runtime)}</td><td class="muted">${cls.join('/')||'A'}</td>
       <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDeviceProfile(${d.id}))">删除</button>`)}</td></tr>`;
   }).join('')||`<tr><td colspan="8" class="muted">暂无设备模板</td></tr>`;
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板（Device Profile）</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
     <table><thead><tr><th>ID</th><th>名称</th><th>区域</th><th>MAC</th><th>ADR</th><th>编解码</th><th>Class</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-// ---------------- 租户（Tenant） ----------------
+// ---------------- 用户配置 ----------------
 async function viewTenants(){
   const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
   const rows = state.tenants.map(t=>`<tr><td>${t.id}</td><td>${esc(t.name)}</td><td class="muted">${esc(t.description||'')}</td>
     <td class="muted">${t.can_have_gateways?'是':'否'}</td><td class="muted">${t.private_gateways_limit||0}</td>
-    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${t.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${t.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无租户</td></tr>`;
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>租户（Tenant）</h2>${adminBtn('<button onclick="newTenant()">+ 新建租户</button>')}</div>
+    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${t.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${t.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="6" class="muted">暂无用户配置</td></tr>`;
+  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户配置</h2>${adminBtn('<button onclick="newTenant()">+ 新建用户配置</button>')}</div>
     <table><thead><tr><th>ID</th><th>名称</th><th>描述</th><th>可拥有网关</th><th>私有网关上限</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function tenantForm(t){
@@ -1499,22 +1646,22 @@ function tenantForm(t){
   </div>`;
 }
 function newTenant(){
-  openModal(`<h3>新建租户</h3>${tenantForm()}
+  openModal(`<h3>新建用户配置</h3>${tenantForm()}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveTenant(0))">保存</button></div>`);
 }
 async function saveTenant(id){
   const body={ name:v('t_name'), description:v('t_desc'), can_have_gateways:+v('t_gw'), private_gateways_limit:+v('t_limit') };
   const r = id ? await api('PUT',`/api/tenants/${id}`,body) : await api('POST','/api/tenants',body);
-  if(r.error){alert(r.error);return;} closeModal(); viewTenants();
+  if(r.error){alert(t(r.error));return;} closeModal(); viewTenants();
 }
 async function editTenant(id){
   const t = state.tenants.find(x=>x.id==id)||{};
-  openModal(`<h3>编辑租户</h3>${tenantForm(t)}
+  openModal(`<h3>编辑用户配置</h3>${tenantForm(t)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveTenant(${id}))">保存</button></div>`);
 }
 async function delTenant(id){
-  if(!confirm('删除租户？其下资源将回退到默认租户。')) return;
-  const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(r.error);return;} viewTenants();
+  if(!confirm('删除用户配置？其下资源将回退到默认用户配置。')) return;
+  const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(t(r.error));return;} viewTenants();
 }
 function deviceProfileForm(d){
   d = d||{};
@@ -1575,16 +1722,16 @@ async function saveDeviceProfile(id){
     abp_rx2_dr:+v('m_ar2d'), abp_rx2_freq:+v('m_ar2f'), allow_roaming:+v('m_roam')
   };
   const r = id ? await api('PUT',`/api/device-profiles/${id}`,body) : await api('POST','/api/device-profiles',body);
-  if(r.error){alert(r.error);return;} closeModal(); viewDeviceProfiles();
+  if(r.error){alert(t(r.error));return;} closeModal(); viewDeviceProfiles();
 }
 async function editDeviceProfile(id){
   const r = await api('GET','/api/device-profiles'); const d=(r.data||[]).find(x=>x.id===id); if(!d)return;
-  openModal(`<h3>编辑模板 #${id}</h3>${deviceProfileForm(d)}
+  openModal(`<h3>${t('编辑模板')} #${id}</h3>${deviceProfileForm(d)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDeviceProfile(${id}))">保存</button></div>`);
 }
-async function delDeviceProfile(id){ if(!confirm('确认删除该模板？引用该模板的设备将回退到默认模板。'))return; const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(r.error);return;} viewDeviceProfiles(); }
+async function delDeviceProfile(id){ if(!confirm('确认删除该模板？引用该模板的设备将回退到默认模板。'))return; const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }
 
-// ================= 应用 API Key =================
+// ================= API 密钥 =================
 async function viewApiKeys(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
@@ -1594,28 +1741,28 @@ async function viewApiKeys(){
   if(state.appSel){
     const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); const ks=r.data||[];
     rows=ks.map(k=>`<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
-      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="5" class="muted">该应用暂无 API Key</td></tr>`;
+      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="5" class="muted">该应用暂无 API 密钥</td></tr>`;
   }
-  document.getElementById('view').innerHTML=`<h2>应用 API Key</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 Key</button>'):''}</div>
+  document.getElementById('view').innerHTML=`<h2>API 密钥</h2>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
    <table><thead><tr><th>ID</th><th>名称</th><th>Token(预览)</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function newApiKey(){
   if(!state.appSel){alert('请先选择应用');return;}
-  openModal(`<h3>新建 API Key (应用 #${state.appSel})</h3><label>名称</label><input id="m_name">
+  openModal(`<h3>${t('新建 API 密钥')} (${t('应用')} #${state.appSel})</h3><label>名称</label><input id="m_name">
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveApiKey)">保存</button></div>`);
 }
 async function saveApiKey(){
   const r=await api('POST','/api/api-keys',{application_id:+state.appSel,name:v('m_name')});
-  if(r.error){alert(r.error);return;}
+  if(r.error){alert(t(r.error));return;}
   const token=r.token||'';
-  openModal(`<h3>API Key 已创建</h3><p class="muted">请立即复制保存，关闭后将无法再查看明文：</p>
+  openModal(`<h3>API 密钥已创建</h3><p class="muted">请立即复制保存，关闭后将无法再查看明文：</p>
    <label>Token</label><input id="m_tok" value="${esc(token)}" readonly onclick="this.select()">
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button onclick="(navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('m_tok').value));closeModal();viewApiKeys()">我已复制，关闭</button></div>`);
 }
-async function delApiKey(id){ if(!confirm('确认删除该 API Key？'))return; const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(r.error);return;} viewApiKeys(); }
+async function delApiKey(id){ if(!confirm('确认删除该 API 密钥？'))return; const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }
 
-// ================= 集成（Integrations） =================
+// ================= 外部集成 =================
 async function viewIntegrations(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
@@ -1632,10 +1779,10 @@ async function viewIntegrations(){
         <td class="muted">${esc(summary)}</td>
         <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
         <td>${adminBtn(`<button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`;
-    }).join('')||`<tr><td colspan="5" class="muted">该应用暂无集成</td></tr>`;
+    }).join('')||`<tr><td colspan="5" class="muted">该应用暂无外部集成</td></tr>`;
   }
-  document.getElementById('view').innerHTML=`<h2>集成（Integrations）</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建集成</button>'):''}</div>
+  document.getElementById('view').innerHTML=`<h2>外部集成</h2>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建外部集成</button>'):''}</div>
    <table><thead><tr><th>类型</th><th>状态</th><th>配置</th><th>创建时间</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function newIntegration(){
@@ -1648,7 +1795,7 @@ function newIntegration(){
   const gcpFields=`<div id="f_gcp" class="hidden"><label>Project ID</label><input id="m_gcp_project"><label>Topic Name</label><input id="m_gcp_topic"><label>Credentials JSON (服务账号)</label><textarea id="m_gcp_cred" placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'></textarea><label>或 Credentials 文件</label><input id="m_gcp_credfile" placeholder="/path/to/sa.json"></div>`;
   const amqpFields=`<div id="f_amqp" class="hidden"><label>AMQP URL</label><input id="m_amqp_url" placeholder="amqp://user:pass@host:5672"><label>Exchange</label><input id="m_amqp_exchange" placeholder="amq.topic"><label>Routing Key 模板</label><input id="m_amqp_rk" placeholder="application.{app_id}.device.{dev_eui}.event.{event}"></div>`;
   const kafkaFields=`<div id="f_kafka" class="hidden"><label>Brokers</label><input id="m_kafka_brokers" placeholder="host1:9092,host2:9092"><label>Topic</label><input id="m_kafka_topic"><label>TLS</label><select id="m_kafka_tls"><option value="0">否</option><option value="1">是</option></select><label>SASL 用户名(可选)</label><input id="m_kafka_user"><label>SASL 密码(可选)</label><input id="m_kafka_pass" type="password"></div>`;
-  openModal(`<h3>新建集成 (应用 #${state.intAppSel})</h3>
+  openModal(`<h3>${t('新建外部集成')} (${t('应用')} #${state.intAppSel})</h3>
    <label>类型</label><select id="m_kind" onchange="toggleIntFields()"><option value="HTTP">HTTP</option><option value="INFLUX_DB">InfluxDB</option><option value="MQTT_GLOBAL">MQTT</option><option value="AWS_SNS">AWS SNS</option><option value="AZURE_SERVICE_BUS">Azure Service Bus</option><option value="GCP_PUBSUB">GCP Pub/Sub</option><option value="AMQP">AMQP (RabbitMQ)</option><option value="KAFKA">Kafka</option></select>
    <label>启用</label><select id="m_enabled"><option value="1" selected>是</option><option value="0">否</option></select>
    ${httpFields}${influxFields}${mqttFields}${awsFields}${azureFields}${gcpFields}${amqpFields}${kafkaFields}
@@ -1672,12 +1819,12 @@ async function saveIntegration(){
   else if(kind==='AMQP'){ config={url:v('m_amqp_url'),exchange:v('m_amqp_exchange'),routing_key_template:v('m_amqp_rk')}; }
   else if(kind==='KAFKA'){ config={brokers:v('m_kafka_brokers'),topic:v('m_kafka_topic'),tls:+v('m_kafka_tls'),username:v('m_kafka_user'),password:v('m_kafka_pass')}; }
   const body={application_id:+state.intAppSel, kind, enabled:+v('m_enabled'), config};
-  const r=await api('POST','/api/integrations',body); if(r.error){alert(r.error);return;} closeModal(); viewIntegrations();
+  const r=await api('POST','/api/integrations',body); if(r.error){alert(t(r.error));return;} closeModal(); viewIntegrations();
 }
-async function toggleIntegration(id,enabled){ const r=await api('PUT',`/api/integrations/${id}`,{enabled}); if(r.error){alert(r.error);return;} viewIntegrations(); }
-async function delIntegration(id){ if(!confirm('确认删除该集成？'))return; const r=await api('DELETE',`/api/integrations/${id}`); if(r.error){alert(r.error);return;} viewIntegrations(); }
+async function toggleIntegration(id,enabled){ const r=await api('PUT',`/api/integrations/${id}`,{enabled}); if(r.error){alert(t(r.error));return;} viewIntegrations(); }
+async function delIntegration(id){ if(!confirm('确认删除该外部集成？'))return; const r=await api('DELETE',`/api/integrations/${id}`); if(r.error){alert(t(r.error));return;} viewIntegrations(); }
 
-// ================= 组播组（Multicast Group） =================
+// ================= 组播组 =================
 async function viewMulticastGroups(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
@@ -1690,7 +1837,7 @@ async function viewMulticastGroups(){
      <td class="muted">${esc(m.region)}</td><td><span class="tag ${m.group_type}">${m.group_type}</span></td>
      <td class="muted"><code>${esc(m.mc_addr)}</code></td><td class="muted">DR${m.dr}</td><td class="muted">${m.f_cnt}</td>
      <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delMulticast(${m.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
-  document.getElementById('view').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2>组播组（Multicast Group）</h2>${adminBtn('<button onclick="newMulticast()">+ 新建组播组</button>')}</div>
+  document.getElementById('view').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2>组播组</h2>${adminBtn('<button onclick="newMulticast()">+ 新建组播组</button>')}</div>
    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div></div>
    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>区域</th><th>类型</th><th>MC Addr</th><th>DR</th><th>FCnt</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -1720,12 +1867,12 @@ async function saveMulticast(id){
     mc_addr:v('m_mcaddr'),mc_nwk_s_key:v('m_mcnwk'),mc_app_s_key:v('m_mcapp'),
     dr:+v('m_dr'),frequency:+v('m_freq'),class_b_ping_slot_periodicity:+v('m_bpp'),class_c_scheduling_type:v('m_sched')};
   const r= id?await api('PUT',`/api/multicast-groups/${id}`,body):await api('POST','/api/multicast-groups',body);
-  if(r.error){alert(r.error);return;} closeModal(); viewMulticastGroups();
+  if(r.error){alert(t(r.error));return;} closeModal(); viewMulticastGroups();
 }
 async function editMulticast(id){ const r=await api('GET',`/api/multicast-groups/${id}`); const m=r; if(!m||m.error){alert('未找到');return;}
-  openModal(`<h3>编辑组播组 #${id}</h3>${multicastForm(m)}
+  openModal(`<h3>${t('编辑组播组')} #${id}</h3>${multicastForm(m)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveMulticast(${id}))">保存</button></div>`); }
-async function delMulticast(id){ if(!confirm('确认删除该组播组及其设备/网关/队列？'))return; const r=await api('DELETE',`/api/multicast-groups/${id}`); if(r.error){alert(r.error);return;} viewMulticastGroups(); }
+async function delMulticast(id){ if(!confirm('确认删除该组播组及其设备/网关/队列？'))return; const r=await api('DELETE',`/api/multicast-groups/${id}`); if(r.error){alert(t(r.error));return;} viewMulticastGroups(); }
 async function mcDetail(id){
   const g = await api('GET',`/api/multicast-groups/${id}`);
   const devs = await api('GET',`/api/multicast-groups/${id}/devices`);
@@ -1733,7 +1880,7 @@ async function mcDetail(id){
   state.mcDetail = {id, g, devs:(devs.data||[]).map(x=>x.dev_eui), gws:(gws.data||[]).map(x=>x.gw_id)};
   const devList=(state.mcDetail.devs.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="busy('移除中…', ()=>rmMcDev(${id},'${esc(e)}'))">移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无设备</td></tr>`;
   const gwList=(state.mcDetail.gws.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="busy('移除中…', ()=>rmMcGw(${id},'${esc(e)}'))">移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无网关（为空则广播到全部网关）</td></tr>`;
-  openModal(`<h3>组播组 #${id} ${esc(g.name||'')}</h3>
+  openModal(`<h3>${t('组播组')} #${id} ${esc(g.name||'')}</h3>
    <p class="muted">MC Addr: <code>${esc(g.mc_addr||'')}</code> · 类型 ${g.group_type} · DR${g.dr} · f_cnt ${g.f_cnt} · 应用 #${g.application_id}</p>
    <h4 style="margin-top:6px">下发数据</h4>
    <div class="row"><div style="flex:0 0 120px"><label>端口 (1..223)</label><input id="m_port" value="10"></div><div style="flex:2"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"></div></div>
@@ -1746,11 +1893,11 @@ async function mcDetail(id){
    <table style="margin-top:8px"><thead><tr><th>GatewayID</th><th></th></tr></thead><tbody>${gwList}</tbody></table>
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
-async function enqueueMc(id){ const r=await api('POST',`/api/multicast-groups/${id}/enqueue`,{port:+v('m_port'),payload:v('m_payload')}); if(r.error){alert(r.error);return;} closeModal(); alert('已加入组播下发队列（NS 调度线程将按队列发送）。'); }
-async function addMcDev(id){ const e=v('m_mcdev'); if(!e){alert('请输入 DevEUI');return;} const r=await api('POST',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
-async function rmMcDev(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
-async function addMcGw(id){ const e=v('m_mcgw'); if(!e){alert('请输入 Gateway ID');return;} const r=await api('POST',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
-async function rmMcGw(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(r.error);return;} mcDetail(id); }
+async function enqueueMc(id){ const r=await api('POST',`/api/multicast-groups/${id}/enqueue`,{port:+v('m_port'),payload:v('m_payload')}); if(r.error){alert(t(r.error));return;} closeModal(); alert('已加入组播下发队列（NS 调度线程将按队列发送）。'); }
+async function addMcDev(id){ const e=v('m_mcdev'); if(!e){alert('请输入 DevEUI');return;} const r=await api('POST',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
+async function rmMcDev(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
+async function addMcGw(id){ const e=v('m_mcgw'); if(!e){alert('请输入 Gateway ID');return;} const r=await api('POST',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
+async function rmMcGw(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
 
 function openModal(html){
   document.getElementById('modalBox').innerHTML=html;

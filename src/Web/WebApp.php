@@ -367,14 +367,14 @@ class WebApp
             return ['error' => 'name required'];
         }
         if (self::getApplicationByName($p['name'])) {
-            return ['error' => 'application name already exists'];
+            return ['error' => '应用名称已存在'];
         }
         // 若未填写 AppEUI 则随机生成（16 hex）
         $appEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_eui'] ?? ''));
         if ($appEui === '') {
             $appEui = bin2hex(random_bytes(8));
         } elseif (self::getApplicationByEui($appEui)) {
-            return ['error' => 'app_eui already exists'];
+            return ['error' => 'AppEUI 已存在'];
         }
         $callbackUrl = trim($p['callback_url'] ?? '');
         $tid = self::createTenantId($p);
@@ -423,7 +423,7 @@ class WebApp
             return ['error' => 'dev_eui must be 16 hex chars'];
         }
         if (Database::fetch("SELECT id FROM devices WHERE dev_eui=?", [$devEui])) {
-            return ['error' => 'dev_eui already exists'];
+            return ['error' => 'DevEUI 已存在'];
         }
         // Class A/B/C（设备工作模式，决定下行调度策略）
         $class = strtoupper($p['class'] ?? 'A');
@@ -444,7 +444,7 @@ class WebApp
             $tid = self::createTenantId($p);
         }
         if (Database::fetch("SELECT id FROM devices WHERE app_id=? AND name=?", [$appId, $p['name']])) {
-            return ['error' => 'device name already exists in this application'];
+            return ['error' => '该应用下设备名称已存在'];
         }
         $region = $p['region'] ?? ELW_DEFAULT_REGION;
         if (!in_array(strtoupper($region), Region::supported(), true)) {
@@ -656,13 +656,13 @@ class WebApp
         }
         $dupName = Database::fetch("SELECT id FROM applications WHERE name=? AND id<>?", [$p['name'], $id]);
         if ($dupName) {
-            return ['error' => 'application name already exists'];
+            return ['error' => '应用名称已存在'];
         }
         $appEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_eui'] ?? ''));
         if ($appEui !== '') {
             $dupEui = Database::fetch("SELECT id FROM applications WHERE app_eui=? AND id<>?", [$appEui, $id]);
             if ($dupEui) {
-                return ['error' => 'app_eui already exists'];
+                return ['error' => 'AppEUI 已存在'];
             }
         }
         Database::execute(
@@ -716,7 +716,7 @@ class WebApp
         if (array_key_exists('name', $p) && $name !== '') {
             $dupName = Database::fetch("SELECT id FROM devices WHERE app_id=? AND name=? AND id<>?", [$device['app_id'], $name, $id]);
             if ($dupName) {
-                return ['error' => 'device name already exists in this application'];
+                return ['error' => '该应用下设备名称已存在'];
             }
         }
         $class = strtoupper($p['class'] ?? $device['class']);
@@ -763,7 +763,7 @@ class WebApp
                 $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_eui']));
                 if (strlen($devEui) === 16) {
                     if (Database::fetch("SELECT id FROM devices WHERE dev_eui=? AND id<>?", [$devEui, $id])) {
-                        return ['error' => 'dev_eui already exists'];
+                        return ['error' => 'DevEUI 已存在'];
                     }
                     $setParts[] = 'dev_eui=?';
                     $params[] = $devEui;
@@ -820,7 +820,7 @@ class WebApp
             return ['error' => 'name required'];
         }
         if (self::getGateway($gwId)) {
-            return ['error' => 'gateway already exists'];
+            return ['error' => '网关已存在'];
         }
         $region = strtoupper($p['region'] ?? '');
         if ($region && !in_array($region, Region::supported(), true)) {

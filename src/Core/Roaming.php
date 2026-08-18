@@ -6,12 +6,12 @@ use holastack\Crypto\AES;
 use holastack\Crypto\LoRaWANCrypto;
 
 /**
- * 漫游（Roaming, Backend Interface TS002）—— 仿 ChirpStack backend/roaming.rs 移植。
+ * 漫游（Roaming, Backend Interface TS002）实现。
  *
  * 本模块承担「服务 NS（Serving NS）」角色：当本 NS 收到非本网 DevAddr 的上行 / 非本网设备
  * 的 Join 时，按 NetID 把报文转发给伙伴 Home NS（Passive Roaming），由 Home NS 决策。
  *
- * 对齐 ChirpStack 的结构：
+ * 实现结构：
  *  - CLIENTS：按伙伴 NetID 注册的 RoamingClient（含 TLS/KEK/签名/超时）；
  *  - isRoamingDevAddr / getNetIdsForDevAddr：基于本 NS NetID 前缀的 DevAddr 路由判定；
  *  - rxInfoToGwInfo / ulMetaDataToRxInfo / ulMetaDataToTxInfo / dlMetaDataToUplinkRxInfo：

@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS applications (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: 租户（Tenant，多租户隔离基础） ----
+-- ---- 租户（Tenant，多租户隔离基础） ----
 CREATE TABLE IF NOT EXISTS tenants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: 设备配置模板（Device Profile） ----
+-- ---- 设备配置模板（Device Profile） ----
 CREATE TABLE IF NOT EXISTS device_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: 应用级 API Key ----
+-- ---- 应用级 API Key ----
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,
@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at INTEGER DEFAULT 0
 );
 
--- ---- ChirpStack-port: 集成配置 ----
+-- ---- 集成配置 ----
 CREATE TABLE IF NOT EXISTS integrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     application_id INTEGER NOT NULL,
@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS integrations (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: 组播组 ----
+-- ---- 组播组 ----
 CREATE TABLE IF NOT EXISTS multicast_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,
@@ -257,7 +257,7 @@ CREATE INDEX IF NOT EXISTS idx_integrations_app ON integrations(application_id);
 CREATE INDEX IF NOT EXISTS idx_mg_app ON multicast_groups(application_id);
 CREATE INDEX IF NOT EXISTS idx_mq_mg ON multicast_queue(multicast_group_id);
 
--- ---- ChirpStack-port: Basic Station / LNS（WebSocket 后端） ----
+-- ---- Basic Station / LNS（WebSocket 后端） ----
 CREATE TABLE IF NOT EXISTS stations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,
@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS stations (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: 中继（Relay, TS011 / LoRaWAN 1.1 Relay） ----
+-- ---- 中继（Relay, TS011 / LoRaWAN 1.1 Relay） ----
 CREATE TABLE IF NOT EXISTS relay_gateways (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,
@@ -302,7 +302,7 @@ CREATE TABLE IF NOT EXISTS relay_devices (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: FUOTA（固件分片 + 组播 + 时钟同步） ----
+-- ---- FUOTA（固件分片 + 组播 + 时钟同步） ----
 CREATE TABLE IF NOT EXISTS fuota_campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,
@@ -361,7 +361,7 @@ CREATE TABLE IF NOT EXISTS fuota_frames (
     created_at INTEGER NOT NULL
 );
 
--- ---- ChirpStack-port: 漫游（Roaming, Backend Interface） ----
+-- ---- 漫游（Roaming, Backend Interface） ----
 CREATE TABLE IF NOT EXISTS roaming_servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER DEFAULT 0,

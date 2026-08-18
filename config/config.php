@@ -30,6 +30,15 @@ if (file_exists($localFile)) {
 $dsn = $local['db_dsn'] ?? (getenv('ELW_DB_DSN') ?: ('sqlite:' . __DIR__ . '/../runtime/server.db'));
 
 define('ELW_DB_DSN', $dsn);
+
+// 首次运行时确保 SQLite 数据库父目录存在（runtime/ 可能尚未创建）
+if (strpos(ELW_DB_DSN, 'sqlite:') === 0) {
+    $dbDir = dirname(substr(ELW_DB_DSN, 7));
+    if ($dbDir !== '' && $dbDir !== '.' && !is_dir($dbDir)) {
+        @mkdir($dbDir, 0777, true);
+    }
+}
+
 define('ELW_DB_USER', $local['db_user'] ?? (getenv('ELW_DB_USER') ?: ''));
 define('ELW_DB_PASS', $local['db_pass'] ?? (getenv('ELW_DB_PASS') ?: ''));
 

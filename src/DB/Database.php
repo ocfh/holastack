@@ -151,7 +151,7 @@ class Database
                 ['roaming_servers', 'validate_mic', 'INTEGER NOT NULL DEFAULT 1'],
                 ['devices', 'relay_state', 'TEXT DEFAULT \'\''],
                 ['device_profiles', 'relay_params', 'TEXT DEFAULT \'\''],
-                // relay_devices 会话字段（对齐 ChirpStack internal.proto RelayDevice；旧库升级补列）
+                // relay_devices 会话字段（对齐 RelayDevice 定义；旧库升级补列）
                 ['relay_devices', 'slot_index', 'INTEGER NOT NULL DEFAULT 0'],
                 ['relay_devices', 'join_eui', 'TEXT DEFAULT \'\''],
                 ['relay_devices', 'root_wor_s_key', 'TEXT DEFAULT \'\''],
@@ -188,7 +188,7 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INTEGER DEFAULT 0, app_id INTEGER DEFAULT 0, message TEXT DEFAULT \'\', raw_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT \'\', can_have_gateways INTEGER NOT NULL DEFAULT 1, private_gateways_limit INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
-            // ---- ChirpStack-port 路线图模块表（BasicStation/Relay/FUOTA/Roaming） ----
+            // ---- 后期模块表（BasicStation/Relay/FUOTA/Roaming） ----
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, gateway_id TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', lns_secret TEXT DEFAULT \'\', ca_cert TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, relay_dev_eui TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, relay_gateway_id INTEGER NOT NULL, dev_eui TEXT NOT NULL, slot_index INTEGER NOT NULL DEFAULT 0, join_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', root_wor_s_key TEXT DEFAULT \'\', provisioned INTEGER NOT NULL DEFAULT 0, uplink_limit_bucket_size INTEGER NOT NULL DEFAULT 0, uplink_limit_reload_rate INTEGER NOT NULL DEFAULT 0, w_f_cnt_last_request INTEGER NOT NULL DEFAULT 0, nwk_s_key TEXT DEFAULT \'\', app_s_key TEXT DEFAULT \'\', f_nwk_s_int_key TEXT DEFAULT \'\', s_nwk_s_int_key TEXT DEFAULT \'\', nwk_s_enc_key TEXT DEFAULT \'\', mac_version TEXT DEFAULT \'1.1\', created_at INTEGER NOT NULL)');
@@ -226,7 +226,7 @@ class Database
                 $pdo->exec('ALTER TABLE events ADD COLUMN raw_json TEXT');
             }
             $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(128) NOT NULL, description VARCHAR(255) DEFAULT \'\', can_have_gateways TINYINT NOT NULL DEFAULT 1, private_gateways_limit INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
-            // ---- ChirpStack-port 路线图模块表（BasicStation/Relay/FUOTA/Roaming） ----
+            // ---- 后期模块表（BasicStation/Relay/FUOTA/Roaming） ----
             $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, gateway_id VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', lns_secret VARCHAR(128) DEFAULT \'\', ca_cert TEXT, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, relay_dev_eui VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INT AUTO_INCREMENT PRIMARY KEY, relay_gateway_id INT NOT NULL, dev_eui VARCHAR(32) NOT NULL, slot_index INT NOT NULL DEFAULT 0, join_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', root_wor_s_key VARCHAR(64) DEFAULT \'\', provisioned TINYINT NOT NULL DEFAULT 0, uplink_limit_bucket_size INT NOT NULL DEFAULT 0, uplink_limit_reload_rate INT NOT NULL DEFAULT 0, w_f_cnt_last_request INT NOT NULL DEFAULT 0, nwk_s_key VARCHAR(64) DEFAULT \'\', app_s_key VARCHAR(64) DEFAULT \'\', f_nwk_s_int_key VARCHAR(64) DEFAULT \'\', s_nwk_s_int_key VARCHAR(64) DEFAULT \'\', nwk_s_enc_key VARCHAR(64) DEFAULT \'\', mac_version VARCHAR(16) DEFAULT \'1.1\', created_at INT NOT NULL)');
@@ -287,7 +287,7 @@ class Database
                 ['roaming_servers', 'validate_mic', 'TINYINT DEFAULT 1'],
                 ['devices', 'relay_state', 'TEXT'],
                 ['device_profiles', 'relay_params', 'TEXT'],
-                // relay_devices 会话字段（对齐 ChirpStack internal.proto RelayDevice；旧库升级补列）
+                // relay_devices 会话字段（对齐 RelayDevice 定义；旧库升级补列）
                 ['relay_devices', 'slot_index', 'INT NOT NULL DEFAULT 0'],
                 ['relay_devices', 'join_eui', 'VARCHAR(32) DEFAULT \'\''],
                 ['relay_devices', 'root_wor_s_key', 'VARCHAR(64) DEFAULT \'\''],
