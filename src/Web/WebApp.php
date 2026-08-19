@@ -1024,6 +1024,51 @@ class WebApp
         return ['ok' => true];
     }
 
+    public static function updateUser(int $id, array $p): array
+    {
+        $cur = Auth::currentUser();
+        if (!$cur) {
+            return ['error' => 'not authenticated'];
+        }
+        if ($cur['role'] !== Auth::ROLE_ADMIN) {
+            return ['error' => 'forbidden'];
+        }
+        $u = Database::fetch("SELECT * FROM users WHERE id=?", [$id]);
+        if (!$u) {
+            return ['error' => 'user not found'];
+        }
+        $role = $p['role'] ?? $u['role'];
+        if (!in_array($role, Auth::ROLES, true)) {
+            return ['error' => 'invalid role'];
+        }
+        if ((int)$cur['id'] === $id && $role !== Auth::ROLE_ADMIN) {
+            return ['error' => 'cannot change own role'];
+        }
+        $tid = (int) ($p['tenant_id'] ?? $u['tenant_id'] ?? 0);
+        if ($role === Auth::ROLE_TENANT) {
+            if ($tid <= 0 && !empty($p['new_tenant_name'])) {
+                $name = trim($p['new_tenant_name']);
+                $exists = Database::fetch("SELECT id FROM tenants WHERE name=?", [$name]);
+                if ($exists) {
+                    $tid = (int) $exists['id'];
+                } else {
+                    Database::execute(
+                        "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at) VALUES (?,?,0,0,?)",
+                        [$name, '', time()]
+                    );
+                    $tid = Database::lastInsertId();
+                }
+            }
+            if ($tid <= 0) {
+                return ['error' => 'tenant role requires a tenant'];
+            }
+        } else {
+            $tid = 0;
+        }
+        Database::execute("UPDATE users SET role=?, tenant_id=? WHERE id=?", [$role, $tid, $id]);
+        return ['ok' => true];
+    }
+
     public static function getStats(): array
     {
         
