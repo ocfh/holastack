@@ -1,14 +1,15 @@
 <?php
 namespace holastack\Install;
 
-/**
- * holastack Web 安装向导（三步走）：
- *  1) 语言设置（中文 / English，选择后立即生效，并写入 ui_lang）
- *  2) 数据库信息（MySQL 为主 / SQLite 零配置；「测试连接」成功才进入下一步）
- *  3) 配置管理员账号（用户名 / 密码 / 确认密码 三个横线编辑框）
- * 完成后导入数据库结构、创建管理员、持久化 config/local.php 并写入默认语言。
- * 已安装则不应再访问。
- */
+
+
+
+
+
+
+
+
+
 class Installer
 {
     private static function lang(): string
@@ -28,7 +29,8 @@ class Installer
         $method = $_SERVER['REQUEST_METHOD'];
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?: '';
 
-        // 独立 AJAX 端点：测试数据库连接（GET /install?step=test-db&db_type=..&...），返回 JSON
+        
+
         if (($path === '/install' || $path === '/install/') && ($_GET['step'] ?? '') === 'test-db') {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(self::testDb($_GET), JSON_UNESCAPED_UNICODE);
@@ -39,7 +41,8 @@ class Installer
             self::process();
             return;
         }
-        // GET 步骤分发：默认语言页；?step=db 数据库页；?step=admin 管理员页
+        
+
         $cur = (string) ($_GET['step'] ?? '');
         if ($cur === 'db') {
             echo self::renderStep2([], []);
@@ -66,7 +69,8 @@ class Installer
             $abs = self::resolveSqlitePath($file);
             $dsn = 'sqlite:' . $abs;
             $connDsn = $dsn;
-            // 若文件尚不存在，先校验其所在目录可写，避免连接报错误导
+            
+
             $dir = dirname($abs);
             if (!is_dir($dir) && !@mkdir($dir, 0777, true)) {
                 $errors[] = self::msg('数据库目录不可创建：', 'Cannot create database directory: ') . $dir;
@@ -92,7 +96,8 @@ class Installer
                     $pdo->exec("CREATE DATABASE IF NOT EXISTS `$dbname` DEFAULT CHARACTER SET utf8mb4");
                     $pdo = new \PDO($dsn, $user, $pass, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
                 }
-                // 存 session 供最终安装复用，避免用户填一遍
+                
+
                 $_SESSION['install_db'] = ['db_type' => $dbType, 'dsn' => $dsn, 'user' => $user, 'pass' => $pass];
                 $_SESSION['install_step'] = 'db';
                 return ['ok' => true];
@@ -105,15 +110,18 @@ class Installer
 
     private static function resolveSqlitePath(string $file): string
     {
-        // 去掉潜在的 "sqlite:" 前缀与首尾空白
+        
+
         $file = trim(preg_replace('/^sqlite:/', '', $file));
-        // 绝对路径（含 C:\ 盘符、/、\ 开头）不改动
+        
+
         if ($file === '' || strpos($file, '/') === 0 || strpos($file, '\\') === 0 || preg_match('/^[A-Za-z]:[\\\\\/]/', $file)) {
             $p = $file === '' ? ELW_ROOT . '/runtime/server.db' : $file;
         } else {
             $p = ELW_ROOT . '/' . $file;
         }
-        // 统一反斜杠，便于 dirname
+        
+
         return str_replace('\\', '/', $p);
     }
 
@@ -122,9 +130,12 @@ class Installer
         $p = $_POST;
         $action = (string) ($p['action'] ?? '');
 
-        // 步骤一：语言设置。分两种提交：
-        //   a) 点击语言卡片 → 立即刷新换语言（stay，仍留在第 1 步）
-        //   b) 点击「下一步」→ 进入数据库步骤
+        
+
+        
+
+        
+
         if ($action === 'set-lang') {
             $l = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($p['lang'] ?? 'zh'));
             $_SESSION['install_lang'] = $l !== '' ? $l : 'zh';
@@ -137,7 +148,8 @@ class Installer
             exit;
         }
 
-        // 步骤三：最终安装
+        
+
         $errors = [];
         $db = $_SESSION['install_db'] ?? null;
         $dbType = $db['db_type'] ?? 'sqlite';
@@ -145,7 +157,8 @@ class Installer
         $user = $db['user'] ?? '';
         $pass = $db['pass'] ?? '';
 
-        // 管理员账号校验
+        
+
         $adminUser = trim($p['admin_user'] ?? '');
         $adminPass = (string) ($p['admin_pass'] ?? '');
         $adminPass2 = (string) ($p['admin_pass2'] ?? '');
@@ -159,7 +172,8 @@ class Installer
             $errors[] = self::msg('两次输入的密码不一致', 'Passwords do not match');
         }
 
-        // 若之前没测过连接，也尝试连接一次
+        
+
         $pdo = null;
         if (empty($errors)) {
             try {
@@ -174,7 +188,8 @@ class Installer
             return;
         }
 
-        // 导入数据库结构 + 创建管理员
+        
+
         try {
             self::importSchema($pdo, $dbType);
         } catch (\Throwable $e) {
@@ -191,13 +206,15 @@ class Installer
                 ->execute([$adminUser, $hash, 'admin', time()]);
         }
 
-        // 写入默认语言到 settings 表
+        
+
         try {
             $lang = self::lang();
             $ins = $pdo->prepare('INSERT INTO settings (skey, svalue, updated_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue), updated_at=VALUES(updated_at)');
             $ins->execute(['ui_lang', $lang, time()]);
         } catch (\Throwable $e) {
-            // SQLite 无 ON DUPLICATE：回退为先查后插
+            
+
             try {
                 $ex = $pdo->prepare('SELECT skey FROM settings WHERE skey=?');
                 $ex->execute(['ui_lang']);
@@ -205,7 +222,8 @@ class Installer
                     $pdo->prepare('INSERT INTO settings (skey, svalue, updated_at) VALUES (?,?,?)')->execute(['ui_lang', $lang, time()]);
                 }
             } catch (\Throwable $ignored) {
-                // 忽略：settings 写入失败不影响安装主体
+                
+
             }
         }
 
@@ -214,13 +232,15 @@ class Installer
         exit;
     }
 
-    /** @deprecated 兼容旧调用：等价 tl()，第二参忽略（英文由 lang/en.php 提供）。 */
+    
+
     private static function msg(string $zh, string $en): string
     {
         return self::tl($zh);
     }
 
-    /** 安装向导文案清单：key 为模板占位，value 经 tl() 查 lang/<lang>.php 按当前语言取译文。 */
+    
+
     private static function labels(): array
     {
         return [
@@ -271,7 +291,8 @@ class Installer
                     try {
                         $pdo->exec($stmt);
                     } catch (\Throwable $e) {
-                        // 表兼容：已存在同名列/索引或多行语句失败时跳过
+                        
+
                         if (stripos($e->getMessage(), 'already exists') === false) {
                             throw $e;
                         }
@@ -297,7 +318,8 @@ class Installer
         file_put_contents(ELW_ROOT . '/config/local.php', $export, LOCK_EX);
     }
 
-    // ---------------- 渲染 ----------------
+    
+
 
     private static function renderStep1(array $errors): string
     {

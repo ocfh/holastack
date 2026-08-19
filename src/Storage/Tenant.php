@@ -1,9 +1,10 @@
 <?php
-/**
- * 租户（Tenant）存储层。
- * 多租户隔离的基础：应用 / 设备 / 网关 / 设备模板 / 组播组 / API Key / 集成 均挂 tenant_id。
- * 当前实现为「软多租户」——同一 NS 进程服务多租户，查询按 tenant_id 过滤。
- */
+
+
+
+
+
+
 namespace holastack\Storage;
 
 use holastack\DB\Database;
@@ -25,10 +26,14 @@ class Tenant
         if (empty($p['name'])) {
             return ['error' => 'name required'];
         }
-        // 私有网关上限：
-        //   private_gateways_unlimited=1 → 关闭上限，无限创建
-        //   private_gateways_unlimited=0 → 按 private_gateways_limit 限制（默认 0 = 不允许创建网关）
-        // 新建用户配置默认 = 受限 + 上限 0。
+        
+
+        
+
+        
+
+        
+
         $unlimited = !empty($p['private_gateways_unlimited']) ? 1 : 0;
         $limit = (int) ($p['private_gateways_limit'] ?? 0);
         if ($unlimited) {
@@ -80,7 +85,8 @@ class Tenant
 
     public static function delete(int $id): array
     {
-        // 级联解除：将其下应用/设备/网关的 tenant_id 置 0（回到「默认租户」），不物理删除子资源
+        
+
         Database::execute("UPDATE applications SET tenant_id=0 WHERE tenant_id=?", [$id]);
         Database::execute("UPDATE devices SET tenant_id=0 WHERE tenant_id=?", [$id]);
         Database::execute("UPDATE gateways SET tenant_id=0 WHERE tenant_id=?", [$id]);

@@ -1,10 +1,11 @@
 <?php
 namespace holastack\Integration;
 
-/**
- * 极简 MQTT 3.1.1 发布客户端（QoS 0，纯 TCP socket，无第三方依赖）。
- * 用于 Integrations 的 MQTT 集成。best-effort：连接/发布失败仅记录日志，不阻断上行主流程。
- */
+
+
+
+
+
 class MqttClient
 {
     private $socket;
@@ -51,7 +52,8 @@ class MqttClient
         }
         stream_set_timeout($this->socket, 3);
 
-        $flags = 0x02; // clean session
+        $flags = 0x02; 
+
         if ($this->username !== '') {
             $flags |= 0x80;
         }
@@ -69,7 +71,8 @@ class MqttClient
         $packet = "\x10" . self::encodeRemainingLength(strlen($variable) + strlen($payload)) . $variable . $payload;
         $this->write($packet);
 
-        // 读取 CONNACK（2 字节固定头 + 2 字节可变头）
+        
+
         $ack = $this->read(4);
         return $ack !== false;
     }
@@ -80,7 +83,8 @@ class MqttClient
             return false;
         }
         $payload = self::encodeString($topic) . $message;
-        $header = "\x30"; // PUBLISH, QoS0, 不保留
+        $header = "\x30"; 
+
         $packet = $header . self::encodeRemainingLength(strlen($payload)) . $payload;
         return $this->write($packet);
     }

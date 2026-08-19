@@ -1,13 +1,14 @@
 <?php
 namespace holastack\Region;
 
-/**
- * LoRaWAN 区域参数模板。
- * 参照 ChirpStack lrwn/src/region/ 各频段实现。
- *
- * 提供 RX1/RX2 频率、接收延迟、Join Accept 延迟、数据速率映射。
- * 时间单位：毫秒；频率单位：Hz。
- */
+
+
+
+
+
+
+
+
 class Region
 {
     private $name;
@@ -329,7 +330,8 @@ class Region
 
     public function getName(): string { return $this->name; }
 
-    /** EU868 / CN470 / CN779 / EU433 上行与 RX1 同频；US915/AU915 下行使用固定信道。 */
+    
+
     public function getRx1DrOffset(): int { return $this->cfg['rx1_dr_offset']; }
 
     public function getDataRate(int $dr): array
@@ -352,27 +354,31 @@ class Region
         return ($this->cfg['data_rates'][$dr] ?? $this->cfg['data_rates'][0])['desc'];
     }
 
-    // ---- 下行调度 / 入网窗口 所需 getter（NetworkServer 调用） ----
+    
+
 
     public function getRx2Frequency(): int { return (int) $this->cfg['rx2_frequency']; }
     public function getRx2DataRate(): int { return (int) $this->cfg['rx2_dr']; }
-    /** Class B 信标频点（Hz）/ 数据速率索引（对齐 ChirpStack region beacon 配置）。 */
+    
+
     public function getBeaconFrequency(): int { return (int) $this->cfg['beacon_frequency']; }
     public function getBeaconDataRate(): int { return (int) $this->cfg['beacon_dr']; }
-    /** Class B 信标 RFU1 长度（字节），区域相关（EU868=2 / CN470=3 / US915=5 / AU915=3 / IN865=1…）。 */
+    
+
     public function getBeaconRfu1(): int { return (int) ($this->cfg['beacon_rfu1'] ?? 0); }
     public function getBeaconRfu2(): int { return (int) ($this->cfg['beacon_rfu2'] ?? 0); }
     public function getBeaconNbChannels(): int { return (int) ($this->cfg['beacon_nb_channels'] ?? 1); }
     public function getBeaconChannelStep(): int { return (int) ($this->cfg['beacon_channel_step'] ?? 0); }
 
-    /**
-     * Class B 信标频点（Hz），含跳频。
-     *   freq = beacon_frequency + (floor(beaconGps / 128) % nb_channels) * channel_step
-     * nb_channels<=1 或 step<=0 时返回固定 beacon_frequency（EU868 / AS923 / 单信道区域）。
-     * 对齐固件 RegionCN470.c 的 PHY_BEACON_CHANNEL_FREQ 跳频公式：
-     *   CN470      = 508.3MHz + (floor(beacon/128) % 8) * 200kHz
-     *   US915/AU915 = 923.3MHz + (floor(beacon/128) % 8) * 600kHz
-     */
+    
+
+
+
+
+
+
+
+
     public function getBeaconChannelFrequency(int $beaconGps): int
     {
         $base = (int) $this->cfg['beacon_frequency'];
@@ -391,10 +397,11 @@ class Region
     public function getMaxUlDr(): int { return (int) $this->cfg['max_ul_dr']; }
     public function getCfList() { return $this->cfg['cf_list']; }
 
-    /**
-     * 区域允许的最大「LoRa 125kHz」数据速率索引（用于 ADR 引擎的上限裁剪）。
-     * 仅取 bw==125 且 sf>0 的 DR，与 ChirpStack lrwn region.get_enabled_uplink_data_rates 过滤一致。
-     */
+    
+
+
+
+
     public function getMaxLoraDr(): int
     {
         $max = 0;
@@ -406,11 +413,12 @@ class Region
         return $max;
     }
 
-    /**
-     * LoRa 解调门限（demodulation floor，单位 dB）——用于 ADR 余量计算与 LinkCheck 应答。
-     * 取自 LoRa 物理层灵敏度规格（同 ChirpStack lrwn region required_snr_for_dr）。
-     * DR 值按 data_rates 中的 sf 反推；FSK / 未知返回 0。
-     */
+    
+
+
+
+
+
     public function requiredSnrForDr(int $dr): float
     {
         $d = $this->cfg['data_rates'][$dr] ?? null;

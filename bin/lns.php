@@ -1,26 +1,27 @@
 <?php
-/**
- * Basic Station LNS 守护进程（Semtech LNS 协议，纯 PHP 实现，零外部依赖）。
- *
- * 与 Semtech UDP 包转发器不同，Basic Station 通过 WebSocket 连接本服务：
- *   站 → NS: version / jreq / updf / timesync / rmtsh（JSON 文本帧）
- *   NS → 站: router_config / dnmsg / timesync / rmtsh（JSON 文本帧）
- *
- * 架构：
- *   - 本进程内嵌一个 NetworkServer 实例（不开 UDP socket），station 网关经
- *     registerStationGateway() 注册，上行 ingestStationUp() 走标准 NS 链路，
- *     下行由 NS flushDownlink() 转 dnmsg 经 WebSocket 回送。
- *   - 无 Ratchet / composer 依赖：RFC 6455 握手与帧编解码均为内置实现
- *     （Station::wsAcceptKey / wsFrame / wsDecodeFragmented）。
- *
- * 启动：
- *   php bin/lns.php [--port 3001] [--cert /path/ca.pem]
- *   （--cert 提供时监听 wss；否则 ws）
- *
- * 站侧连接地址（Basic Station 配置）：
- *   ws://<host>:3001/router/<gateway_id>?token=<lns_secret>
- *   或生产 wss://<host>:443/router/<gateway_id>?token=<lns_secret>
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\NetworkServer;
@@ -41,10 +42,12 @@ echo "HolaStack LNS (Basic Station backend, pure PHP WebSocket)\n";
 echo "DB: " . ELW_DB_DSN . "\n";
 
 Database::migrate();
-$ns = new NetworkServer(0); // 不开 UDP：station 网关下行走 sink
+$ns = new NetworkServer(0); 
+
 echo "NS instance ready (station-only mode)\n";
 
-// ---------------- 连接管理 ----------------
+
+
 $srvOpts = [];
 if ($cert) {
     $srvOpts['ssl'] = ['local_cert' => $cert];
@@ -61,18 +64,21 @@ if ($srv === false) {
 stream_set_blocking($srv, false);
 echo "LNS listening on $proto://0.0.0.0:$port/router/{gateway_id}?token=...\n";
 
-/** @var array<int,array{sock:resource,buf:string,gwEui:string,station:?array}> $conns */
+
+
 $conns = [];
 $nextId = 1;
 
-/**
- * 尝试对连接完成 WebSocket 握手；成功返回 true（并注册 NS 网关）。
- */
+
+
+
+
 function tryHandshake(array &$c, NetworkServer $ns): bool
 {
     $headEnd = strpos($c['buf'], "\r\n\r\n");
     if ($headEnd === false) {
-        return false; // 请求头未完整，继续攒
+        return false; 
+
     }
     $head = substr($c['buf'], 0, $headEnd + 4);
     $c['buf'] = substr($c['buf'], $headEnd + 4);
@@ -118,7 +124,8 @@ function tryHandshake(array &$c, NetworkServer $ns): bool
     $c['station'] = $station;
     echo "[LNS] station connected: $gwEui (region=" . ($station['region'] ?: ELW_DEFAULT_REGION) . ")\n";
 
-    // 注册 NS 网关：下行 dnmsg 经 sink 回送本连接
+    
+
     $ns->registerStationGateway($gwEui, function (array $dn) use (&$c) {
         $frame = Station::wsFrame(json_encode($dn));
         if (@fwrite($c['sock'], $frame) === false) {
@@ -128,9 +135,10 @@ function tryHandshake(array &$c, NetworkServer $ns): bool
     return true;
 }
 
-/**
- * 处理连接缓冲区中的 WebSocket 帧（文本 JSON）。返回 false 表示连接应关闭（收到 close 帧）。
- */
+
+
+
+
 function processFrames(array &$c, NetworkServer $ns): bool
 {
     while (($frame = Station::wsDecodeFragmented($c['buf'])) !== null) {
@@ -167,7 +175,8 @@ function processFrames(array &$c, NetworkServer $ns): bool
     return true;
 }
 
-// ---------------- 主循环 ----------------
+
+
 while (true) {
     $read = [$srv];
     foreach ($conns as $c) {
@@ -203,7 +212,8 @@ while (true) {
             }
             $c['buf'] .= $data;
             if ($c['gwEui'] === '') {
-                // 握手阶段：失败即关闭（避免悬挂半开连接）
+                
+
                 if (!tryHandshake($c, $ns) && $c['gwEui'] === '') {
                     @fclose($stream);
                     unset($conns[$id]);
@@ -221,6 +231,7 @@ while (true) {
         }
         unset($c);
     }
-    // 周期调度（Class B/C 下行 / 组播 / FUOTA / Join 缓冲）
+    
+
     $ns->runScheduled();
 }

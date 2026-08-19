@@ -1,12 +1,18 @@
 <?php
-// English UI dictionary for HolaStack.
-// Mechanism: the SPA injects this map as window.I18N (keyed by the EXACT
-// Chinese source string). A DOM walker translates every visible text node /
-// placeholder / title / aria-label whose exact value is a key here.
-// Strings not present in this map fall back to the original Chinese (safe).
+
+
+
+
+
+
+
+
+
+
 return [
     '__name' => 'English',
-    // ---- Navigation ----
+    
+
     '运行监控' => 'Monitoring',
     '设备管理' => 'Devices',
     '系统管理' => 'System',
@@ -32,7 +38,8 @@ return [
     '退出登录' => 'Logout',
     '退出' => 'Logout',
 
-    // ---- Header / login ----
+    
+
     '切换主题' => 'Toggle theme',
     '菜单' => 'Menu',
     '登录' => 'Login',
@@ -40,7 +47,8 @@ return [
     '密码' => 'Password',
     '加载中…' => 'Loading…',
 
-    // ---- Dashboard ----
+    
+
     '消息总数' => 'Total Messages',
     '上行' => 'Uplink',
     '下行' => 'Downlink',
@@ -53,7 +61,8 @@ return [
     '应用总数' => 'Total Applications',
     '网络服务器监听 UDP 端口由 ELW_GW_UDP_PORT 配置（默认 1700）。先创建应用，再创建设备（OTAA 或 ABP，Class A/B/C），然后用网关连接并发送数据。' => 'Network server listens on the UDP port set by ELW_GW_UDP_PORT (default 1700). Create an application first, then add devices (OTAA or ABP, Class A/B/C), connect a gateway and send data.',
 
-    // ---- Applications ----
+    
+
     '+ 新建应用' => '+ New Application',
     '全部用户配置' => 'All Tenants',
     '回调 URL' => 'Callback URL',
@@ -65,7 +74,8 @@ return [
     '暂无应用' => 'No applications',
     '按应用筛选' => 'Filter by application',
 
-    // ---- Devices ----
+    
+
     '+ 添加设备' => '+ Add Device',
     '全部应用' => 'All Applications',
     '激活' => 'Activation',
@@ -84,7 +94,8 @@ return [
     'GPS' => 'GPS',
     '系统中暂无应用，请先在「应用」页面创建应用。' => 'No applications yet. Please create one in the Applications page first.',
 
-    // ---- Gateways ----
+    
+
     '+ 新建网关' => '+ New Gateway',
     'GatewayID' => 'Gateway ID',
     '区域' => 'Region',
@@ -92,7 +103,8 @@ return [
     '最近心跳' => 'Last heartbeat',
     '暂无网关（网关连接后自动出现，亦可手动添加）' => 'No gateways (they appear automatically once connected, or add manually)',
 
-    // ---- Uplinks ----
+    
+
     '按设备筛选' => 'Filter by device',
     '全部设备' => 'All Devices',
     '重置' => 'Reset',
@@ -109,7 +121,8 @@ return [
     'JSON' => 'JSON',
     '暂无上行' => 'No uplinks',
 
-    // ---- Downlinks ----
+    
+
     '点“JSON”查看下行记录的结构化（格式化）与解析展示（含 payload 解码）。' => 'Click "JSON" to view the structured (formatted) and parsed downlink record (including payload decoding).',
     '设备' => 'Device',
     'FPort' => 'FPort',
@@ -121,7 +134,8 @@ return [
     '确认时间' => 'Ack at',
     '暂无下行' => 'No downlinks',
 
-    // ---- Downlink status ----
+    
+
     '待发送' => 'Pending',
     '已调度' => 'Scheduled',
     '已发送' => 'Sent',
@@ -130,7 +144,8 @@ return [
     '超时' => 'Timeout',
     '错误' => 'Error',
 
-    // ---- Events ----
+    
+
     '按网关筛选' => 'Filter by gateway',
     '全部网关' => 'All Gateways',
     '网关上下线 / 入网 / 上行 / 下行 / 错误等事件。点“JSON”查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。' => 'Gateway online/offline, join, uplink, downlink, error and other events. Click "JSON" to view raw event data; uplink events include gateway metadata (rxpk).',
@@ -140,13 +155,15 @@ return [
     '消息' => 'Message',
     '暂无事件' => 'No events',
 
-    // ---- Users ----
+    
+
     '+ 新建用户' => '+ New User',
     '角色' => 'Role',
     '改密' => 'Reset PW',
     '暂无用户' => 'No users',
 
-    // ---- Site settings ----
+    
+
     '网站名称' => 'Site name',
     '顶部图标 URL（可选，留空则显示文字名称）' => 'Header icon URL (optional; shows text name if empty)',
     '站点 Favicon URL（可选，浏览器标签页小图标，推荐 .ico/.png/.svg）' => 'Site favicon URL (optional; browser tab icon, .ico/.png/.svg recommended)',
@@ -162,7 +179,8 @@ return [
     'English' => 'English',
     '例如：系统将于本周六 23:00 停机维护。' => 'e.g. System maintenance on Saturday 23:00.',
 
-    // ---- Change password ----
+    
+
     '目标用户（管理员可改他人；留空=自己）' => 'Target user (admin can change others; empty = self)',
     '我自己' => 'Myself',
     '新密码（≥6 位）' => 'New password (≥6 chars)',
@@ -175,7 +193,8 @@ return [
     '修改用户' => 'Edit user',
     '密码' => 'Password',
 
-    // ---- Application form ----
+    
+
     '新建应用' => 'New Application',
     '名称' => 'Name',
     'AppEUI（可选，留空自动随机生成）' => 'AppEUI (optional; auto-generated if empty)',
@@ -185,7 +204,8 @@ return [
     '编辑应用' => 'Edit Application',
     '确认删除该应用及其下所有设备？' => 'Delete this application and all its devices?',
 
-    // ---- Device form ----
+    
+
     '新建设备' => 'New Device',
     'DevEUI (16 hex)' => 'DevEUI (16 hex)',
     '激活方式' => 'Activation',
@@ -200,13 +220,15 @@ return [
     '留空保持不变' => 'Leave blank to keep unchanged',
     '确认删除该设备及其上下行记录？' => 'Delete this device and its uplink/downlink records?',
 
-    // ---- Gateway form ----
+    
+
     '新建网关' => 'New Gateway',
     'Gateway ID (16/32 hex)' => 'Gateway ID (16/32 hex)',
     '编辑网关' => 'Edit Gateway',
     '确认删除该网关？' => 'Delete this gateway?',
 
-    // ---- Downlink form ----
+    
+
     '下发数据' => 'Send downlink',
     '端口 (1..223)' => 'Port (1..223)',
     'Hex 负载' => 'Hex payload',
@@ -215,7 +237,8 @@ return [
     '已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。' => 'Queued for downlink (Class C sends immediately; Class A on next uplink RX1/RX2; Class B on ping slot).',
     '请先选择应用' => 'Please select an application first',
 
-    // ---- New user form ----
+    
+
     '新建用户' => 'New User',
     '密码（≥6 位）' => 'Password (≥6 chars)',
     'operator（演示：只读 + 模拟数据）' => 'operator (demo: read-only + mock data)',
@@ -225,7 +248,8 @@ return [
     '— 自动新建同名用户配置 —' => '— auto-create tenant with same name —',
     '确认删除该用户？' => 'Delete this user?',
 
-    // ---- Device profile form ----
+    
+
     'MAC 版本' => 'MAC version',
     '区域参数版本' => 'Regional parameters revision',
     'ADR 算法' => 'ADR algorithm',
@@ -253,7 +277,8 @@ return [
     '确认删除该模板？引用该模板的设备将回退到默认模板。' => 'Delete this profile? Devices referencing it fall back to the default profile.',
     '暂无设备模板' => 'No device profiles',
 
-    // ---- Tenant form ----
+    
+
     '可拥有网关' => 'Can own gateways',
     '私有网关上限' => 'Private gateway limit',
     '启用私有网关上限' => 'Enforce private gateway limit',
@@ -269,10 +294,12 @@ return [
     '确认删除该用户配置？其下资源将回退到默认用户配置。' => 'Delete this tenant? Its resources fall back to the default tenant.',
     '暂无用户配置' => 'No tenants',
 
-    // ---- Site footer ----
+    
+
     '页面底部 Footer（支持 HTML，如 © {Y} HolaStack &nbsp;|&nbsp; <a href="https://example.com">官网</a>；留空使用默认"© 今年年份 HolaStack"）' => 'Page footer (HTML allowed, e.g. © {Y} HolaStack &nbsp;|&nbsp; <a href="https://example.com">Home</a>; empty uses default "© {Y} HolaStack")',
 
-    // ---- API keys ----
+    
+
     '选择应用…' => 'Select application…',
     '请先在上方选择应用' => 'Select an application above first',
     '该应用暂无 API 密钥' => 'No API keys for this application',
@@ -285,7 +312,8 @@ return [
     '确认删除该 API 密钥？' => 'Delete this API key?',
     'Token(预览)' => 'Token (preview)',
 
-    // ---- API call logs ----
+    
+
     'API 调用日志' => 'API Call Logs',
     '路径包含' => 'Path contains',
     '状态码' => 'Status',
@@ -306,7 +334,8 @@ return [
     '（仅保留最近 10000 条）' => ' (latest 10,000 kept)',
     'ip' => 'IP',
 
-    // ---- Integrations ----
+    
+
     '该应用暂无外部集成' => 'No integrations for this application',
     '+ 新建外部集成' => '+ New Integration',
     '新建外部集成' => 'New Integration',
@@ -346,7 +375,8 @@ return [
     '确认删除该外部集成？' => 'Delete this integration?',
     'Headers 不是合法 JSON' => 'Headers is not valid JSON',
 
-    // ---- Multicast ----
+    
+
     '+ 新建组播组' => '+ New Multicast Group',
     'MC Addr' => 'MC Addr',
     'DR' => 'DR',
@@ -376,7 +406,8 @@ return [
     '请输入 DevEUI' => 'Please enter DevEUI',
     '请输入 Gateway ID' => 'Please enter Gateway ID',
 
-    // ---- Device detail / raw JSON ----
+    
+
     '设备密钥' => 'Device Keys',
     'JoinEUI' => 'JoinEUI',
     'AppKey' => 'AppKey',
@@ -389,7 +420,8 @@ return [
     '事件 JSON' => 'Event JSON',
     '下行 JSON' => 'Downlink JSON',
 
-    // ---- API docs (shell + section labels) ----
+    
+
     '使用「应用 API Key」调用，作用域限定到该 Key 所属应用。所有请求需在头部携带' => 'Call with the app API Key; scope is limited to the key\'s app. All requests must carry',
     '或 URL 参数' => 'or URL param',
     'API Key 在后台「应用 → API Key」中创建，' => 'Create the API Key in App → API Key;',
@@ -480,7 +512,8 @@ return [
     '仅返回该设备下行' => 'Return downlinks for this device only',
     '是否确认帧' => 'Confirmed frame',
 
-    // ---- LoRa / LoRaWAN calculator (ViewRenderer::renderLoraCalc) ----
+    
+
     '空中时间' => 'Time on Air',
     '灵敏度' => 'Sensitivity',
     '解调对频偏容忍约 ±25% 带宽 →' => 'Demod tolerates ~±25% bandwidth offset →',
@@ -505,7 +538,8 @@ return [
     '—' => '—',
     '使用「应用 API Key」调用，作用域限定到该 Key 所属应用。所有请求需在头部携带 Authorization: Bearer <API_KEY>（或 URL 参数 ?api_key=<API_KEY>）。API Key 在后台「应用 → API Key」中创建，明文仅显示一次，请妥善保存。' => 'Use the application API Key; scope is limited to the key\'s app. All requests must carry Authorization: Bearer <API_KEY> (or ?api_key=<API_KEY>). Create the API Key in App → API Key; the plaintext is shown only once, keep it safe.',
 
-    // ---- LoRa calculator ----
+    
+
     'LoRa / LoRaWAN 参数计算器' => 'LoRa / LoRaWAN Calculator',
     '参照 Semtech LoRa Calculator · 中文 · 双计算器 · 所有计算均在浏览器本地完成，不上传任何数据。' => 'Based on Semtech LoRa Calculator. Dual calculators. All computation runs locally in the browser; no data is uploaded.',
     'LoRa 计算器（物理层）' => 'LoRa Calculator (PHY)',
@@ -610,7 +644,8 @@ return [
     'HolaStack · LoRa / LoRaWAN 参数计算器（本地计算，不上传任何数据）' => 'HolaStack · LoRa / LoRaWAN Calculator (local computation, no upload)',
     '参数错误' => 'Parameter error',
 
-    // ---- LoRa calculator region options ----
+    
+
     'CN470（中国 470MHz）' => 'CN470 (China 470MHz)',
     'CN779（中国 779MHz）' => 'CN779 (China 779MHz)',
     'EU868（欧洲 868MHz）' => 'EU868 (Europe 868MHz)',
@@ -620,7 +655,8 @@ return [
     'KR920（韩国 920MHz）' => 'KR920 (Korea 920MHz)',
     'IN865（印度 865MHz）' => 'IN865 (India 865MHz)',
     'RU864（俄罗斯 864MHz）' => 'RU864 (Russia 864MHz)',
-    // ---- 唯一性/业务错误提示 ----
+    
+
     '请先选择应用' => 'Please select an application first',
     '请输入 DevEUI' => 'Please enter DevEUI',
     '请输入 Gateway ID' => 'Please enter Gateway ID',
@@ -633,7 +669,8 @@ return [
     '设备不存在' => 'Device not found',
     '网关不存在' => 'Gateway not found',
     '参数不合法' => 'Invalid parameters',
-    // ---- 安装向导（Installer.php）----
+    
+
     'HolaStack 安装' => 'HolaStack Installation',
     '第 1 步 / 3 · 语言设置' => 'Step 1 / 3 · Language',
     '请选择安装向导与后台的默认界面语言，点击后立即生效。安装完成后仍可在「站点设置 → 界面语言」随时切换。' => 'Choose the default UI language for the installer and admin panel. It takes effect immediately. You can switch it anytime later in Site Settings → UI Language.',
@@ -658,7 +695,8 @@ return [
     '确认密码' => 'Confirm password',
     '开始安装' => 'Install',
     '需要修正以下问题：' => 'Please fix the following:',
-    // ---- 安装向导：错误信息 ----
+    
+
     '数据库目录不可创建：' => 'Cannot create database directory: ',
     '数据库目录不可写：' => 'Database directory not writable: ',
     '数据库名不能为空' => 'Database name is required',

@@ -1,11 +1,12 @@
 <?php
-/**
- * FUOTA（固件无线升级）管理 CLI。
- *
- *   php bin/fuota.php list-campaigns
- *   php bin/fuota.php create-campaign <name> <appId> <multicastGroupId> [fragSize]
- *   php bin/fuota.php fragment <campaignId> <firmwareFile.bin>
- */
+
+
+
+
+
+
+
+
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\Fuota;

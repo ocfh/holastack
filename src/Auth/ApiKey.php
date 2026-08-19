@@ -3,11 +3,12 @@ namespace holastack\Auth;
 
 use holastack\DB\Database;
 
-/**
- * 应用级 API Key（对齐 ChirpStack api_key）。
- * 用于第三方以 API Key 而非用户令牌调用应用级接口（REST / MQTT 认证）。
- * 明文仅在创建时返回一次；库内只存 bcrypt 哈希。
- */
+
+
+
+
+
+
 class ApiKey
 {
     public static function generateToken(): string

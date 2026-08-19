@@ -1,10 +1,11 @@
 <?php
-/**
- * API 调用日志：记录 /api 与 /v1 全部请求的关键信息（IP、路径、方法、状态、用户、租户、应用、耗时）。
- *  - 仅记录接口请求：登录/管理 API 与 /v1 应用 API 一视同仁
- *  - retention：默认仅保留最近 10000 行，超出后按 id 升序删除最旧的
- *  - 写入失败不阻塞主请求（try/catch + error_log）
- */
+
+
+
+
+
+
+
 namespace holastack\Storage;
 
 use holastack\DB\Database;
@@ -13,9 +14,10 @@ class ApiLog
 {
     const MAX_ROWS = 10000;
 
-    /**
-     * 记录一条 API 调用。失败仅写日志，不影响主流程。
-     */
+    
+
+
+
     public static function record(array $entry): void
     {
         try {
@@ -42,7 +44,8 @@ class ApiLog
         } catch (\Throwable $e) {
             error_log('ApiLog::record failed: ' . $e->getMessage());
         }
-        // 异步（此处同步）修剪：保留最新 MAX_ROWS 行
+        
+
         try {
             $cnt = (int) Database::fetch("SELECT COUNT(*) AS c FROM api_logs")['c'];
             if ($cnt > self::MAX_ROWS) {
@@ -54,15 +57,17 @@ class ApiLog
         }
     }
 
-    /**
-     * 提取请求 IP（支持反向代理头）。
-     */
+    
+
+
+
     public static function clientIp(): string
     {
         foreach (['HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'HTTP_CLIENT_IP', 'REMOTE_ADDR'] as $k) {
             $v = $_SERVER[$k] ?? '';
             if (is_string($v) && $v !== '') {
-                // X-Forwarded-For 可能为多 IP（逗号分隔），取最左（最接近客户端）
+                
+
                 $ip = trim(explode(',', $v)[0]);
                 if (filter_var($ip, FILTER_VALIDATE_IP)) {
                     return $ip;
@@ -72,12 +77,13 @@ class ApiLog
         return '';
     }
 
-    /**
-     * 列表查询：按角色限定可见性。
-     *  - admin：可看全部，可按 tenant_id / application_id 过滤
-     *  - tenant：仅看本租户，可按 application_id 过滤
-     *  - operator：可看全部（只读演示）
-     */
+    
+
+
+
+
+
+
     public static function list(array $user, array $filters = [], int $limit = 200, int $offset = 0): array
     {
         $where = [];

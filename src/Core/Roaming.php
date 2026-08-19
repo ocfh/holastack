@@ -5,35 +5,39 @@ use holastack\DB\Database;
 use holastack\Crypto\AES;
 use holastack\Crypto\LoRaWANCrypto;
 
-/**
- * 漫游（Roaming, Backend Interface TS002）实现。
- *
- * 本模块承担「服务 NS（Serving NS）」角色：当本 NS 收到非本网 DevAddr 的上行 / 非本网设备
- * 的 Join 时，按 NetID 把报文转发给伙伴 Home NS（Passive Roaming），由 Home NS 决策。
- *
- * 实现结构：
- *  - CLIENTS：按伙伴 NetID 注册的 RoamingClient（含 TLS/KEK/签名/超时）；
- *  - isRoamingDevAddr / getNetIdsForDevAddr：基于本 NS NetID 前缀的 DevAddr 路由判定；
- *  - rxInfoToGwInfo / ulMetaDataToRxInfo / ulMetaDataToTxInfo / dlMetaDataToUplinkRxInfo：
- *    BI ULMetaData ↔ 网关 rx_info 双向转换（含 RecvTime → GPS 时间映射）；
- *  - buildJoinReq / buildXmitDataReq：构造 BI 1.0 报文并 AES-CMAC 签名；
- *  - forward：经 HTTPS POST（curl，支持 mTLS）转发，签名头 X-Downlink-Auth / X-Request-Id。
- *
- * 注意：本实现为「服务 NS 出站」为主，入站（JoinAns/PrUpdAns）由 bin/roaming-inbound.php
- * 接收后调用 Roaming::handleInboundAns() 注入本地下行管道（见 NetworkServer::scheduleRoamingDownlink）。
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class Roaming
 {
-    // BI 消息类型
+    
+
     public const MSG_JOIN_REQ    = 'JoinReq';
     public const MSG_XMIT_DATA   = 'XmitDataReq';
     public const MSG_JOIN_ANS    = 'JoinAns';
     public const MSG_PR_UPD_ANS  = 'PrUpdAns';
 
-    /** @var array<string, RoamingClient> 伙伴 NetID => Client（运行期注册表） */
+    
+
     private static $clients = [];
 
-    // ---------------- Client 注册（对齐 backend/roaming.rs::setup / set / get） ----------------
+    
+
 
     public static function setup(): int
     {
@@ -45,7 +49,8 @@ class Roaming
         foreach ($rows as $r) {
             $netId = strtoupper((string) ($r['net_id'] ?? ''));
             if ($netId === '' || $netId === '000000') {
-                continue; // 本网 NetID 不应作为伙伴
+                continue; 
+
             }
             self::$clients[$netId] = new RoamingClient([
                 'net_id'        => $netId,
@@ -82,7 +87,8 @@ class Roaming
         return array_keys(self::$clients);
     }
 
-    /** 本 NS 标识（NetID，6 hex）。生产应在 config.php 定义 ELW_NET_ID。 */
+    
+
     public static function localNsId(): string
     {
         return strtoupper(str_pad((string) (defined('ELW_NET_ID') ? ELW_NET_ID : '000000'), 6, '0', STR_PAD_LEFT));
@@ -94,12 +100,14 @@ class Roaming
             || count(self::$clients) > 0;
     }
 
-    // ---------------- DevAddr 路由（对齐 backend/roaming.rs::is_roaming_dev_addr / get_net_ids_for_dev_addr） ----------------
+    
 
-    /**
-     * 该 DevAddr 是否属于漫游（不属于本网 NetID 前缀，且非测试 NetID）。
-     * @param string $devAddrBin 4 字节二进制 DevAddr
-     */
+
+    
+
+
+
+
     public static function isRoamingDevAddr(string $devAddrBin): bool
     {
         if (!self::isEnabled()) {
@@ -109,32 +117,36 @@ class Roaming
             return false;
         }
         $netId = self::netIdFromDevAddr($devAddrBin);
-        // 排除本网 NetID
+        
+
         if ($netId === self::localNsId()) {
             return false;
         }
-        // 排除测试 NetID（0x000000 / 0x000001），允许从测试 NetID 平滑切换到正式 NetID
+        
+
         if ($netId === '000000' || $netId === '000001') {
             return false;
         }
         return true;
     }
 
-    /**
-     * 由 DevAddr 推导其归属 NetID（取最高 24 位 NwkID，即前 3 字节）。
-     * DevAddr 在空口以大端（MSB 先）传输 4 字节；NwkID（24 位）占据最高 24 位 = 前 3 字节。
-     */
+    
+
+
+
+
     public static function netIdFromDevAddr(string $devAddrBin): string
     {
         $b = unpack('C4', $devAddrBin);
         return strtoupper(sprintf('%02X%02X%02X', $b[1], $b[2], $b[3]));
     }
 
-    /**
-     * 由 JoinEUI（AppEUI，8 字节）推导 Home NS 的伙伴 Client（被动漫游 Join 路由）。
-     * LoRaWAN 1.1 的 JoinEUI 高位嵌有 NetID 路由信息；取最高 3 字节近似 NetID 查注册表。
-     * 仅一个伙伴配置时兜底转发（便于单伙伴漫游联调）。无匹配返回 null。
-     */
+    
+
+
+
+
+
     public static function clientForJoinEui(string $appEuiBin): ?RoamingClient
     {
         if (!self::isEnabled()) {
@@ -154,10 +166,11 @@ class Roaming
         return null;
     }
 
-    /**
-     * 返回该 DevAddr 匹配的伙伴 NetID 列表（基于注册表 + DevAddr 前缀）。
-     * 若 DevAddr 直接命中某伙伴 NetID 前缀则返回该 NetID；否则返回全部已注册伙伴（兜底）。
-     */
+    
+
+
+
+
     public static function getNetIdsForDevAddr(string $devAddrBin): array
     {
         $out = [];
@@ -168,25 +181,29 @@ class Roaming
             }
         }
         if (empty($out) && count(self::$clients) === 1) {
-            // 仅一个伙伴时兜底转发
+            
+
             $out = array_keys(self::$clients);
         }
         return $out;
     }
 
-    // ---------------- 网关元数据 ↔ BI ULMetaData 转换（对齐 backend/roaming.rs） ----------------
+    
 
-    /**
-     * 由网关上行 rx_info 构造 BI GWInfoElement 列表（ULMetaData.GWInfo）。
-     * @param array $rxInfos 每条：['gw_id'=>hex,'rssi'=>int,'snr'=>float,'lat'=>?,'lon'=>?,'ul_token'=>?,'fine_recv_time'=>?]
-     */
+
+    
+
+
+
+
     public static function rxInfoToGwInfo(string $rfRegion, array $rxInfos): array
     {
         $out = [];
         foreach ($rxInfos as $rx) {
             $gwId = (string) ($rx['gw_id'] ?? '');
             $out[] = [
-                'ID'        => substr($gwId, 4, 4), // 取后 4 hex（GWInfo.ID 为 DevAddr 风格 4 字节）
+                'ID'        => substr($gwId, 4, 4), 
+
                 'RSSI'      => (int) ($rx['rssi'] ?? 0),
                 'SNR'       => (float) ($rx['snr'] ?? 0),
                 'Lat'       => ($rx['lat'] ?? null),
@@ -199,10 +216,11 @@ class Roaming
         return $out;
     }
 
-    /**
-     * 由 BI ULMetaData.GWInfo 还原网关 rx_info（用于入站 JoinAns/PrUpdAns 下行定位）。
-     * 仅返回首个网关（简化；多网关选 RSSI 最强）。
-     */
+    
+
+
+
+
     public static function ulMetaDataToRxInfo(array $gwInfos): ?array
     {
         if (empty($gwInfos)) {
@@ -217,13 +235,15 @@ class Roaming
         return $best;
     }
 
-    // ---------------- BI 报文构造（BI 1.0，对齐 Roaming.php 旧骨架 + 规范字段） ----------------
+    
 
-    /**
-     * 构造 JoinReq（BI 1.0）。
-     * @param RoamingClient $client 目标伙伴
-     * @param array $join ['phy'=>base64,'mac_version'=>str,'opt_neg'=>bool,'dev_eui'=>str,'dev_addr'=>str,'dl_settings'=>str,'rx_delay'=>int,'cf_list'=>str]
-     */
+
+    
+
+
+
+
+
     public static function buildJoinReq(RoamingClient $client, array $join): array
     {
         return [
@@ -241,12 +261,13 @@ class Roaming
         ];
     }
 
-    /**
-     * 构造 XmitDataReq（BI 1.0）。
-     * @param RoamingClient $client 目标伙伴
-     * @param array $ul ['phy'=>base64,'dev_eui'=>str,'dev_addr'=>str,'freq'=>float,'dr'=>str,
-     *                   'recv_time'=>int(unix),'gw_id'=>str,'rssi'=>int,'snr'=>float,'ul_token'=>?,'fine_recv_time'=>?]
-     */
+    
+
+
+
+
+
+
     public static function buildXmitDataReq(RoamingClient $client, array $ul): array
     {
         $gwInfo = [[
@@ -277,14 +298,16 @@ class Roaming
         ];
     }
 
-    // ---------------- 签名（对齐 ChirpStack X-Downlink-Auth：AES-CMAC over 请求体） ----------------
+    
 
-    /**
-     * 计算 BI 请求签名（AES-CMAC，16 字节；用于 X-Downlink-Auth 头）。
-     * ChirpStack 以「共享 NS 根密钥」对 (SenderID|ReceiverID|MessageType|PHYPayload) 做 CMAC。
-     * 此处签名密钥 = KEK（按 kek_label 查 roaming_keks），缺省为全零（演示）。
-     * @return string 32 hex
-     */
+
+    
+
+
+
+
+
+
     public static function sign(RoamingClient $client, array $message): string
     {
         $kek = self::kekForLabel($client->kekLabel);
@@ -308,11 +331,12 @@ class Roaming
         return str_repeat("\x00", 16);
     }
 
-    /**
-     * 校验伙伴 Home NS 入站报文的 AES-CMAC 签名（X-Downlink-Auth 头）。
-     * body = SenderID(伙伴 NetID) | ReceiverID(本网 NetID) | MessageType | PHYPayload，密钥为伙伴共享 KEK。
-     * 未知伙伴 → 返回 false（拒绝）；伙伴未配置 KEK（演示态）且未带签名 → 放行（仅联调用，生产必须配 KEK）。
-     */
+    
+
+
+
+
+
     public static function verifyInboundSignature(string $senderNetId, array $resp, string $authHex): bool
     {
         $client = self::getClient($senderNetId);
@@ -323,17 +347,20 @@ class Roaming
         $body = $senderNetId . ($resp['ReceiverID'] ?? '') . ($resp['MessageType'] ?? '') . ($resp['PHYPayload'] ?? '');
         $expected = bin2hex(AES::cmac($kek, $body));
         if ($authHex === '') {
-            return $client->kekLabel === ''; // 演示态：无 KEK 且无签名 → 放行
+            return $client->kekLabel === ''; 
+
         }
         return hash_equals($expected, strtolower($authHex));
     }
 
-    // ---------------- 出站转发（对齐 backend/roaming.rs::Client + forward） ----------------
+    
 
-    /**
-     * 把一条 BI 报文经 HTTPS POST 转发给伙伴 NS（支持 mTLS / authorization / 签名头）。
-     * 返回伙伴 NS 的 JSON 应答（解码后数组），失败返回 ['error'=>...]。
-     */
+
+    
+
+
+
+
     public static function forward(RoamingClient $client, array $message): array
     {
         if (empty($client->server)) {
@@ -366,7 +393,8 @@ class Roaming
             CURLOPT_TIMEOUT        => max(2, (int) ceil($client->asyncTimeout / 1000) + 5),
             CURLOPT_CONNECTTIMEOUT=> 5,
         ]);
-        // mTLS
+        
+
         if ($client->tlsCert !== '' && $client->tlsKey !== '') {
             curl_setopt($ch, CURLOPT_SSLCERT, $client->tlsCert);
             curl_setopt($ch, CURLOPT_SSLKEY, $client->tlsKey);
@@ -374,7 +402,8 @@ class Roaming
         if ($client->caCert !== '') {
             curl_setopt($ch, CURLOPT_CAINFO, $client->caCert);
         } else {
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // 演示默认不校验（生产应配置 ca_cert）
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); 
+
         }
         $resp = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -387,13 +416,15 @@ class Roaming
         return is_array($dec) ? $dec : ['raw' => $resp, 'http_code' => $httpCode];
     }
 
-    // ---------------- 入站应答处理（JoinAns / PrUpdAns） ----------------
+    
 
-    /**
-     * 处理伙伴 NS 返回的 JoinAns / PrUpdAns（由 bin/roaming-inbound.php 调用）。
-     * 提取下行 PHYPayload，并依据相关表（roaming_pending）把下行调度回原服务网关。
-     * @return array ['ok'=>bool,'phy'=>base64|'','gw_id'=>str,'ul_tmst'=>int,'region'=>str] 供 NetworkServer 下发
-     */
+
+    
+
+
+
+
+
     public static function handleInboundAns(array $resp): array
     {
         $type = $resp['MessageType'] ?? '';
@@ -401,7 +432,8 @@ class Roaming
         if ($phy === '') {
             return ['ok' => false, 'error' => 'empty PHYPayload'];
         }
-        // 用 DevEUI 或 DevAddr 关联 roaming_pending
+        
+
         $devEui = strtolower($resp['DevEUI'] ?? '');
         $devAddr = strtolower($resp['DevAddr'] ?? '');
         $pending = null;
@@ -414,7 +446,8 @@ class Roaming
         if (!$pending) {
             return ['ok' => false, 'error' => 'no pending correlation', 'phy' => $phy];
         }
-        // 清理已消费的关联
+        
+
         Database::execute("DELETE FROM roaming_pending WHERE id=?", [$pending['id']]);
         return [
             'ok'       => true,
@@ -430,7 +463,8 @@ class Roaming
         ];
     }
 
-    /** 记录一条待关联（用于入站下行回送）。$dlDelayMs 为服务 NS 侧应延迟下发的时间（Join=5000, 数据=RX1 delay*1000）。 */
+    
+
     public static function rememberPending(string $kind, string $devEui, string $devAddr, string $gwId, string $peer, int $ulTmst, string $region, float $freq, string $datr, int $dlDelayMs): void
     {
         Database::execute(
@@ -444,10 +478,11 @@ class Roaming
     }
 }
 
-/**
- * 漫游伙伴客户端（对齐 ChirpStack backend::Client）。
- * 一个伙伴 NetID 对应一个 Client，携带传输与安全参数。
- */
+
+
+
+
+
 class RoamingClient
 {
     public $netId;
@@ -460,8 +495,10 @@ class RoamingClient
     public $tlsCert;
     public $tlsKey;
     public $authorization;
-    public $asyncTimeout; // ms
-    public $lifetime;     // s（Passive Roaming lifetime）
+    public $asyncTimeout; 
+
+    public $lifetime;     
+
     public $validateMic;
 
     public function __construct(array $cfg)

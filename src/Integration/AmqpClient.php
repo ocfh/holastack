@@ -1,15 +1,16 @@
 <?php
 namespace holastack\Integration;
 
-/**
- * 极简 AMQP 0.9.1 发布客户端（RabbitMQ，纯 TCP socket，无第三方依赖）。
- * 仅实现「发布」所需的最小握手：protocol header → connection.start/start-ok →
- * connection.tune/tune-ok → connection.open → channel.open → basic.publish → close。
- * best-effort：连接/发布失败仅记录日志，不阻断上行主流程（与 MqttClient 风格一致）。
- *
- * 参考 ChirpStack 的 application_server.integration.amqp：
- *   url, event_routing_key_template
- */
+
+
+
+
+
+
+
+
+
+
 class AmqpClient
 {
     private $socket;
@@ -32,21 +33,26 @@ class AmqpClient
 
     private static function encShortStr(string $s): string
     {
-        return chr(strlen($s)) . $s; // 1 字节长度 + 内容
+        return chr(strlen($s)) . $s; 
+
     }
 
     private static function encLongStr(string $s): string
     {
-        return pack('N', strlen($s)) . $s; // 4 字节长度 + 内容
+        return pack('N', strlen($s)) . $s; 
+
     }
 
     private function frame(int $type, int $channel, string $payload): string
     {
         return chr($type)
-            . pack('n', $channel)   // channel
-            . pack('N', strlen($payload)) // size
+            . pack('n', $channel)   
+
+            . pack('N', strlen($payload)) 
+
             . $payload
-            . "\xce";               // frame-end
+            . "\xce";               
+
     }
 
     private function writeFrame(int $type, int $channel, string $payload): bool
@@ -95,13 +101,15 @@ class AmqpClient
         $channel = unpack('n', $hdr[1] . $hdr[2])[1];
         $size = unpack('N', $hdr[3] . $hdr[4] . $hdr[5] . $hdr[6])[1];
         $payload = $size > 0 ? $this->readn($size) : '';
-        $this->readn(1); // frame-end
+        $this->readn(1); 
+
         return ['type' => $type, 'channel' => $channel, 'payload' => $payload];
     }
 
-    /**
-     * 读取下一个 method 帧，直到匹配 (class, method)。忽略心跳(8)与其他 method。
-     */
+    
+
+
+
     private function readMethod(int $cls, int $mth): ?array
     {
         for ($i = 0; $i < 12; $i++) {
@@ -110,7 +118,8 @@ class AmqpClient
                 return null;
             }
             if ($fr['type'] === 8) {
-                continue; // heartbeat
+                continue; 
+
             }
             if ($fr['type'] === 1 && strlen($fr['payload']) >= 4) {
                 $c = unpack('n', $fr['payload'][0] . $fr['payload'][1])[1];
@@ -131,36 +140,46 @@ class AmqpClient
         }
         stream_set_timeout($this->socket, 3);
 
-        // 协议头（非普通帧）
+        
+
         if (@fwrite($this->socket, "AMQP\x00\x00\x09\x01") === false) {
             return false;
         }
 
-        // connection.start (10.10)
+        
+
         if ($this->readMethod(10, 10) === null) {
             return false;
         }
-        // connection.start-ok (10.11)
+        
+
         $response = "\0" . $this->user . "\0" . $this->pass;
-        $args = pack('N', 0)                          // 空 client-properties 表
-            . self::encShortStr('PLAIN')              // mechanism
-            . self::encLongStr($response)             // response
-            . self::encShortStr('en_US');             // locale
+        $args = pack('N', 0)                          
+
+            . self::encShortStr('PLAIN')              
+
+            . self::encLongStr($response)             
+
+            . self::encShortStr('en_US');             
+
         $this->writeFrame(1, 0, pack('n', 10) . pack('n', 11) . $args);
 
-        // connection.tune (10.30) -> tune-ok (10.31)
+        
+
         if ($this->readMethod(10, 30) === null) {
             return false;
         }
         $this->writeFrame(1, 0, pack('n', 10) . pack('n', 31) . pack('n', 0) . pack('N', 0) . pack('n', 0));
 
-        // connection.open (10.40) -> open-ok (10.41)
+        
+
         $this->writeFrame(1, 0, pack('n', 10) . pack('n', 40) . self::encShortStr($this->vhost) . self::encShortStr('') . "\x00");
         if ($this->readMethod(10, 41) === null) {
             return false;
         }
 
-        // channel.open (20.10) -> open-ok (20.11)
+        
+
         $this->writeFrame(1, $this->channel, pack('n', 20) . pack('n', 10) . self::encShortStr(''));
         if ($this->readMethod(20, 11) === null) {
             return false;
@@ -168,26 +187,32 @@ class AmqpClient
         return true;
     }
 
-    /**
-     * 发布一条消息到指定 exchange / routing-key。
-     */
+    
+
+
+
     public function publish(string $exchange, string $routingKey, string $message): bool
     {
         if (!$this->socket) {
             return false;
         }
-        // basic.publish (60.40)
-        $args = pack('n', 0)                         // reserved-1
+        
+
+        $args = pack('n', 0)                         
+
             . self::encShortStr($exchange)
             . self::encShortStr($routingKey)
-            . "\x00" . "\x00";                       // mandatory, immediate
+            . "\x00" . "\x00";                       
+
         $this->writeFrame(1, $this->channel, pack('n', 60) . pack('n', 40) . $args);
 
-        // 内容头帧 (type 2)：class 60, weight 0, body size(8), property flags(0=无)
+        
+
         $header = pack('n', 60) . pack('n', 0) . pack('J', strlen($message)) . pack('n', 0x0000);
         $this->writeFrame(2, $this->channel, $header);
 
-        // 内容体帧 (type 3)
+        
+
         $this->writeFrame(3, $this->channel, $message);
         return true;
     }
@@ -195,7 +220,8 @@ class AmqpClient
     public function disconnect(): void
     {
         if ($this->socket) {
-            // channel.close (20.40) + connection.close (10.50)（best-effort，忽略响应）
+            
+
             @$this->writeFrame(1, $this->channel, pack('n', 20) . pack('n', 40) . pack('n', 0) . pack('n', 0) . self::encShortStr(''));
             @$this->writeFrame(1, 0, pack('n', 10) . pack('n', 50) . pack('n', 0) . pack('n', 0) . self::encShortStr(''));
             @fclose($this->socket);

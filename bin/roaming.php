@@ -1,12 +1,13 @@
 <?php
-/**
- * 漫游（Roaming, Backend Interface）管理 CLI。
- *
- *   php bin/roaming.php list-servers
- *   php bin/roaming.php add-server <name> <url> [net_id] [kek_label]
- *   php bin/roaming.php del-server <id>
- *   php bin/roaming.php test-forward <net_id> <pduHex>
- */
+
+
+
+
+
+
+
+
+
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\Roaming;

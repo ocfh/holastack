@@ -3,30 +3,34 @@ namespace holastack\Core;
 
 use holastack\Region\Region;
 
-/**
- * LoRaWAN 默认 ADR 算法（对齐 ChirpStack chirpstack/src/adr/default.rs）。
- *
- * 输入由设备会话状态 + 区域参数构造的 Request，输出期望的 dr / tx_power_index / nb_trans。
- * 当 ADR 开启且输出与设备当前状态不一致时，上层（NetworkServer）据此下发 LinkADRReq。
- *
- * 算法要点（与 Rust 实现逐行对齐）：
- *  - snr_margin = max_snr − required_snr_for_dr − installation_margin
- *  - n_step = floor(snr_margin / 3)
- *  - n_step > 0：优先提升 DR，DR 到顶后再降低（即提升索引）tx_power
- *  - n_step < 0：提升（即降低索引）tx_power；为避免抖动，需等历史凑齐才执行
- *  - nb_trans 由上行丢包率查表得到
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class Adr
 {
-    /** ChirpStack 默认安装余量（dB）。 */
+    
+
     public const DEFAULT_INSTALLATION_MARGIN = 5.0;
-    /** 触发计算所需的最小历史条数。 */
+    
+
     public const REQUIRED_HISTORY = 20;
 
-    /**
-     * @param array $req 结构见 NetworkServer::processMacAndAdr 注释
-     * @return array ['dr'=>int,'tx_power_index'=>int,'nb_trans'=>int]
-     */
+    
+
+
+
+
     public static function compute(array $req): array
     {
         $resp = [
@@ -35,12 +39,14 @@ class Adr
             'nb_trans'      => (int) ($req['nb_trans'] ?? 1),
         ];
 
-        // ADR 关闭：返回当前值
+        
+
         if (empty($req['adr'])) {
             return $resp;
         }
 
-        // 仅作用于 LoRa 125kHz 数据速率（与 Rust max_lora_dr 过滤一致）
+        
+
         $region = $req['region'] ?? null;
         $maxDr = (int) ($req['max_dr'] ?? 0);
         $maxLoraDr = self::maxLoraDr($region, $maxDr);
@@ -48,12 +54,14 @@ class Adr
             $maxDr = $maxLoraDr;
         }
 
-        // 超出 max_dr 时仅降级 DR
+        
+
         if ($resp['dr'] > $maxDr) {
             $resp['dr'] = $maxDr;
         }
 
-        // 由丢包率设定 nb_trans
+        
+
         $resp['nb_trans'] = self::getNbTrans($req['nb_trans'], self::packetLossPct($req));
 
         $snrMax = self::maxSnr($req);
@@ -62,7 +70,8 @@ class Adr
         $snrMargin = $snrMax - $requiredSnr - $margin;
         $nStep = (int) floor($snrMargin / 3.0);
 
-        // 负步长：避免 TxPower 反复上下抖动，需等历史凑齐
+        
+
         if ($nStep < 0 && self::historyCountForTxPower($req) !== self::REQUIRED_HISTORY) {
             return $resp;
         }
@@ -79,7 +88,8 @@ class Adr
         return $resp;
     }
 
-    // ---- 内部：理想 DR / TxPower 递归 ----
+    
+
 
     private static function idealTxPowerAndDr(int $nbStep, int $txPowerIndex, int $dr, int $maxTxPowerIndex, int $maxDr): array
     {
@@ -89,13 +99,16 @@ class Adr
 
         if ($nbStep > 0) {
             if ($dr < $maxDr) {
-                $dr += 1;               // 提升数据速率
+                $dr += 1;               
+
             } elseif ($txPowerIndex < $maxTxPowerIndex) {
-                $txPowerIndex += 1;     // 否则降低发射功率（提升索引）
+                $txPowerIndex += 1;     
+
             }
             $nbStep -= 1;
         } else {
-            // 提升发射功率（降低索引）；索引不会低于 0（saturating_sub）
+            
+
             $txPowerIndex = max(0, $txPowerIndex - 1);
             $nbStep += 1;
         }
@@ -103,7 +116,8 @@ class Adr
         return self::idealTxPowerAndDr($nbStep, $txPowerIndex, $dr, $maxTxPowerIndex, $maxDr);
     }
 
-    // ---- 内部：统计计算 ----
+    
+
 
     private static function requiredHistoryCount(): int
     {

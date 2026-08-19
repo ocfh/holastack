@@ -1,11 +1,12 @@
 <?php
 namespace holastack\Core;
 
-/**
- * 组播下发构造与工具（对齐 ChirpStack multicast_group）。
- * 组播使用组级会话密钥（mc_nwk_s_key / mc_app_s_key）与组地址（mc_addr），
- * 不经过任何单设备会话，直接以组播密钥构造下行帧并发往组内（或全部）网关。
- */
+
+
+
+
+
+
 class Multicast
 {
     public static function buildDownlink(array $group, int $fPort, string $payloadHex): string

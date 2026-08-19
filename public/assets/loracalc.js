@@ -1,19 +1,19 @@
-// =============================================================
-// LoRa / LoRaWAN 参数计算器 —— HolaStack SPA 模块
-// 由 index.php 的 nav('loracalc') -> viewLoraCalc() 调用。
-// 纯前端计算，所有符号以 Lc 前缀避免与 SPA 主脚本冲突。
-// 样式与模板自包含（.loracalc 作用域），复用 SPA 的 CSS 变量配色。
-// =============================================================
+
+
+
+
+
+
 (function () {
   'use strict';
 
-  // ----------------------- 公共数据 -----------------------
+  
   const Lc_REGION_FREQ = {
     CN470: 470.3, CN779: 779.5, EU868: 868.1, US915: 903.9, AU915: 915.2,
     AS923: 923.2, KR920: 922.1, IN865: 865.0625, RU864: 864.1, EU433: 433.175
   };
   const Lc_SNR_MIN = { 7: -7.5, 8: -10, 9: -12.5, 10: -15, 11: -17.5, 12: -20 };
-  // DR -> [SF, BW_kHz]，按区域；rx2 = 默认 RX2 的 DR
+  
   const Lc_DR_MAP = {
     EU868: { 0: [12, 125], 1: [11, 125], 2: [10, 125], 3: [9, 125], 4: [8, 125], 5: [7, 125], 6: [7, 250], rx2: 0 },
     US915: { 0: [10, 125], 1: [9, 125], 2: [8, 125], 3: [7, 125], 4: [8, 500], 8: [12, 500], rx2: 8 },
@@ -29,13 +29,13 @@
   function Lc_resolveDR(region, dr) {
     const m = Lc_DR_MAP[region];
     if (m && m[dr]) return m[dr];
-    return [12, 125]; // 兜底
+    return [12, 125]; 
   }
 
-  // ----------------------- 通用：LoRa 空中时间 -----------------------
+  
   function Lc_loraToA(sf, bwKHz, payload, crcOn, implicit, ldro, preamble) {
     const bw = bwKHz * 1000;
-    const tsym = Math.pow(2, sf) / bw;             // 秒
+    const tsym = Math.pow(2, sf) / bw;             
     const nBitPayload = payload * 8;
     const nBitHeader = implicit ? 0 : 20;
     const crcBits = crcOn ? 16 : 0;
@@ -53,7 +53,7 @@
     return x.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d });
   }
 
-  // ----------------------- Tab 切换 -----------------------
+  
   function Lc_switchTab(which) {
     const phy = which === 'phy';
     document.getElementById('panelPhy').classList.toggle('hidden', !phy);
@@ -62,7 +62,7 @@
     document.getElementById('tabLw').classList.toggle('active', !phy);
   }
 
-  // ----------------------- TAB 1: LoRa (PHY) -----------------------
+  
   function Lc_applyRegion(prefix) {
     const r = document.getElementById(prefix + '_region').value;
     if (Lc_REGION_FREQ[r] !== undefined) document.getElementById(prefix + '_freq').value = Lc_REGION_FREQ[r];
@@ -111,8 +111,8 @@
     const sens = -174 + 10 * Math.log10(bw) + nf + snrMin;
     const lb = txpwr + gtx + grx - sens - margin;
     const distKm = Math.pow(10, (lb - 32.45 - 20 * Math.log10(freqMHz)) / (10 * n));
-    const preambleDur = r.preambleSyms * tsym;               // 秒
-    const xtalPpm = 0.25 * bw / (freqMHz * 1e6) * 1e6;       // ±25% 带宽 -> ppm
+    const preambleDur = r.preambleSyms * tsym;               
+    const xtalPpm = 0.25 * bw / (freqMHz * 1e6) * 1e6;       
     const txMw = volt * itx, rxMw = volt * irx;
 
     if (toaSec < 1) { document.getElementById('p_toa').textContent = Lc_fmt(toaSec * 1000, 2); document.getElementById('p_toaUnit').textContent = 'ms'; }
@@ -130,7 +130,7 @@
     else { document.getElementById('p_dist').textContent = Lc_fmt(distKm * 1000, 0); document.getElementById('p_distUnit').textContent = 'm'; }
   }
 
-  // ----------------------- TAB 2: LoRaWAN -----------------------
+  
   function Lc_lRegionChange() {
     const region = document.getElementById('l_region').value;
     const m = Lc_DR_MAP[region];
@@ -167,11 +167,11 @@
     const rxpreamble = Math.max(1, parseInt(document.getElementById('l_rxpreamble').value, 10) || 8);
     const dlday = Math.max(0, parseFloat(document.getElementById('l_dlday').value) || 0);
     const rx1pct = Math.min(100, Math.max(0, parseFloat(document.getElementById('l_rx1pct').value) || 50)) / 100;
-    const itx = parseFloat(document.getElementById('l_itx').value) || 0;     // mA
-    const irx = parseFloat(document.getElementById('l_irx').value) || 0;     // mA
-    const isleep = parseFloat(document.getElementById('l_isleep').value) || 0;  // µA
+    const itx = parseFloat(document.getElementById('l_itx').value) || 0;     
+    const irx = parseFloat(document.getElementById('l_irx').value) || 0;     
+    const isleep = parseFloat(document.getElementById('l_isleep').value) || 0;  
     const volt = parseFloat(document.getElementById('l_volt').value) || 3.3;
-    const batt = Math.max(1, parseFloat(document.getElementById('l_batt').value) || 2400); // mAh
+    const batt = Math.max(1, parseFloat(document.getElementById('l_batt').value) || 2400); 
     const txpwr = parseFloat(document.getElementById('l_txpwr').value) || 0;
     const gtx = 0, grx = 3, nf = 6;
     const margin = parseFloat(document.getElementById('l_margin').value) || 0;
@@ -184,19 +184,19 @@
     const rxPerDownSec = rx1pct * rx1.toaSec + (1 - rx1pct) * rx2.toaSec;
 
     const uplinksPerHour = 3600 / interval;
-    const toaH_tx = uplinksPerHour * (1 + retrans) * toaUpSec * 1000; // ms/h
+    const toaH_tx = uplinksPerHour * (1 + retrans) * toaUpSec * 1000; 
     const downlinksPerHour = dlday / 24;
-    const toaH_rx = downlinksPerHour * rxPerDownSec * 1000;           // ms/h
-    const duty = toaH_tx / 36000;                                    // %（1h=3.6e6 ms，占比×100 已含于 /36000）
+    const toaH_rx = downlinksPerHour * rxPerDownSec * 1000;           
+    const duty = toaH_tx / 36000;                                    
 
-    const txActive = (1 + retrans) * toaUpSec;                        // s / 周期
-    const downlinksPerCycle = dlday * interval / 86400;               // 每周期下行数
-    const rxActive = downlinksPerCycle * rxPerDownSec;                // s / 周期
-    const sleepActive = Math.max(0, interval - txActive - rxActive);  // s / 周期
-    const qTx = itx * 1000 * txActive;    // µA·s
-    const qRx = irx * 1000 * rxActive;    // µA·s
-    const qSl = isleep * sleepActive;     // µA·s
-    const avgTot = (qTx + qRx + qSl) / interval; // µA
+    const txActive = (1 + retrans) * toaUpSec;                        
+    const downlinksPerCycle = dlday * interval / 86400;               
+    const rxActive = downlinksPerCycle * rxPerDownSec;                
+    const sleepActive = Math.max(0, interval - txActive - rxActive);  
+    const qTx = itx * 1000 * txActive;    
+    const qRx = irx * 1000 * rxActive;    
+    const qSl = isleep * sleepActive;     
+    const avgTot = (qTx + qRx + qSl) / interval; 
     const avgTx = qTx / interval, avgRx = qRx / interval, avgSl = qSl / interval;
 
     const bwHz = bw * 1000;
@@ -204,7 +204,7 @@
     const lb = txpwr + gtx + grx - sens - margin;
     const distKm = Math.pow(10, (lb - 32.45 - 20 * Math.log10(freqMHz)) / (10 * n));
 
-    const battUah = batt * 1000;                 // µAh
+    const battUah = batt * 1000;                 
     const lifeH = battUah / avgTot;
     const lifeY = lifeH / (24 * 365);
 
@@ -228,7 +228,7 @@
     else { document.getElementById('l_battlife').textContent = Lc_fmt(lifeH, 0); document.getElementById('l_battUnit').textContent = '小时'; }
   }
 
-  // ----------------------- 样式（首次注入 head，作用域 .loracalc） -----------------------
+  
   const Lc_CSS = `
 .loracalc{--panel2:var(--bg-subtle)}
 .loracalc *{box-sizing:border-box}
@@ -269,7 +269,7 @@
 `;
   let Lc_cssInjected = false;
   function Lc_ensureCss() {
-    // 已注入则移除旧的再重新注入（主题切换后 CSS 变量值可能被浏览器缓存）
+    
     const existing = document.getElementById('lc-style');
     if (existing) existing.remove();
     const s = document.createElement('style');
@@ -279,21 +279,21 @@
     Lc_cssInjected = true;
   }
 
-  // ----------------------- 模板 -----------------------
-  // 模板 HTML 与全部中文文案已迁移到 PHP（ViewRenderer::renderLoraCalc），
-  // 由后台视图端点 /api/view/loracalc 服务端渲染（支持 i18n）。
-  // 此处仅保留计算引擎、区域/DR 映射表与交互逻辑。
+  
+  
+  
+  
   const Lc_TEMPLATE = '';
 
-  // ----------------------- 入口（供 index.php SPA 调用） -----------------------
+  
   if (typeof window !== 'undefined') {
     window.viewLoraCalc = async function () {
       const view = document.getElementById('view');
       if (!view) return;
       Lc_ensureCss();
-      // 模板由 PHP 服务端渲染（/api/view/loracalc，已做 i18n 翻译）
-      // 关键：必须带 X-Elw-Token 头，否则 Auth::guardApi 401。
-      // 反向代理 + HTTPS 下自定义 header 是 SPA 已验证的可靠通道。
+      
+      
+      
       try {
         const tok = (window.state && window.state.token) || localStorage.getItem('elw_token') || '';
         const res = await fetch('/api/view/loracalc', tok ? { headers: { 'X-Elw-Token': tok } } : {});
@@ -305,8 +305,8 @@
       }
       Lc_applyRegion('p'); Lc_pSyncN(); Lc_pCalc();
       Lc_lRegionChange(); Lc_lSyncN(); Lc_lCalc();
-      // 实时计算：监听容器内任意输入/下拉变化，按前缀分流到对应计算函数。
-      // 这样改参数即时出结果，无需点击「计算」按钮（按钮仍保留作为手动触发）。
+      
+      
       const root = view.querySelector('.loracalc');
       if (!root) return;
       const Lc_onChange = (e) => {
@@ -317,10 +317,10 @@
       root.addEventListener('input', Lc_onChange);
       root.addEventListener('change', Lc_onChange);
     };
-    // 关键修复：模板内联的 onclick/onchange（onclick="Lc_switchTab('phy')" 等）
-    // 在全局作用域执行，而本模块所有函数都封装在 IIFE 内。若不挂到 window，
-    // 点击 Tab / 改下拉 / 点“计算”都会因 Lc_xxx is not defined 而失效。
-    // 这里把模板引用的入口函数逐个暴露给全局，修复“点击无法打开/切换”。
+    
+    
+    
+    
     window.Lc_switchTab = Lc_switchTab;
     window.Lc_applyRegion = Lc_applyRegion;
     window.Lc_pCalc = Lc_pCalc;
@@ -330,9 +330,8 @@
     window.Lc_lCalc = Lc_lCalc;
   }
 
-  // 仅在 node 环境下做数值自检（浏览器有 window，不执行）
+  
   if (typeof window === 'undefined') {
     const r = Lc_loraToA(12, 125, 12, true, false, true, 8);
-    console.log('[lc self-test] ToA SF12/125kHz/12B =', (r.toaSec * 1000).toFixed(2), 'ms; totalSyms =', r.totalSyms.toFixed(1));
   }
 })();

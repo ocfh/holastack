@@ -3,14 +3,16 @@ namespace holastack\Core;
 
 use holastack\Crypto\LoRaWANCrypto;
 
-/**
- * LoRaWAN 1.0.x / 1.1 物理层帧解析与构造。
- * 所有方法参数为原始二进制串；帧中多字节整数字段按 LoRaWAN 规范字节序处理。
- * 1.0.x 方法保持不变；1.1 变体以 1_1 后缀命名（密钥选择/双密钥 MIC 不同）。
- */
+
+
+
+
+
+
 class Frame
 {
-    /** MHDR mtype 取值（LoRaWAN 1.0.x 规范：0=JoinReq 1=JoinAccept 2=UnconfirmedUp 3=UnconfirmedDown 4=ConfirmedUp 5=ConfirmedDown） */
+    
+
     public const MTYPE_JOIN_REQUEST       = 0x00;
     public const MTYPE_JOIN_ACCEPT        = 0x01;
     public const MTYPE_UNCONFIRMED_UP      = 0x02;
@@ -23,11 +25,13 @@ class Frame
         return (ord($phy[0]) >> 5) & 0x07;
     }
 
-    // ---------------- Join Request ----------------
+    
+
 
     public static function parseJoinRequest(string $phy): array
     {
-        // MHDR(1) | AppEUI(8) | DevEUI(8) | DevNonce(2) | MIC(4)
+        
+
         return [
             'mhdr'     => $phy[0],
             'app_eui'  => substr($phy, 1, 8),
@@ -39,15 +43,18 @@ class Frame
 
     public static function joinRequestDataForMic(string $phy): string
     {
-        return substr($phy, 0, 19); // MHDR|AppEUI|DevEUI|DevNonce
+        return substr($phy, 0, 19); 
+
     }
 
-    // ---------------- Join Accept ----------------
+    
 
-    /**
-     * 构造加密后的 Join Accept 物理层负载。
-     * @return string 0x20 + AES-ECB(明文含 MIC)
-     */
+
+    
+
+
+
+
     public static function buildJoinAccept(
         string $appKey, string $appNonce, string $netId, string $devAddr,
         int $dlSettings, int $rxDelay, ?string $cfList = null
@@ -66,12 +73,14 @@ class Frame
         }
         $plaintext .= $mic;
 
-        // 仅加密 MHDR 之后的部分（按 16 字节块）
+        
+
         $encryptedBody = LoRaWANCrypto::encryptJoinAccept($appKey, substr($plaintext, 1));
         return "\x20" . $encryptedBody;
     }
 
-    // ---------------- Data Up ----------------
+    
+
 
     public static function parseDataUp(string $phy): array
     {
@@ -86,7 +95,8 @@ class Frame
         $fport = null;
         $frmpayload = '';
         if (strlen($phy) > $pos + 4) {
-            // 至少还有 FPort + MIC（4 字节）
+            
+
             $fport = ord($phy[$pos]);
             $pos++;
             $frmpayload = substr($phy, $pos, -4);
@@ -116,7 +126,8 @@ class Frame
         if ($fcntLo >= $lastLo) {
             return ($lastHi << 16) | $fcntLo;
         }
-        // 回绕
+        
+
         return (($lastHi + 1) << 16) | $fcntLo;
     }
 
@@ -133,18 +144,20 @@ class Frame
         return LoRaWANCrypto::frmPayloadCrypt($key, $dir, $devAddr, $fcnt, $payload);
     }
 
-    // ---------------- Data Down ----------------
+    
 
-    /**
-     * 构造数据下行物理层负载（已加密 + MIC）。
-     * @param int $dir 1
-     * @param bool $confirmed 是否 Confirmed Data Down
-     * @param bool $ack 是否置 ACK 位
-     * @param int $fport 端口（0..223），null 表示无 FPort（纯 MAC 命令在 FHDR）
-     * @param string $payload 明文应用负载（会被加密）
-     * @param int $adr 是否置 ADR 位
-     * @param string $fopts FHDR 中的 MAC 命令字节（≤15 字节）
-     */
+
+    
+
+
+
+
+
+
+
+
+
+
     public static function buildDataDown(
         string $nwkSKey, string $appSKey, int $dir, string $devAddr, int $fcnt,
         bool $confirmed, bool $ack, ?int $fport, string $payload, int $adr = 0, string $fopts = ''
@@ -166,11 +179,13 @@ class Frame
         return $dataWithoutMic . $mic;
     }
 
-    // ============ LoRaWAN 1.1 变体 ============
+    
 
-    /**
-     * 1.1 构造加密后的 Join Accept（密钥 NwkKey，MIC/加密方向同 1.0）。
-     */
+
+    
+
+
+
     public static function buildJoinAccept1_1(
         string $nwkKey, string $appNonce, string $netId, string $devAddr,
         int $dlSettings, int $rxDelay, ?string $cfList = null
@@ -197,7 +212,8 @@ class Frame
         return LoRaWANCrypto::dataMICUp1_1($fNwkSIntKey, $sNwkSIntKey, $devAddr, $fcnt, $dataWithoutMic, $txDr, $txCh) === $mic;
     }
 
-    /** 1.1 FRMPayload 解密：FPort=0 用 NwkSEncKey，否则 AppSKey。 */
+    
+
     public static function decryptFRMPayload1_1(string $nwkSEncKey, string $appSKey, int $dir, string $devAddr, int $fcnt, ?int $fport, string $payload): string
     {
         if ($payload === '' || $fport === null) {
@@ -207,11 +223,12 @@ class Frame
         return LoRaWANCrypto::frmPayloadCrypt($key, $dir, $devAddr, $fcnt, $payload);
     }
 
-    /**
-     * 1.1 构造数据下行物理层负载（已加密 + MIC）。
-     * MIC 用 SNwkSIntKey（B0 含 ConfFCnt）；FRMPayload FPort=0 用 NwkSEncKey，否则 AppSKey。
-     * @param int $confFCnt 确认帧下发时填被确认上行的 FCnt（24 位），非确认帧填 0
-     */
+    
+
+
+
+
+
     public static function buildDataDown1_1(
         string $sNwkSIntKey, string $nwkSEncKey, string $appSKey, string $devAddr, int $fcnt,
         bool $confirmed, bool $ack, ?int $fport, string $payload, int $adr = 0, string $fopts = '', int $confFCnt = 0

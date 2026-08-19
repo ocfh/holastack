@@ -3,18 +3,20 @@ namespace holastack\Integration;
 
 use holastack\DB\Database;
 
-/**
- * 集成分发器（对齐 ChirpStack integrations）。
- * 应用可配置多个集成（HTTP / InfluxDB / MQTT 等），每条上行/遥测/状态事件都会分发到所有启用的集成。
- * 与「应用级 callback_url」(遗留单次 Webhook) 独立：两者可共存，分别对应 ChirpStack 的
- * integrations 表与早期 http_integration。
- */
+
+
+
+
+
+
+
 class Integration
 {
     public const KIND_HTTP = 'HTTP';
     public const KIND_INFLUX_DB = 'INFLUX_DB';
     public const KIND_MQTT = 'MQTT_GLOBAL';
-    // 以下为 ChirpStack 除 WebHook 之外的事件转发型集成（实际代码：awssns / azureservicebus / gcppubsub / amqp / kafka）
+    
+
     public const KIND_AWS_SNS = 'AWS_SNS';
     public const KIND_AZURE_SB = 'AZURE_SERVICE_BUS';
     public const KIND_GCP_PUBSUB = 'GCP_PUBSUB';
@@ -35,10 +37,11 @@ class Integration
         ];
     }
 
-    /**
-     * 为某应用创建集成。
-     * @param array $p ['application_id'=>int,'kind'=>string,'config'=>array]
-     */
+    
+
+
+
+
     public static function create(array $p): array
     {
         $appId = (int) ($p['application_id'] ?? 0);
@@ -91,22 +94,24 @@ class Integration
         return ['ok' => true];
     }
 
-    /**
-     * 分发一条事件到应用所有启用的集成。
-     * @param int $appId 应用 ID
-     * @param array $device devices 行（提供 dev_id / device_profile_id / dev_eui 等）
-     * @param array $uplinkData 上行数据（name, dev_eui, dev_addr, fcnt, port, frm_payload, rssi, snr, ...）
-     * @param array $telemetry 遥测字段（battery/margin/latitude/...）
-     * @param callable $log 日志回调
-     * @param string $eventType 事件类型（up/join/ack/txack/status/location/error），用于 MQTT/AMQP/Kafka 的 topic/routing-key 模板
-     */
+    
+
+
+
+
+
+
+
+
+
     public static function dispatch(int $appId, array $device, array $uplinkData, array $telemetry, callable $log, string $eventType = 'up'): void
     {
         $rows = Database::fetchAll("SELECT * FROM integrations WHERE application_id=? AND enabled=1", [$appId]);
         if (empty($rows)) {
             return;
         }
-        // 构造统一 TTN v3 风格上行消息（含解码负载）
+        
+
         $data = self::buildPayload($device, $uplinkData, $telemetry, $eventType);
         foreach ($rows as $it) {
             $cfg = json_decode($it['config_json'] ?? '{}', true) ?: [];
@@ -180,7 +185,8 @@ class Integration
                 'f_port'          => (int) ($uplinkData['port'] ?? 0),
                 'f_cnt'           => (int) ($uplinkData['fcnt'] ?? 0),
                 'frm_payload'     => $uplinkData['frm_payload'] ?? '',
-                'decoded_payload' => $decoded, // 可能为 null（NONE / JS 不可用）
+                'decoded_payload' => $decoded, 
+
                 'confirmed'       => !empty($uplinkData['confirmed']),
                 'rx_metadata'     => [[
                     'gateway_ids'  => ['gateway_id' => $uplinkData['gateway_id'] ?? ''],
@@ -197,7 +203,8 @@ class Integration
         ];
     }
 
-    // ---------------- 各集成实现 ----------------
+    
+
 
     private static function handleHttp(array $cfg, array $data, callable $log): void
     {
@@ -281,12 +288,13 @@ class Integration
         self::httpPostRaw($url, json_encode($body, JSON_UNESCAPED_UNICODE), $headers, $log);
     }
 
-    /**
-     * 统一的 HTTPS/HTTP 请求（best-effort，失败返回 null）。
-     * 用于 WebHook/InfluxDB 以及所有云厂商回调（AWS SNS / Azure SB / GCP Pub/Sub）。
-     * 现场 IoT 服务器常无完整 CA 包，故 TLS 关闭对端证书校验（verify_peer=false）。
-     * @return string|null 响应体；失败返回 null
-     */
+    
+
+
+
+
+
+
     private static function httpsRequest(string $url, string $body, array $headers, callable $log, string $method = 'POST'): ?string
     {
         $parts = parse_url($url);
@@ -345,13 +353,15 @@ class Integration
         $log("INTEGRATION HTTP: POST $url (" . strlen($body) . "B)");
     }
 
-    // ---------------- 云厂商 / 消息队列集成（对齐 ChirpStack） ----------------
+    
 
-    /**
-     * AWS SNS（application_server.integration.aws_sns）。
-     * 配置：aws_region, aws_access_key_id, aws_secret_access_key, topic_arn。
-     * 通过 HTTPS + AWS Signature V4 将事件发布到 SNS Topic。
-     */
+
+    
+
+
+
+
+
     private static function handleAwsSns(array $cfg, array $data, callable $log): void
     {
         $region = $cfg['aws_region'] ?? '';
@@ -394,12 +404,13 @@ class Integration
         $log("INTEGRATION AWS_SNS: publish " . ($ok ? 'ok' : 'failed') . " -> $topicArn");
     }
 
-    /**
-     * Azure Service Bus（application_server.integration.azure_service_bus）。
-     * 配置：connection_string（Endpoint/SharedAccessKeyName/SharedAccessKey），
-     *       publish_mode（topic|queue），publish_name（topic 或 queue 名称）。
-     * 通过 HTTPS REST + SAS 令牌发布消息。
-     */
+    
+
+
+
+
+
+
     private static function handleAzureServiceBus(array $cfg, array $data, callable $log): void
     {
         $conn = $cfg['connection_string'] ?? '';
@@ -415,15 +426,18 @@ class Integration
                 $parts[trim($k)] = trim($v);
             }
         }
-        $endpoint = rtrim($parts['Endpoint'] ?? '', '/'); // sb://ns.servicebus.windows.net/
+        $endpoint = rtrim($parts['Endpoint'] ?? '', '/'); 
+
         $keyName = $parts['SharedAccessKeyName'] ?? '';
         $key = $parts['SharedAccessKey'] ?? '';
         if ($endpoint === '' || $keyName === '' || $key === '') {
             $log("INTEGRATION AZURE_SB: connection_string missing Endpoint/SharedAccessKeyName/SharedAccessKey");
             return;
         }
-        // REST 接口对 topic / queue 使用同一端点（publish_name 区分），故 publish_mode 仅作文档/配置项保留
-        $host = parse_url($endpoint, PHP_URL_HOST); // ns.servicebus.windows.net
+        
+
+        $host = parse_url($endpoint, PHP_URL_HOST); 
+
         $resourceUri = "https://$host/$publishName";
         $expiry = time() + 3600;
         $toSign = urlencode($resourceUri) . "\n" . $expiry;
@@ -440,11 +454,12 @@ class Integration
         $log("INTEGRATION AZURE_SB: publish " . ($ok ? 'ok' : 'failed') . " -> $publishName");
     }
 
-    /**
-     * GCP Pub/Sub（application_server.integration.gcp_pub_sub）。
-     * 配置：project_id, topic_name, credentials_file（服务账号 JSON 路径）或 credentials_json（内联）。
-     * 通过服务账号 JWT 换取 OAuth2 token，再 REST 发布。
-     */
+    
+
+
+
+
+
     private static function handleGcpPubsub(array $cfg, array $data, callable $log): void
     {
         $projectId = $cfg['project_id'] ?? '';
@@ -520,12 +535,13 @@ class Integration
         return rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
     }
 
-    /**
-     * AMQP / RabbitMQ（application_server.integration.amqp）。
-     * 配置：url（amqp://user:pass@host:port），exchange（默认 amq.topic），
-     *       routing_key_template（默认 application.{app_id}.device.{dev_eui}.event.{event}）。
-     * 使用内置最小 AMQP 0.9.1 发布客户端（AmqpClient）。
-     */
+    
+
+
+
+
+
+
     private static function handleAmqp(array $cfg, array $data, callable $log, string $eventType = 'up'): void
     {
         $url = $cfg['url'] ?? '';
@@ -556,11 +572,12 @@ class Integration
         $log("INTEGRATION AMQP: published to exchange=$exchange key=$routingKey");
     }
 
-    /**
-     * Kafka（application_server.integration.kafka）。
-     * 配置：brokers（host:port），topic，tls（0/1），username，password（SASL PLAIN，可选）。
-     * 使用 php-rdkafka 扩展（生产环境标准做法）。未安装扩展时优雅跳过并记录。
-     */
+    
+
+
+
+
+
     private static function handleKafka(array $cfg, array $data, callable $log, string $eventType = 'up'): void
     {
         $brokers = $cfg['brokers'] ?? '';

@@ -1,13 +1,13 @@
-/*
- * HolaStack 应用开放 API 文档页（SPA 模块 · 精简版）
- * 数据、模板与全部中文文案已迁移到 PHP（src/Web/ViewRenderer::renderApiDocs），
- * 由后台视图端点 /api/view/apidocs 服务端渲染（支持 i18n）。
- * 本文件仅保留：样式注入、左栏点击切换（显示/隐藏详情块）、复制逻辑。
- */
+
+
+
+
+
+
 (function () {
   'use strict';
 
-  // ----------------------------- 样式注入 -----------------------------
+  
   function Ad_ensureCss() {
     var existing = document.getElementById('ad-css');
     if (existing) existing.remove();
@@ -45,8 +45,8 @@
     document.head.appendChild(st);
   }
 
-  // ----------------------------- 左栏切换 -----------------------------
-  // PHP 一次渲染所有详情块（.ad-detail），点击左栏项仅切换显示/隐藏与高亮。
+  
+  
   function Ad_select(id) {
     var items = document.querySelectorAll('.ad-item');
     items.forEach(function (it) { it.classList.toggle('active', it.getAttribute('data-ad') === id); });
@@ -56,7 +56,7 @@
     if (sc) sc.scrollTop = 0;
   }
 
-  // ----------------------------- 复制 -----------------------------
+  
   function Ad_copy(text, btn) {
     var reset = function () { var t0 = btn.textContent; btn.textContent = (typeof t === 'function' ? t('已复制 ✓') : '已复制 ✓'); setTimeout(function () { btn.textContent = t0; }, 1200); };
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -78,14 +78,14 @@
     if (code) Ad_copy(code.textContent, btn);
   }
 
-  // ----------------------------- 入口（供 index.php SPA 调用） -----------------------------
+  
   if (typeof window !== 'undefined') {
     window.viewApiDocs = async function () {
       var view = document.getElementById('view');
       if (!view) return;
       Ad_ensureCss();
       try {
-        // 关键：必须带 X-Elw-Token 头，否则 Auth::guardApi 401。
+        
         var tok = (window.state && window.state.token) || localStorage.getItem('elw_token') || '';
         var res = await fetch('/api/view/apidocs', tok ? { headers: { 'X-Elw-Token': tok } } : {});
         if (!res.ok) { view.innerHTML = '<p class="muted">' + (typeof t === 'function' ? t('加载失败') : '加载失败') + '</p>'; return; }
@@ -94,7 +94,7 @@
         view.innerHTML = '<p class="muted">' + (typeof t === 'function' ? t('加载失败') : '加载失败') + '</p>';
         return;
       }
-      // 默认选中第一项
+      
       var first = view.querySelector('.ad-item');
       if (first) Ad_select(first.getAttribute('data-ad'));
     };

@@ -12,19 +12,24 @@ use holastack\Core\Multicast;
 use holastack\Core\Fuota;
 use holastack\Core\LoRaWANVersion;
 
-/**
- * Web 管理后台业务逻辑（设备 / 应用 / 网关 / 上行 / 下行 / 用户 / 密码）。
- * 所有方法返回数组，由 public/index.php 决定输出 JSON 或 HTML。
- */
+
+
+
+
+
 class WebApp
 {
-    /** 网关心跳超时秒数（参照 ChirpStack：超过此时间无心跳则判离线）。 */
+    
+
     const GW_OFFLINE_TIMEOUT = 300;
-    /** 设备离线超时秒数（无上行/入网记录超过此时间则判离线）。 */
+    
+
     const DEV_OFFLINE_TIMEOUT = 600;
 
-    // ================= 权限作用域（三角色体系） =================
-    // admin：全局管理 + 可显式按 tenant_id 筛选；tenant：仅本租户数据（可写）；operator：演示（全平台只读 + 模拟日志）
+    
+
+    
+
 
     private static function scope(): array
     {
@@ -85,7 +90,8 @@ class WebApp
         return array_map(static fn($r) => (int) $r['id'], $rows);
     }
 
-    // ================= 演示（operator）模拟数据 =================
+    
+
 
     private static function demoDevices(?int $appId = null): array
     {
@@ -298,8 +304,10 @@ class WebApp
             }
         }
         $now = time();
-        // pool 的 type 与 NetworkServer::logEvent 写入的真实 type 对齐（gateway/join/uplink/downlink/txack/ack/fuota/status），
-        // 保证 demo 模式的类型下拉筛选与真实数据行为一致
+        
+
+        
+
         $pool = [
             ['uplink',   'info',  '上行数据帧'],
             ['join',     'info',  '设备完成 OTAA 入网'],
@@ -310,11 +318,13 @@ class WebApp
             ['txack',    'warn',  '网关下行发射失败'],
             ['ack',      'info',  '设备已确认下行帧'],
         ];
-        // 按设备筛选时只生成设备类事件（网关事件 dev_id=0 会污染筛选结果）
+        
+
         if ($devId !== null && $devId > 0) {
             $pool = array_values(array_filter($pool, static fn($p) => !in_array($p[0], ['gateway', 'txack'], true)));
         }
-        // 按 type 筛选（与前端 typeValues 下拉值一致）
+        
+
         if ($type !== null && $type !== '') {
             $pool = array_values(array_filter($pool, static fn($p) => $p[0] === $type));
             if (!$pool) {
@@ -374,7 +384,8 @@ class WebApp
         if (self::getApplicationByName($p['name'])) {
             return ['error' => '应用名称已存在'];
         }
-        // 若未填写 AppEUI 则随机生成（16 hex）
+        
+
         $appEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_eui'] ?? ''));
         if ($appEui === '') {
             $appEui = bin2hex(random_bytes(8));
@@ -430,7 +441,8 @@ class WebApp
         if (Database::fetch("SELECT id FROM devices WHERE dev_eui=?", [$devEui])) {
             return ['error' => 'DevEUI 已存在'];
         }
-        // Class A/B/C（设备工作模式，决定下行调度策略）
+        
+
         $class = strtoupper($p['class'] ?? 'A');
         if (!in_array($class, ['A', 'B', 'C'], true)) {
             return ['error' => 'class must be A, B or C'];
@@ -443,7 +455,8 @@ class WebApp
         if (!self::canAccess($app)) {
             return ['error' => 'forbidden: application not in your tenant'];
         }
-        // 设备归属 = 应用所属租户（应用有租户时优先继承；全局应用按当前用户规则）
+        
+
         $tid = (int) ($app['tenant_id'] ?? 0);
         if ($tid <= 0) {
             $tid = self::createTenantId($p);
@@ -467,14 +480,16 @@ class WebApp
             if (strlen($joinEui) !== 16) {
                 return ['error' => 'join_eui must be 16 hex chars'];
             }
-            // 1.1 设备需要 NwkKey（与 AppKey 分离）；缺省回退到 AppKey，保证 1.0.x 存量兼容
+            
+
             $nwkKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_key'] ?? $appKey));
             Database::execute(
                 "INSERT INTO devices (app_id, tenant_id, name, dev_eui, join_eui, activation, app_key, nwk_key, region, class, device_profile_id, mac_version, status, created_at)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [$appId, $tid, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
             );
-        } else { // ABP
+        } else { 
+
             $devAddr = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_addr'] ?? ''));
             $nwk = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_s_key'] ?? ''));
             $app = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_s_key'] ?? ''));
@@ -508,7 +523,8 @@ class WebApp
                 [$tid]
             );
         }
-        $timeout = time() - self::GW_OFFLINE_TIMEOUT; // 300s 心跳超时
+        $timeout = time() - self::GW_OFFLINE_TIMEOUT; 
+
         foreach ($rows as &$g) {
             $g['status'] = ((int) ($g['last_seen'] ?? 0) >= $timeout) ? 'online' : 'offline';
             $g['uplinks'] = (int) ($g['uplinks'] ?? 0);
@@ -618,10 +634,11 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    /**
-     * 三个 count 方法：与同名 list 方法的 WHERE 条件完全对齐，用于前端分页（total / 总页数）。
-     *  复用 list 方法的过滤逻辑（应用/设备/网关/租户）。
-     */
+    
+
+
+
+
     public static function countUplinks(?int $devId = null, ?int $appId = null, ?int $tenantId = null): int
     {
         if (self::scope()['demo']) { return 120; }
@@ -686,7 +703,8 @@ class WebApp
         return ['id' => Database::lastInsertId(), 'status' => 'pending'];
     }
 
-    // ---------------- 应用 增删改查 ----------------
+    
+
 
     public static function getApplication(int $id): ?array
     {
@@ -747,7 +765,8 @@ class WebApp
         return ['ok' => true];
     }
 
-    // ---------------- 设备 增删改查 ----------------
+    
+
 
     public static function getDevice(int $id): ?array
     {
@@ -784,7 +803,8 @@ class WebApp
         if (array_key_exists('device_profile_id', $p)) {
             $setParts[] = 'device_profile_id=?';
             $params[] = (int) $p['device_profile_id'];
-            // 设备模板决定 MAC 版本（1.0.x / 1.1），切换模板时同步更新 mac_version
+            
+
             $dp = DeviceProfile::getOrDefault((int) $p['device_profile_id']);
             $setParts[] = 'mac_version=?';
             $params[] = LoRaWANVersion::value($dp['mac_version'] ?? '1.0.3');
@@ -812,7 +832,8 @@ class WebApp
             $params[] = $appKey;
         }
 
-        // OTAA 设备也允许编辑 DevEUI/JoinEUI
+        
+
         if ($device['activation'] === 'OTAA') {
             if (!empty($p['dev_eui'])) {
                 $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_eui']));
@@ -854,7 +875,8 @@ class WebApp
         return ['ok' => true];
     }
 
-    // ---------------- 网关 增删改查 ----------------
+    
+
 
     public static function getGateway(string $gwId): ?array
     {
@@ -882,7 +904,8 @@ class WebApp
             return ['error' => 'unsupported region'];
         }
         $tid = self::createTenantId($p);
-        // 租户私有网关上限：unlimited=1 → 不限；否则按 limit 限制
+        
+
         $t = $tid > 0 ? Tenant::get($tid) : null;
         if ($t) {
             $unlimited = (int) ($t['private_gateways_unlimited'] ?? 0) === 1;
@@ -906,7 +929,8 @@ class WebApp
 
     public static function updateGateway(string $gwId, array $p): array
     {
-        // getGateway 已做 canAccess 租户校验：越权返回 null
+        
+
         if (!self::getGateway($gwId)) {
             return ['error' => 'gateway not found or forbidden'];
         }
@@ -923,7 +947,8 @@ class WebApp
 
     public static function deleteGateway(string $gwId): array
     {
-        // getGateway 已做 canAccess 租户校验：越权返回 null
+        
+
         if (!self::getGateway($gwId)) {
             return ['error' => 'gateway not found or forbidden'];
         }
@@ -931,13 +956,15 @@ class WebApp
         return ['ok' => true];
     }
 
-    // ---------------- 用户管理 & 密码管理 ----------------
+    
+
 
     public static function listUsers(): array
     {
         $cur = Auth::currentUser();
         if (!$cur) return [];
-        // admin 可查看所有用户（含租户归属）；普通用户仅返回自己
+        
+
         if ($cur['role'] === Auth::ROLE_ADMIN) {
             return Database::fetchAll(
                 "SELECT u.id, u.username, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name, u.created_at
@@ -959,17 +986,20 @@ class WebApp
         if (!$cur) {
             return ['error' => 'not authenticated'];
         }
-        // operator（演示）为只读账号，禁止修改任何密码（含自己的）
+        
+
         if ($cur['role'] === Auth::ROLE_OPERATOR) {
             return ['error' => 'forbidden: operator is read-only'];
         }
-        // admin 可以修改任何人的密码；普通用户只能改自己的
+        
+
         if ($cur['role'] !== Auth::ROLE_ADMIN && (int)$cur['id'] !== $targetUserId) {
             return ['error' => 'forbidden: can only change own password'];
         }
         $hash = password_hash($newPassword, PASSWORD_DEFAULT);
         Database::execute("UPDATE users SET password_hash=? WHERE id=?", [$hash, $targetUserId]);
-        // 修改密码后清除该用户所有令牌，强制重新登录
+        
+
         Database::execute("DELETE FROM auth_tokens WHERE user_id=?", [$targetUserId]);
         return ['ok' => true];
     }
@@ -980,11 +1010,13 @@ class WebApp
         if (!$cur) {
             return ['error' => 'not authenticated'];
         }
-        // 不允许删除自己
+        
+
         if ((int)$cur['id'] === $id) {
             return ['error' => 'cannot delete self'];
         }
-        // 仅 admin 可删除用户
+        
+
         if ($cur['role'] !== Auth::ROLE_ADMIN) {
             return ['error' => 'forbidden'];
         }
@@ -994,7 +1026,8 @@ class WebApp
 
     public static function getStats(): array
     {
-        // 演示账号：返回模拟统计数据（不读真实库，避免泄露 admin 数据）
+        
+
         $s = self::scope();
         if ($s['demo']) {
             $devs = 4; $gws = 3; $ups = 1280; $dls = 560;
@@ -1010,10 +1043,12 @@ class WebApp
         }
         $tid = self::effectiveTenant();
         $appIds = self::visibleAppIds();
-        $appClause = null;   // null = 不过滤
+        $appClause = null;   
+
         if ($appIds !== null) {
             if (!$appIds) {
-                // 作用域内没有任何应用 → 全部计数为 0（避免空 IN() 语法错误）
+                
+
                 return [
                     'applications' => 0, 'devices' => 0, 'gateways' => 0,
                     'gateways_online' => 0, 'gateways_offline' => 0,
@@ -1041,7 +1076,8 @@ class WebApp
             : Database::fetch("SELECT COUNT(*) c FROM gateways")['c'];
         $ups = $appFilter("SELECT COUNT(*) c FROM uplinks")['c'];
         $dls = $appFilter("SELECT COUNT(*) c FROM downlinks")['c'];
-        // 设备模板（租户级）/ 组播组（应用级）计数，供概览卡片展示
+        
+
         $dps = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM device_profiles WHERE tenant_id=?", [$tid])['c']
             : Database::fetch("SELECT COUNT(*) c FROM device_profiles")['c'];
@@ -1049,13 +1085,15 @@ class WebApp
         $gwsOnline = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE tenant_id=? AND last_seen >= ?", [$tid, time() - self::GW_OFFLINE_TIMEOUT])['c']
             : Database::fetch("SELECT COUNT(*) c FROM gateways WHERE last_seen >= ?", [time() - self::GW_OFFLINE_TIMEOUT])['c'];
-        // 设备健康分布：在线 = 已激活且在离线超时窗口内最近上报；其余算离线（含未激活/pending）
+        
+
         $devsOnline = $appFilter(
             "SELECT COUNT(*) c FROM devices WHERE status='active' AND last_seen >= ?",
             [time() - self::DEV_OFFLINE_TIMEOUT]
         )['c'];
         $devsOffline = max(0, (int)$devs - (int)$devsOnline);
-        // 最近 5 条设备/网关日志（events 表：dev_id>0 为设备事件，gateway_id!='' 为网关事件）
+        
+
         $deviceLogs = Database::fetchAll(
             "SELECT id, type, level, dev_id, message, created_at FROM events WHERE dev_id > 0"
             . ($appClause !== null ? " AND $appClause" : '') . " ORDER BY id DESC LIMIT 5"
@@ -1080,7 +1118,8 @@ class WebApp
         return Region::supported();
     }
 
-    // ---------------- 设备配置模板（Device Profile） ----------------
+    
+
 
     public static function listDeviceProfiles(?int $tenantId = null): array
     {
@@ -1115,7 +1154,8 @@ class WebApp
         return DeviceProfile::delete($id);
     }
 
-    // ---------------- 租户（Tenant，多租户隔离基础） ----------------
+    
+
 
     public static function listTenants(): array
     {
@@ -1134,11 +1174,13 @@ class WebApp
         return Tenant::delete($id);
     }
 
-    // ---------------- 应用级 API Key ----------------
+    
+
 
     public static function listApiKeys(int $applicationId, ?int $tenantId = null): array
     {
-        // 演示账号：返回模拟 Key，不读真实库
+        
+
         if (self::scope()['demo']) {
             $now = time();
             return [
@@ -1155,7 +1197,8 @@ class WebApp
             }
             return ApiKey::list($applicationId);
         }
-        // 未指定应用：按租户（或全部）列出其下所有应用的 Key
+        
+
         $appIds = self::visibleAppIds($tenantId);
         if ($appIds === null || !$appIds) {
             return [];
@@ -1185,11 +1228,13 @@ class WebApp
         return ApiKey::delete($id);
     }
 
-    // ---------------- 集成（Integrations） ----------------
+    
+
 
     public static function listIntegrations(int $applicationId, ?int $tenantId = null): array
     {
-        // 演示账号：返回模拟集成，不读真实库
+        
+
         if (self::scope()['demo']) {
             $now = time();
             return [
@@ -1208,7 +1253,8 @@ class WebApp
             }
             return Integration::list($applicationId);
         }
-        // 未指定应用：按租户（或全部）列出其下所有应用的集成
+        
+
         $appIds = self::visibleAppIds($tenantId);
         if ($appIds === null || !$appIds) {
             return [];
@@ -1250,7 +1296,8 @@ class WebApp
         return Integration::delete($id);
     }
 
-    // ---------------- 组播组（Multicast Group） ----------------
+    
+
 
     public static function listMulticastGroups(?int $appId = null, ?int $tenantId = null): array
     {
@@ -1348,7 +1395,8 @@ class WebApp
     }
     public static function deleteMulticastGroup(int $id): array
     {
-        // getMulticastGroup 已做 canAccess：越权折叠为 null，必须先判 null 再删，否则越权删除
+        
+
         if (!self::getMulticastGroup($id)) {
             return ['error' => 'group not found or forbidden'];
         }
@@ -1408,7 +1456,8 @@ class WebApp
         return ['ok' => true];
     }
 
-    // ---------------- FUOTA（固件升级，TR005/TS005） ----------------
+    
+
 
     public static function listFuotaCampaigns(): array
     {
@@ -1456,7 +1505,8 @@ class WebApp
         if (!$dev || !self::appInScope((int) $dev['app_id'])) {
             return ['error' => 'device not found or forbidden'];
         }
-        // 设备必须已加入组播组（否则收不到组播分片）
+        
+
         $inGroup = Database::fetch(
             "SELECT id FROM multicast_group_devices WHERE multicast_group_id=? AND LOWER(dev_eui)=?",
             [(int) $camp['multicast_group_id'], strtolower($dev['dev_eui'] ?? '')]

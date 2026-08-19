@@ -1,13 +1,14 @@
 <?php
-/**
- * 中继（Relay, LoRaWAN 1.1）管理 CLI。
- *
- *   php bin/relay.php list-gateways
- *   php bin/relay.php add-gateway <name> <relayDevEui> [region]
- *   php bin/relay.php del-gateway <gatewayId>
- *   php bin/relay.php list-devices <gatewayId>
- *   php bin/relay.php provision <gatewayId> <devEui> [devAddr]
- */
+
+
+
+
+
+
+
+
+
+
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\Relay;

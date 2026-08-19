@@ -1,12 +1,4 @@
 <?php
-/**
- * holastack Web 管理后台入口（同时作为 PHP 内置服务器 router 脚本）。
- * 启动：php -S localhost:8080 public/index.php
- *   - /install            安装向导（未安装时）
- *   - /login              通过 /api/login 接口完成登录（SPA 内）
- *   - /api/*              返回 JSON（除 login/logout/me 外均需登录；写操作需 admin）
- *   - 其它路径            单页管理界面（SPA）
- */
 require __DIR__ . '/../bootstrap.php';
 use holastack\Web\WebApp;
 use holastack\Web\Setting;
@@ -22,17 +14,16 @@ $path = rtrim($path, '/');
 if ($path === '') {
     $path = '/';
 }
-// PHP 内置开发服务器（php -S）：当请求静态资源（public/assets/*、favicon.ico、robots.txt 等）
-// 时，路由脚本必须返回 false 才能让 server 直接发送文件，否则会被当作 PHP 处理并落到
-// renderPage() 输出 HTML，让 <script src="/assets/*.js"> 拿到 SPA 整页、脚本解析失败。
-// 生产环境（Nginx/Apache）由 web server 自身处理静态资源，本分支不执行。
+
+
 if (PHP_SAPI === 'cli-server') {
     $staticFile = __DIR__ . $path;
     if ($path !== '/' && is_file($staticFile)) {
         return false;
     }
 }
-// 标记：是否需要为本次请求写 API 日志（仅 /v1/* 记；管理界面 /api/* 不记，避免日志被自身调用淹没）
+
+
 $logApi = ($path === '/v1' || strpos($path, '/v1/') === 0);
 if ($logApi) {
     $__apiLogStart = microtime(true);
@@ -44,7 +35,8 @@ if ($logApi) {
         'body_size' => strlen((string) file_get_contents('php://input')),
         'application_id' => 0,
     ];
-    // /v1 应用 API 鉴权后可回填 application_id；本钩子在响应发出后执行
+    
+
     register_shutdown_function(static function () use (&$__apiLogStart, &$__apiLogCtx) {
         $lat = (int) ((microtime(true) - $__apiLogStart) * 1000);
         $status = http_response_code() ?: 200;
@@ -67,7 +59,8 @@ if ($logApi) {
     });
 }
 
-// ---- 安装守卫 ----
+
+
 if (!ELW_INSTALLED) {
     if ($path === '/install') {
         Installer::handle();
@@ -87,11 +80,14 @@ if ($path === '/install') {
     exit;
 }
 
-// 已安装：确保表结构存在（含 auth_tokens 等新增表，对已存在库兜底）
+
+
 Database::migrate();
 
-// ---- 应用级开放 API（/v1/，使用 API 密钥鉴权，作用域限定到该 Key 所属应用）----
-// 注意：$path 已 rtrim('/')，根路径为 '/v1'（对应请求 '/v1/'）
+
+
+
+
 if ($path === '/v1' || strpos($path, '/v1/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
     try {
@@ -103,7 +99,8 @@ if ($path === '/v1' || strpos($path, '/v1/') === 0) {
     exit;
 }
 
-// ---- 视图渲染端点：返回后台视图的 HTML 片段（服务端翻译/样式统一） ----
+
+
 if (strpos($path, '/api/view/') === 0) {
     $viewName = substr($path, strlen('/api/view/'));
     header('Content-Type: text/html; charset=utf-8');
@@ -124,7 +121,8 @@ if (strpos($path, '/api/view/') === 0) {
     exit;
 }
 
-// ---- API 路由 ----
+
+
 if ($path === '/api' || strpos($path, '/api/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
     try {
@@ -140,7 +138,8 @@ header('Cache-Control: no-store, no-cache, must-revalidate');
 header('Pragma: no-cache');
 echo renderPage();
 
-// ============================================================
+
+
 function getJsonBody(): array
 {
     $raw = file_get_contents('php://input');
@@ -158,11 +157,13 @@ function getJsonBody(): array
 function handleApi(string $method, string $path): array
 {
     $segs = explode('/', trim($path, '/'));
-    array_shift($segs); // 去掉 'api'
+    array_shift($segs); 
+
     $resource = $segs[0] ?? '';
     $body = in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true) ? getJsonBody() : [];
     $get = $_GET;
-    // 分页工具：admin/management 路由（/api/...）与 v1 应用路由（/v1/...）共用
+    
+
     $limitOf  = static function (string $key) use ($get): int {
         $n = (int) ($get[$key] ?? 50);
         return max(1, min($n, 500));
@@ -172,7 +173,8 @@ function handleApi(string $method, string $path): array
         return max(0, $n);
     };
 
-    // 公开端点
+    
+
     if ($resource === 'login') {
         if ($method !== 'POST') {
             return ['error' => 'method not allowed'];
@@ -197,11 +199,13 @@ function handleApi(string $method, string $path): array
         }
         return ['user' => $u];
     }
-    // 公开接口：无需登录即可访问（静态配置，无敏感信息）
+    
+
     if ($resource === 'public-settings') {
         return ['data' => Setting::getPublic()];
     }
-    // 公开接口：语言包（无需登录即可访问，仅含界面译文）
+    
+
     if ($resource === 'i18n') {
         $lang = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($get['lang'] ?? ''));
         $lang = $lang !== '' ? $lang : 'zh';
@@ -216,16 +220,21 @@ function handleApi(string $method, string $path): array
         return ['regions' => WebApp::regions()];
     }
 
-    // 其余需登录。权限模型：
-    //  - users/tenants/settings 为系统管理资源 → 仅 admin
-    //  - 其他写操作（应用/设备/网关/模板/Key/外部集成/组播）→ admin 或 tenant（guardWrite），WebApp 层再按租户细粒度拦截
-    //  - 只读 + 下行/组播入队 + 改自己密码 → operator 及以上
+    
+
+    
+
+    
+
+    
+
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
     $isDownlink = ($resource === 'devices' && ($segs[2] ?? '') === 'downlink');
     $isPwChange = ($resource === 'users' && ($segs[1] ?? '') === 'password');
     $isMulticastEnqueue = ($resource === 'multicast-groups' && ($segs[2] ?? '') === 'enqueue');
     $adminOnlyResource = in_array($resource, ['users', 'tenants', 'settings'], true);
-    // 改自己密码（users/password）不属于系统管理写操作，operator 及以上均可
+    
+
     if ($isWrite && $adminOnlyResource && !$isPwChange) {
         Auth::guardApi(Auth::ROLE_ADMIN);
     } elseif ($isWrite && !$isDownlink && !$isPwChange && !$isMulticastEnqueue) {
@@ -233,7 +242,8 @@ function handleApi(string $method, string $path): array
     } else {
         Auth::guardApi(Auth::ROLE_OPERATOR);
     }
-    // 租户列表属于系统管理数据：读取也仅限 admin（避免租户间信息泄露）
+    
+
     if (!$isWrite && $resource === 'tenants') {
         Auth::guardApi(Auth::ROLE_ADMIN);
     }
@@ -440,7 +450,8 @@ function handleApi(string $method, string $path): array
             }
             return ['data' => WebApp::listTenants()];
         case 'api-logs':
-            // 仅 admin / tenant / operator 可读；admin 可见全部，tenant 只能看自己 tenant_id 的日志
+            
+
             $u = Auth::currentUser();
             $role = $u['role'] ?? '';
             if (!in_array($role, [Auth::ROLE_ADMIN, Auth::ROLE_TENANT, Auth::ROLE_OPERATOR], true)) {
@@ -465,27 +476,31 @@ function handleApi(string $method, string $path): array
     }
 }
 
-/**
- * 应用级开放 API（/v1/）：使用「API 密钥」鉴权，所有数据作用域限定到该 Key 所属应用。
- * 鉴权头：Authorization: Bearer <API_KEY>  或  ?api_key=<API_KEY>
- * 设备响应已剥离 app_key / nwk_s_key / app_s_key 等敏感密钥。
- */
+
+
+
+
+
+
 function handleAppApi(string $method, string $path): array
 {
     $segs = explode('/', trim($path, '/'));
-    array_shift($segs); // 去掉 'v1'
+    array_shift($segs); 
+
     $sub = $segs[0] ?? '';
     $body = in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true) ? getJsonBody() : [];
     $get = $_GET;
 
-    // ---- 鉴权：API 密钥 -> application_id ----
+    
+
     $token = ApiKey::tokenFromRequest();
     $appId = $token ? ApiKey::validate($token) : 0;
     if (!$appId) {
         http_response_code(401);
         return ['error' => 'invalid_api_key', 'message' => '请在请求头携带 Authorization: Bearer <API_KEY> 或使用 ?api_key=<API_KEY>'];
     }
-    // 回填到 API 日志上下文（用于审计：记录哪个应用发起的调用）
+    
+
     if (isset($GLOBALS['__apiLogCtx']) && is_array($GLOBALS['__apiLogCtx'])) {
         $GLOBALS['__apiLogCtx']['application_id'] = (int) $appId;
     }
@@ -495,7 +510,8 @@ function handleAppApi(string $method, string $path): array
         return ['error' => 'application_not_found'];
     }
 
-    // 仅保留应用公开字段（不泄露密钥）
+    
+
     $deviceView = static function (array $d): array {
         $lastSeen = max((int) ($d['last_seen'] ?? 0), (int) ($d['created_at'] ?? 0));
         $online = ($d['status'] === 'active' && $lastSeen >= time() - WebApp::DEV_OFFLINE_TIMEOUT) ? 'online' : 'offline';
@@ -520,7 +536,8 @@ function handleAppApi(string $method, string $path): array
         }
         return Database::fetch("SELECT * FROM devices WHERE dev_eui=? AND app_id=?", [$devEui, $appId]);
     };
-    // $limitOf / $offsetOf 由 handleApi() 顶部统一提供
+    
+
 
     switch ($sub) {
         case '':
@@ -558,7 +575,8 @@ function handleAppApi(string $method, string $path): array
             ];
 
         case 'devices':
-            // /v1/devices/{dev_eui}[/uplinks|/downlink]
+            
+
             if (isset($segs[1]) && $segs[1] !== '') {
                 $dev = $resolveDevice($segs[1]);
                 if (!$dev) {
@@ -581,7 +599,8 @@ function handleAppApi(string $method, string $path): array
                     http_response_code(201);
                     return $r;
                 }
-                // 单设备详情
+                
+
                 $up = Database::fetch("SELECT COUNT(*) c FROM uplinks WHERE dev_id=?", [$dev['id']])['c'];
                 $dl = Database::fetch("SELECT COUNT(*) c FROM downlinks WHERE dev_id=?", [$dev['id']])['c'];
                 return ['device' => $deviceView($dev), 'counts' => ['uplinks' => (int) $up, 'downlinks' => (int) $dl]];
@@ -616,10 +635,13 @@ function handleAppApi(string $method, string $path): array
 
 function renderPage(): string
 {
-    // 注入当前语言包：window.UI_LANG（当前语言）/ window.I18N（中文→译文 字典）。
-    // 放在 <!DOCTYPE> 之前，确保 <head> 内的 FOUC 脚本能据此设置 <html lang>。
+    
+
+    
+
     $lang = Setting::get('ui_lang', 'zh');
-    // 语言白名单放开为「任意合法语言标识」，以支持 lang/ 下新增的多语言文件；含非法字符回退 zh
+    
+
     $lang = preg_replace('/[^A-Za-z0-9_-]/', '', (string)$lang);
     if ($lang === '') {
         $lang = 'zh';
@@ -646,22 +668,22 @@ function renderPage(): string
 <title>HolaStack</title>
 <link id="faviconLink" rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cimage%20href%3D%22data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAOiUlEQVR4AdxaCXgURRb%2BqzqQRARiQA5ZAdGIICL3oYmg4oGI5wp4oCIerLh4gecnsOq6Kiq4q%2BuC56e4Joh4oMKyHisg4geCq%2BCtoHhwe6AgJN21%2Fz9h4mSYnplMgpLtb2q6u%2BrVu%2BrVq1ev2qKK1yHTXKfCYv%2BKouKyZwqLSxexfFhYXLa6sKRsc1FJmfs1imhFaBaXknbpIvFSVOJfLt6qKA7SUkDRNNeeBB8g4Q2e85ca4%2B6EwYnGmG4s%2BxuDpgbIrSrxTOFFK0LTGNI23cQL4O4Sb%2BRxrXgVz%2BngT6qAwpLSfkQ4C85fToLDSTg%2FHaS%2FJQx53FO8imcq4sVDS0oPT8ZPYgU4ZwqL%2FesNzGwDHJsMQbptIrR7HaB5PaBnM%2BD4fYCT9jM4cm%2BgQyOgUQ6Q7aWLLT04KqK%2Fhfk3p8e1oEyJetn4yu7TXLPCEv8FmvnNbKsRlnpQ4NuKDB462uLRYy1uL7K4qruHK7pYjOvt4Z4jLB4nq5P7WYzqbNAom5Rr7kcZ3C2Sqfc0lx%2BPtpICuk52dXJc2XPSXDxgVd9pOejYGJjYx2ACBe7Z3KJZPcNRNjDGVEJn%2Bb5bHYM2DQ1%2BX2DxxACL0woM6tFiKgFW44Uk%2Bme5slntp7m6sWhs7Etuw7IJgOmOal4S7%2BKDDSb2tejSxOwgcCr0OVkGIzsZTBtg0Kp%2BKuiqtJse%2BUHZ7bE9KhTQe7rrTE5HxTZm8pxP8%2F1Tb4PT9jeoY6sufJSm5ZDVr2txZx%2BLXpxC0fpq340ZVVTsukTxVCggq8wfZwD%2BkPFl2fuyLgZ997awFCBjRDEdm%2BxmcE0Pi2a7xVRW45Es8uePjaKIKECj7wxOiFZmcidW%2FJFme9jv9JQJhvA%2B%2BTkGdxxmoFUkHCr9Fsl62HRXoB4RBXD0rybb%2FKkqs9KO%2FnXAPqbGRh5xV8sGFsMPrBaLFRiJxTjfv14Vtu%2FDLocPJ7Jk%2FCNCjDzYQs4rYyRpdDyRcUONWQEwiMtiri3NRSfOfCkBmV6dmgAdGksNmWJIr1%2BWNbiUcUJ60MmhyG2uDcBhQ9ArOWjyViLCgNYGNeTzkhNja1ELgwZ1EYkRFD3ukQ3slgVOPTZW%2BRf0shauygrIp70U7gUM45w8vS3QNt9UmXSmHXIorCJHRZWx5e9HMKxuiSopQrJbB9c6HWZyPGBgG%2BBuBjczBlrcUuhRARYjDvbQqoFJB0WNwFiaWmvSa86ocg%2BuDo1yDfba3aB9I4uxPS3u72fQu3k4qdgWyW5hkIcUV10K%2F5dCgzHdPHRmZCcmUnT5TZqNMSjYw%2BK2Ig9nHQCKhuQXZacVmKQKaM4A5IGjLLo2tcmR7WKt53WwOHk%2Fk5wrZ%2FI0mKEKqF8HuOlQC5kcatmlFWNUZxvZkIWxToPJ07BmhwEont9%2FjxRaDOu8C9Rbsj60nUQMZSY7tDWLLUe1IobQvrWjoXMToAWTMGHcUszETT2bsiO9a%2BLW2lNb1zM4%2FYDwgQxVgNJVtUfM5Jz2a2nAnXVCIJuolvkI7MPsTKK22linbFNYdimhAjzWhnWojQoQz3UZy%2BgeXyhqfBXgO%2BCnUv7t2FQra5xzlCcx6wkVUBYAH25M3KE21q7apAFNzHlCBQh0xieMlPXwf1BKPgyXJVQBS9YCK76v%2FdNg%2FWaHWZ%2BHyxGqAHWZ%2FhHnQi23gNkrHTSlw8QIVYA6zF4JzFkZQE5E77WpaACXrAkw9QM9hXOeVAFl7DvhLYf%2FrnMI6EnD0exaLRqwlZy%2B4xY6bC5LzltSBajrVh%2B4cq7DxCW1ZzpMfT%2FAiJcDfL9VEiQvKRWg7qWU%2FdlPgX7TfQj53C8DfPqdw8af0y8btjhsILxKbD%2FVr6OjWsf2jSqEiW1P9az%2B4mXB1wGe%2FjjAqc%2F5uH8ZsCXFyEsulbQUIECVbVTElHcdbljgcNFLAU5%2FMf1yxqwAZxBeJbaf6s9k25lsO5332LZ0noVPvFz3Oq10qcO6n8Vp%2BiVUATrjO7%2BDiZzbx6Oja4CUIS3XRPmZ00wlI1zsK14CMRXHaENmj89pb9CyflxDzGuoAhrlAme3t5g%2B0MONPOxs0wDQJimm7y75qI1vi90ROUV6isnb4UyNtU2S1LGppOB2Gjrs1McLkw63aWdcU%2BHdGe1tmdzTxxdT%2BlmcfaBFXTFPQltoJbwl%2FIUqIH7Vy%2Bbwd%2BTpz61Mhz9yjIXOAfeklSTE%2BitW6qisX0vgr30NJh%2FloWdzg%2Fp1TaWMcEDfFcZSqALCOjCRCH3JcXV3i5IBHnQcHpZsCMNRE%2FViXIcyMzhFx%2Fby0KmJrdKhSJQH4Yk%2BV7p%2F9j0PQZb4WP2TYyRYqaniRXnDk%2Fe1eOYEixt6msjHThWNO%2Blhb87vMV0NZpDmiI4eD2TDCf24zeGBZT4WrUngIbd3C1WArOapTwAtU%2Fe87WPVJpcwGpRF7E6TO6qVxb1HepjEk6N9GwK5Wdsp1MBNFta6ATC%2Bl8Fj%2FT0MpNLzeSok2vHoFQV%2B9aPD4wyGTn0%2BwKPvAYpj4uGi76EKiAJoI%2FHkx%2FSqcwJc%2FEqApWulmmhr5bvhq74J0kGKHNGZTEaqjtUZ%2F45hZvo%2BOrUHeThzeMvkZv7BxgCX%2FifAcPI6mfGKltVUhEMVUJ9r6AltDPKyy1FonX5vA3D5aw5%2FeNnHs58G%2BJZRW3lr5X%2BPCXmdF154UPn0GMa1uCCvMkyytya5PLwvMHjiOItre1gU5BnUoUdPpMzvtzrM%2FCzAJa%2F4DH8d3l4HROP%2F%2FBxEnHVTnm6F0QtVgHLpo7sxDjje4jKeyUshYkABx3Iq4k5ukoa8EOCR5T42ca7J9OKJyER1gDmMa%2FH99NB3HGYh4aifeNDIu%2FKQF3eU4B4u4alOC6blE8GK1mam7BSWDyIPExY7vLMenKIRNJFPaS48yKCYCpSz3jdJglcKSLhlkOkLndbSU%2FTtXn%2BL63oYdOVBg%2BpVtL4%2BtBw4iyHshMUBPuMOTPWJigTp0cxgKvHcfIiBjtejcO3ygWu6lzM85ADL0Ubo9Q3n9yRuzIbODqCwPNbMC%2FKA0XSQ%2BujyzHaWDlJDFopKDVst1%2Fvv9JSqNMg2OKa1xV19PB5BW%2BhzV50dqt%2B3VOHzK4Bh%2Fwpw1VyfoxEwCZnY8%2BYwnihsYfHnQz1Mp3VNPdbiPjrP4%2FaxaEgawhdftjJL%2B%2F4Gh5vf9CP7j6e5MVu3pRxKzrZjY0Q%2BxpzSz8MJdJCyupSis7tktzAuLQUQPvKTWe%2Bfb3BrocWDR1sMbQfUsZEmON4WrgZGveoiylBGKSyPIDz6BK5lA5N0%2FX6NO88L6NRGvhpgzuc0c5RfIjmwDSCHO4krj6zLs0B5a%2BV%2F8VW5JvrmVltynVABK38AHnsvwOc%2FuB3iAGnXo003q2dwfgePAZHFeQeaik2H%2FMTqzcDf3nbQbu2JDwJoadLcjZJOdtcWV052%2BBwf495wWMmsbnRKNs4FTuGx98OMRkd39bB3fYMs8iKFxuLk6ELb7Ke4RX4rJA4wxlABxrwd2zH6rGzQ%2FcsczqVZ30TTE1O%2BsEYBtt%2BNARrnGpzL2FtrtDZOeVw56LSpW%2BDrn4D73nHQlvfGhQHWc8%2BfCI%2BUo7OIye%2F4kGOTk%2F2YQyNlkkTkm6CRBxs8ebyiTwudXIn2djYqbrI4rQyTlpRPl7u5RdZusQIg5oGWsdISycKYuh0eOf3w0hflAdFVcwO8%2BkVQ4W3jgcWoNk5Pcm7f1cfimFaoiMklyMuriIf7fuGZ%2FxXJo%2Fx6lym38W8EGEyP%2FvgHqBS4dG8K3HyoxZMDLAa1tZBiy3vt%2BL90rcPYBeV5B%2FmJMMGjPSW7LbNeUgVEgeVtF60Bxi10OGe2jxe49ipMjrbH3rPJZecmhquGR69vcCLjieinroonhOe61wOcMtPHaSyXcH6%2F%2BiXww7ZyLNrH92kB6MOn24s8FLUwULQpBZdD%2FPL%2FHWORuV8FkTjgMgZBc78CNpX%2B0p7sSbLbN5bhI9rq%2BmSA8W2fc07ezrV3BPNuk94KoDggHkbv1DDnqMXlXJqmMJob081AwqlNZT09%2BRqWqC1wgcBQRo9yruN6W3RozBGXtxNwXCmlaZbQt1xIHsYyQ6U4IIonDjTsdYNktxhvAmfwFKp4idhGpp9mfOqggEhxwFKGyYnmt%2BZZHmP3gW0simnK13LN7xITT%2BzH9fsiBi7%2FZOByQUcLrQ5ybPEsyU%2FosGbyOwHOYOxxL33LavqYQMzEA6d4Z5fpGG%2BCiH6t8%2B5mBX%2FI6JLJzfzMMQ53XAIDfPRtwKRkYnT16hj055o%2Fqa8HhboPcyl9gFGiAhetKokY2MbRXrUpwFj6iXPolB9nrn8NV5lEsOnUkTPnjDdRsBEFzB1i3uf8mqOK6pZ314MJU4cRTJpqR1aaZHgU6u7LON%2BSeBjdF1cEVGzAuMLhNfqJMLiq1JPcnNcHmQ%2FVJ6IAPfjOG01fQIPSW%2FUKBwwrGEdoRybPrph9JeMJLVGpMMvM1zBNLic7dJaPWxc5LOfeI5VHT4U32s7R3wzjXRF9r1DAgiFmGYwZHW2oqbscnWL28xnNXTc%2FwFoKF4ZbCYw7FgdcZQLIycrZhsFmWm8MRs4bZN6L9q9QgCrmDfb%2BwXuVHSL7pPxpBBd8g0hAdM18H6%2BsCqAY3%2BcUefObAOMW%2BJEAaCb3FNrOcqRS4qwygEPJvEFZj8T2q6QANZQZbyinQomed0bRUduCr4HxDHFPejbAyTMDjJnnoDjgxzTX74z4ovBc94fF991BAW8MMlvmDckaAhjNkyQJZVT7%2BonHV99xJ1ltRMkR%2BAHMGMkk2eJBd1BAFIDTYWJgvAOdw2Os26mKIP6d8RPPUyXD64O9O8IIhCpAHbRUzB%2BSdbYxXgEVMYXzcpf%2Fckg8ilfxPG9w1lDJIFnCSlIFRDvNHWRWUBEXzR%2Bc1cg3XmeA08PhWS5Zi1k%2BArCahBnU8ulX%2BIkWhVwj2iyL6bPIi7lSvIlH8Sqe02HlfwAAAP%2F%2Ffv%2BGxAAAAAZJREFUAwCEfganlN6elQAAAABJRU5ErkJggg%3D%3D%22%20width%3D%2264%22%20height%3D%2264%22%2F%3E%3C%2Fsvg%3E">
 <style>
-  /* ===== 主题变量：深色（默认） ===== */
+  
   :root, [data-theme="dark"]{
     --bg:#0f1420; --panel:#1a2233; --line:#2b3650; --txt:#e6ecf5; --mut:#8b97ad;
     --acc:#3da9fc; --ok:#36d399; --warn:#fbbd23; --err:#f87272;
-    /* 派生色（硬编码色替换） */
-    --bg-deep:#0d1320;    /* input / pre 背景 */
-    --bg-hover:#1f2740;   /* tr:hover */
-    --bg-subtle:#161d2c;  /* th / hl-row */
-    --bg-chip:#243049;    /* ghost btn / chip */
-    --shadow-rgba:0,0,0;  /* 用于 rgba(N,N,N,.4) 的 RGB 分量 */
-    --txt-on-acc:#04121f; /* 按钮文字色 */
+    
+    --bg-deep:#0d1320;    
+    --bg-hover:#1f2740;   
+    --bg-subtle:#161d2c;  
+    --bg-chip:#243049;    
+    --shadow-rgba:0,0,0;  
+    --txt-on-acc:#04121f; 
     --tag-ok-bg:#103a2a; --tag-pending-bg:#3a3410; --tag-err-bg:#3a1620; --tag-off-bg:#2a2f3d;
     --tag-a-bg:#10304a; --tag-b-bg:#2a2a10; --tag-c-bg:#103a2a;
     --err-box-bg:#3a1620; --err-box-border:#5a2230; --err-box-txt:#ffd7d7;
   }
-  /* ===== 主题变量：浅色 ===== */
+  
   [data-theme="light"]{
     --bg:#f4f6fa; --panel:#ffffff; --line:#d0d6e0; --txt:#1a2332; --mut:#6a7588;
     --acc:#1a73e8; --ok:#1a9e5c; --warn:#c4810c; --err:#d63636;
@@ -677,10 +699,10 @@ function renderPage(): string
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-  header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:relative}
+  header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:100}
   header h1{font-size:15px;margin:0;color:var(--acc);flex:0 0 auto}
   #brand img{height:22px;vertical-align:middle}
-  /* 桌面端：分类二级菜单（缩小尺寸） */
+  
   .desk-nav{display:flex;gap:2px;align-items:center}
   .navgrp{position:relative}
   .navgrp-btn{background:none;border:none;color:var(--mut);padding:7px 11px;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;display:flex;align-items:center;gap:4px}
@@ -690,7 +712,7 @@ function renderPage(): string
   .navgrp.open .navsub{display:flex}
   .navsub a{padding:8px 10px;border-radius:6px;color:var(--mut);text-decoration:none;white-space:nowrap;font-size:13px}
   .navsub a:hover,.navsub a.active{color:var(--txt);background:var(--bg-chip)}
-  /* 移动端面板容器（双列分类）初始隐藏 */
+  
   .mobile-panel{display:none}
   .login-logo{text-align:center;margin-bottom:14px}
   .login-logo img{height:56px}
@@ -710,8 +732,8 @@ function renderPage(): string
   table.sortable th .sort-arrow{font-size:11px;display:inline-block;width:10px}
   table.sortable th select{font-size:12px;padding:2px 6px}
   table.sortable th select:hover{background:var(--bg-chip)}
-  /* 右上角 toast 提示条：渐变卡片（与登录页公告框同风格），4 种状态色 + 复制成功专用色 */
-  /*  之前引用 --bg-card/--ok-bg 等未定义变量 → background 失效 → 透明。改用 --bg-subtle/--panel 渐变 + 类型色边框/左侧色条。 */
+  
+  
   .toast{background:linear-gradient(135deg,var(--bg-subtle),var(--panel));color:var(--txt);border:1px solid var(--line);border-left-width:3px;border-radius:10px;box-shadow:0 4px 18px rgba(var(--shadow-rgba),.14)}
   .toast.ok{border-left-color:var(--ok)}
   .toast.info{border-left-color:var(--acc)}
@@ -721,7 +743,7 @@ function renderPage(): string
   button,.btn{background:var(--acc);color:var(--txt-on-acc);border:0;padding:8px 14px;border-radius:7px;cursor:pointer;font-weight:600}
   button.ghost{background:var(--bg-chip);color:var(--txt)} button.danger{background:var(--tag-err-bg);color:var(--err)}
   input,select,textarea{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;font-family:inherit}
-  /* 自定义单选框 / 复选框（与主题一致；覆盖全局 width:100% 防止被拉伸成宽块） */
+  
   input[type="checkbox"], input[type="radio"]{
     -webkit-appearance:none;appearance:none;-moz-appearance:none;
     width:18px;height:18px;min-width:18px;max-width:18px;padding:0;margin:0;
@@ -738,8 +760,10 @@ function renderPage(): string
   .mp-grid a.mp-danger{color:var(--err)}
   label{display:block;color:var(--mut);margin:10px 0 4px;font-size:12px}
   .row{display:flex;gap:12px;flex-wrap:wrap} .row>div{flex:1;min-width:200px}
-  .modal{position:fixed;inset:0;background:rgba(var(--shadow-rgba),.55);display:none;align-items:center;justify-content:center}
-  .modal.show{display:flex} .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;width:min(560px,92vw);max-height:88vh;overflow:auto}
+  .modal{position:fixed;inset:0;background:rgba(var(--shadow-rgba),.55);display:flex;align-items:center;justify-content:center;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility 0s .2s}
+  .modal.show{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .2s ease}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;width:min(560px,92vw);max-height:88vh;overflow:auto;transform:scale(.94) translateY(8px);opacity:0;transition:transform .2s ease,opacity .2s ease}
+  .modal.show .box{transform:scale(1) translateY(0);opacity:1}
   .box h3{margin:0 0 8px}
   .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:var(--bg-chip);color:var(--mut)}
   .tag.ok{background:var(--tag-ok-bg);color:var(--ok)} .tag.pending{background:var(--tag-pending-bg);color:var(--warn)} .tag.err{background:var(--tag-err-bg);color:var(--err)} .tag.off{background:var(--tag-off-bg);color:var(--mut)}
@@ -751,14 +775,14 @@ function renderPage(): string
   .login-notice{margin-top:14px;display:flex;gap:10px;align-items:flex-start;background:linear-gradient(135deg,var(--bg-subtle),var(--panel));border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--txt);white-space:pre-wrap;line-height:1.6;word-break:break-word}
   .login-notice.single{justify-content:center;align-items:center}
   .login-notice .ln-ico{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc);margin-top:1px}
-  /* ===== 概览页增强：三环形图 / 消息总览 / 日志两栏 ===== */
+  
   .rings{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px}
   .ring-card{flex:1 1 200px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:18px}
   .ring{width:140px;height:140px;flex:0 0 auto}
   .ring-legend{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
   .hl-row{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-radius:9px;background:var(--bg-subtle)}
   .hl-row b{font-size:17px} .hl-row .pct{color:var(--mut);font-size:12px;font-weight:400}
-  /* 应用卡片附加行：设备模板 / 组播组（左右分栏） */
+  
   .hl-row.hl-split{margin-top:6px;padding:7px 14px;font-size:12px;color:var(--mut)}
   .hl-row.hl-split b{font-size:13px;color:var(--txt);margin-left:3px}
   .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
@@ -769,21 +793,27 @@ function renderPage(): string
   .msg-split b{color:var(--txt)} .msg-split .up{color:var(--ok)} .msg-split .down{color:var(--acc)}
   .log-cols{display:flex;gap:16px}
   .log-col{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-  .log-col h3{margin:0 0 10px;font-size:15px;color:var(--txt)}
+  .log-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;cursor:pointer}
+  .log-head h3{margin:0;font-size:15px;color:var(--txt);flex:1}
+  .log-fold{display:none;flex:0 0 auto;font-size:12px;color:var(--acc);cursor:pointer;user-select:none}
+  .log-head:hover .log-fold{text-decoration:underline}
+  .log-col.collapsed .log-body{display:none}
+  .log-more{flex:0 0 auto;font-size:12px;padding:4px 12px;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:6px;cursor:pointer}
+  .log-more:hover{opacity:.88}
   .log-row{padding:10px 2px;border-bottom:1px solid var(--line)} .log-row:last-child{border-bottom:0}
   .log-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .log-who{color:var(--mut);font-size:11px} .log-time{color:var(--mut);font-size:11px;margin-left:auto}
   .log-msg{margin-top:6px;font-size:13px;color:var(--txt);word-break:break-word;white-space:pre-wrap}
   .log-empty{padding:20px;text-align:center;color:var(--mut);font-size:13px}
   @media (max-width:860px){
-    /* 窄屏：桌面分类菜单隐藏，改用汉堡 + 双列分类面板 */
+    
     .desk-nav{display:none}
     .hamburger{display:block}
-    header{gap:10px;position:relative}
+    header{gap:10px;position:sticky;top:0}
     .who{display:none}
     .tb-account{display:none}
-    .mobile-panel{display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(var(--shadow-rgba),.12);padding:14px;max-height:82vh;overflow:auto}
-    .mobile-panel.open{display:block}
+    .mobile-panel{display:block;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 20px rgba(var(--shadow-rgba),.12);padding:0 14px;max-height:0;overflow:hidden;opacity:0;visibility:hidden;transition:max-height .28s ease,opacity .22s ease,padding .28s ease,visibility 0s .28s}
+    .mobile-panel.open{max-height:82vh;opacity:1;visibility:visible;padding:14px;overflow:auto;transition:max-height .28s ease,opacity .22s ease,padding .28s ease}
     .mp-group{margin-bottom:14px}
     .mp-glabel{font-size:12px;color:var(--acc);font-weight:600;margin-bottom:6px;padding-left:2px}
     .mp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -791,40 +821,63 @@ function renderPage(): string
     .mp-grid a.active{background:var(--bg-chip);border-color:var(--acc)}
   }
   @media (max-width:760px){
-    .ring-card{flex-direction:column;text-align:center}.ring-legend{width:100%}.msg-bar{flex-direction:column;align-items:flex-start;gap:12px}.msg-split{margin-left:0}.log-cols{flex-direction:column}
-    header{gap:12px;position:relative}
+    .ring-card{flex-direction:row;text-align:left;padding:12px 14px;gap:12px}
+    .ring-card .ring{width:108px;height:108px}
+    .ring-legend{width:auto;gap:5px}
+    .ring-legend .hl-row{padding:4px 8px;font-size:11px}
+    .ring-legend .hl-row b{font-size:14px}
+    .msg-bar{flex-direction:row;flex-wrap:wrap;gap:10px;padding:12px 14px}
+    .msg-split{margin-left:auto;gap:12px}
+    .msg-num{font-size:28px}
+    .log-cols{flex-direction:column}
+    .log-col{padding:12px 14px}
+    .log-head{margin-bottom:0}
+    .log-row{padding:10px 0}
+    .log-fold{display:inline-block}
+    header{gap:12px;position:sticky;top:0}
     .who{display:none}
-    /* 控件与小屏堆叠 */
+    
     .row{align-items:stretch}
     .row>div, .row>div[style*="flex:0 0"]{flex:1 1 100%!important;max-width:100%}
     .row select, .row input{width:100%}
-    /* 表格横向滚动，避免溢出 */
+    
     table{display:block;overflow-x:auto;white-space:nowrap;width:100%}
     main{padding:14px}
     .loracalc .grid{grid-template-columns:1fr}
   }
-  /* ===== 页面切换加载遮罩 ===== */
+  
   #loader{position:fixed;inset:0;background:rgba(var(--shadow-rgba),.3);display:none;align-items:center;justify-content:center;z-index:200}
   #loader.show{display:flex}
   #loader .spinner{width:44px;height:44px;border:4px solid rgba(var(--shadow-rgba),.12);border-top-color:var(--acc);border-radius:50%;animation:elw-spin .8s linear infinite}
   #loader .lbl{position:absolute;margin-top:74px;color:var(--mut);font-size:13px}
   @keyframes elw-spin{to{transform:rotate(360deg)}}
   .err-box{background:var(--err-box-bg);border:1px solid var(--err-box-border);color:var(--err-box-txt);padding:14px 16px;border-radius:10px;margin:8px 0}
-  /* 页面底部 footer：支持 HTML（由站点设置提供），暗色低对比度不抢戏 */
+  
   footer.site-footer{margin:24px 0 18px;padding:14px 64px;text-align:center;color:var(--mut);font-size:12px;border-top:1px solid var(--line)}
   footer.site-footer a{color:var(--mut);text-decoration:underline;text-decoration-color:var(--line)}
   footer.site-footer a:hover{color:var(--txt)}
   footer.site-footer.login-footer{margin:14px auto 0;max-width:380px;border:0;padding:0 18px}
 </style>
 <script>
-// 防止主题闪烁（FOUC）：在首次渲染前从 localStorage 或系统偏好读取并设置 data-theme
+
+
+
+
+
+
+
+
+
+
+
+
 (function(){
   var saved = localStorage.getItem('elw_theme');
   if(!saved){
     saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   document.documentElement.setAttribute('data-theme', saved);
-  // i18n：跟随站点语言设置 <html lang>，与当前界面语言保持一致（可为任意语言）
+  
   var _ul = window.UI_LANG || 'zh';
   document.documentElement.setAttribute('lang', _ul === 'en' ? 'en' : (_ul === 'zh' ? 'zh-CN' : _ul));
 })();
@@ -863,14 +916,2184 @@ function renderPage(): string
 <div id="loader"><div class="spinner"></div><div class="lbl">加载中…</div></div>
 
 <script>
-// ===== 主题切换 =====
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function getTheme(){ return document.documentElement.getAttribute('data-theme') || 'dark'; }
 function toggleTheme(){
   var next = getTheme() === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('elw_theme', next);
   updateThemeIcon(next);
-  // 重新渲染当前页：环形图(SVG 硬编码色需重建)、loracalc(注入的 style 需刷新)、apidocs
+  
   rerenderForTheme();
 }
 function rerenderForTheme(){
@@ -878,10 +3101,10 @@ function rerenderForTheme(){
   if (v === 'dashboard' && typeof viewDashboard === 'function') return viewDashboard();
   if (v === 'loracalc' && typeof viewLoraCalc === 'function') return viewLoraCalc();
   if (v === 'apidocs' && typeof viewApiDocs === 'function') return viewApiDocs();
-  // 其他页面纯 CSS 驱动，无需重建 DOM
+  
 }
-// 主题切换图标：dark 显示月亮（点切到亮），light 显示太阳（点切到暗）。
-// 16x16 stroke icon，跟随 currentColor 自适应主题色。
+
+
 const ICON_MOON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
 const ICON_SUN  = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
 function updateThemeIcon(t){
@@ -890,17 +3113,17 @@ function updateThemeIcon(t){
   btn.innerHTML = (t === 'dark' ? ICON_MOON : ICON_SUN);
   btn.setAttribute('aria-label', t === 'dark' ? '切换到浅色主题' : '切换到深色主题');
 }
-// 页面加载时同步按钮图标
+
 updateThemeIcon(getTheme());
 
-// ===== 国际化（i18n）=====
-// t(s)：取当前语言译文；未命中则回退原文（中文）。DOM walker 与 alert/confirm 共用。
+
+
 function t(s){
   if (typeof s !== 'string' || s === '') return s;
   return (window.I18N && window.I18N[s] !== undefined) ? window.I18N[s] : s;
 }
-// 遍历 root 下的文本节点 / placeholder / title / aria-label / 按钮 value，按中文原文替换为译文。
-// 不在字典中的字符串保持原样（中文），安全回退。
+
+
 function applyI18n(root){
   root = root || document;
   if (!window.I18N) return;
@@ -923,14 +3146,14 @@ function applyI18n(root){
     });
   }
 }
-// 动态内容（列表刷新、模态框、导航）自动翻译：监听 body 子树新增节点。
-// 仅监听 childList（不监听 characterData/attributes），翻译文本节点不会触发回环。
+
+
 const _i18nObserver = new MutationObserver(muts => {
   muts.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) applyI18n(n); }));
 });
 function startI18nObserver(){ _i18nObserver.observe(document.body, { childList: true, subtree: true }); }
-// 切换语言：拉取对应字典 → 设置全局变量与 <html lang> → 静默重渲染当前页
-// （模板源语言为中文，en 字典翻译、zh 字典保留中文，因此双向切换都正确）。
+
+
 async function loadDict(lang){
   try {
     const r = await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
@@ -942,16 +3165,16 @@ async function loadDict(lang){
 }
 function langAttr(lang){ return (lang === 'en') ? 'en' : (lang === 'zh' ? 'zh-CN' : lang); }
 async function applyLanguage(lang){
-  // 后台接口 /api/settings 已经把 ui_lang 写库，前端只需刷新整页让所有 DOM（含顶栏、nav、模态框占位等）
-  // 重新按新语言渲染；硬刷新最稳妥，避免遗漏的 DOM 片段还停留在旧语言。
+  
+  
   try {
     await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
   } catch(e){}
   location.reload();
 }
-// 让原生 alert/confirm 也走 i18n：浏览器对话框不在 DOM 中，walker 无法翻译。
-// alert 改为右上角 toast（非阻塞）；颜色按文本启发式判断（成功/失败/警告/信息）
-// confirm 保留原生阻塞对话框（用于 if (!confirm(...)) 同步判断；toast 改造需 Promise 化）
+
+
+
 const _origAlert = window.alert;
 const _toastType = (m) => {
   const s = String(m || '');
@@ -961,7 +3184,7 @@ const _toastType = (m) => {
   return 'info';
 };
 window.alert = (m) => {
-  // toast 工具已 hoist，调用安全
+  
   if (typeof toast === 'function') return toast(t(m), _toastType(m));
   return _origAlert.call(window, t(m));
 };
@@ -978,12 +3201,12 @@ async function boot(){
     if (r.ok) { const j = await r.json(); state.user = j.user; }
   } catch(e){}
   try { const rr = await fetch('/api/regions'); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
-  // 预取当前语言字典与可用语言清单，供界面渲染与「界面语言」下拉使用
+  
   if (!window.LANGS) { try { await loadDict(window.UI_LANG || 'zh'); } catch(e){} }
-  // 在判断登录态之前先对登录页（始终在 DOM 里的静态片段）做一次 i18n，
-  // 否则切换语言后登录页仍显示旧语言。renderShell 之后会再翻译一次。
+  
+  
   applyI18n(document);
-  // 拉取公开设置（站点名/logo/公告/footer）— 登录页与登录后界面都需用到
+  
   applyPublicSettings();
   renderShell();
 }
@@ -1000,23 +3223,23 @@ function renderShell(){
   document.getElementById('view').classList.remove('hidden');
   document.getElementById('who').textContent = state.user.username;
   renderNav();
-  // 每次登录/切换账号都刷新公共设置（站点名/logo/API 基础地址等），避免残留上一账号的旧值
+  
   applyPublicSettings();
-  // 支持直接访问 #hash 页面（如 /#settings）；无 hash 默认概览
+  
   nav((location.hash||'').slice(1)||'dashboard');
-  // 首次渲染完成后翻译整个文档，并启动动态内容自动翻译
+  
   applyI18n(document);
   startI18nObserver();
 }
 const isAdmin = () => state.user && state.user.role === 'admin';
 const isTenant = () => state.user && state.user.role === 'tenant';
 const isDemo = () => state.user && state.user.role === 'operator';
-// 可写角色：admin（全局）/ tenant（仅本租户）；operator（演示）只读
+
 const canWrite = () => state.user && ['admin','tenant'].includes(state.user.role);
-// demo 角色：按钮不隐藏，可以打开弹窗查看内容，但保存/删除按钮会被禁用
+
 const adminBtn = (html) => html;
 
-// 导航按功能分类；桌面端渲染为二级下拉，移动端渲染为双列分类面板。
+
 const NAV_GROUPS = [
   { label:'运行监控', items:[
     {v:'dashboard', text:'概览'},
@@ -1075,7 +3298,7 @@ function toggleGrp(btn){
 function closeGrps(){
   document.querySelectorAll('.navgrp.open').forEach(g => g.classList.remove('open'));
 }
-// 点击页面其他区域时收起已展开的分类下拉
+
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.navgrp')) closeGrps();
 });
@@ -1109,7 +3332,7 @@ const api = async (m,p,body) => {
   const text = await r.text();
   if (r.status === 401) { state.token = null; state.user = null; localStorage.removeItem('elw_token'); renderShell(); throw new Error('unauthorized'); }
   if (r.status === 403) {
-    // 演示账号写操作被后端 guardWrite 拒绝时给出友好提示（toast）
+    
     try { const ej = JSON.parse(text); if (ej.error && ej.error.indexOf('forbidden') !== -1) toast(t('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'), 'warn'); } catch(e) {}
   }
   if (r.status < 200 || r.status >= 300) {
@@ -1120,19 +3343,19 @@ const api = async (m,p,body) => {
   }
   let j;
   try { j = JSON.parse(text); } catch (e) { throw new Error('JSON 解析失败：' + text.slice(0, 300)); }
-  // 业务错误（HTTP 200 且带 error 字段，如「名称已存在」）：不抛异常，作为正常返回值交给调用方，
-  // 以便前端 `if(r.error){alert(t(r.error));return;}` 能展示友好提示（此前抛异常被 busy 吞掉→无提示）。
+  
+  
   if (j && j.error) return j;
   return j;
 };
 const hex = s => s || '-';
 const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-/**
- * 通用提示条（toast）：右上角悬浮，2.5s 后自动消失；同类合并；最多 3 条堆叠
- *   type: 'ok' | 'info' | 'warn' | 'err' | 'copy' （决定配色；'copy' = 复制成功，绿色 ok 色）
- *   支持点击 × 立即关闭
- */
+
+
+
+
+
 function toast(msg, type){
   const host = document.getElementById('toastHost') || (() => {
     const el = document.createElement('div');
@@ -1143,9 +3366,9 @@ function toast(msg, type){
   })();
   const item = document.createElement('div');
   item.className = 'toast ' + (type || 'info');
-  // 视觉（背景/边框/圆角/阴影）统一走 .toast CSS 类；inline 只保留布局与动画
+  
   item.style.cssText = 'pointer-events:auto;min-width:180px;max-width:380px;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.45;opacity:0;transform:translateX(20px);transition:opacity .2s, transform .2s';
-  // 颜色按 type 走 CSS class
+  
   const text = document.createElement('div');
   text.style.cssText = 'flex:1;word-break:break-word';
   text.textContent = msg;
@@ -1155,10 +3378,10 @@ function toast(msg, type){
   close.onclick = () => removeToast(item);
   item.appendChild(text);
   item.appendChild(close);
-  // 限制最多 3 条
+  
   while (host.children.length >= 3) host.removeChild(host.firstChild);
   host.appendChild(item);
-  // 触发动画
+  
   requestAnimationFrame(() => { item.style.opacity = '1'; item.style.transform = 'translateX(0)'; });
   setTimeout(() => removeToast(item), 2500);
 }
@@ -1168,22 +3391,22 @@ function removeToast(item){
   item.style.transform = 'translateX(20px)';
   setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 220);
 }
-/**
- * hex → 文本（UTF-8 解码）
- *   不可打印字节（控制字符 / 非 UTF-8）替换为 '·'；空字符串返回 '-'。
- *   仅作展示用，不改变原始 hex 字段（仍可在"JSON"弹窗看到原值）。
- */
+
+
+
+
+
 const hexToText = (s) => {
   if (!s) return '-';
   const clean = String(s).replace(/\s+/g, '');
   if (!clean) return '-';
-  if (!/^[0-9a-fA-F]+$/.test(clean) || (clean.length & 1)) return s; // 不是合法 hex，原样返回
+  if (!/^[0-9a-fA-F]+$/.test(clean) || (clean.length & 1)) return s; 
   const bytes = new Uint8Array(clean.length / 2);
   for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.substr(i*2, 2), 16);
   try {
-    // 先按 UTF-8 解码；含非 UTF-8 字节时浏览器会替换为 U+FFFD
+    
     const txt = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-    // 控制字符（除 \t \n \r）替换为 '·'，便于对齐
+    
     return txt.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '·');
   } catch (_) {
     return s;
@@ -1192,50 +3415,50 @@ const hexToText = (s) => {
 
 function showLoader(){ const l=document.getElementById('loader'); if(l) l.classList.add('show'); }
 function hideLoader(){ const l=document.getElementById('loader'); if(l) l.classList.remove('show'); }
-// 弹窗内保存/删除/发送：显示遮罩→执行异步操作→finally 隐藏，避免操作耗时无反馈、或接口卡住时页面无响应
+
 async function busy(label, fn){ showLoader(label); try { return await fn(); } finally { hideLoader(); } }
 
-/**
- * 通用筛选重置（带加载动画）：
- *   1. 清空租户过滤（所有列表页共用，旧的重置按钮普遍漏清它 → 列表仍被租户过滤，看起来"没重置"）；
- *   2. 执行页面专属清空（clearPageState 内联清本页筛选/分页）；
- *   3. 显示加载动画并重载视图。
- * 用法（内联按钮）：
- *   onclick="resetFilters(()=>{ state.xxx=''; state.xxxPage=1; state.xxxOffset=0; }, viewXxx)"
- * 页面无额外筛选时传 null：onclick="resetFilters(null, viewXxx)"
- */
+
+
+
+
+
+
+
+
+
 function resetFilters(clearPageState, viewFn){
   state.tenantFilter='';
   if (clearPageState) { try { clearPageState(); } catch (e) {} }
   busy('重置中…', () => viewFn());
 }
 
-// ===== 通用可排序/可筛选表格 =====
-// 排序规则（极简版）：
-//   - 默认只有「时间」列才可排序（firstDir=desc），其它列通过 sortable:false 关闭
-//   - 业务方需要给非时间列加排序时，单独给该列去掉 sortable:false，并指定 firstDir
-//   - 状态列（type='status'）若需要排序：opts.values 的顺序就是 sort 顺序（如 error > warn > info）
-/**
- * 构造带「点击表头排序 + 状态下拉筛选」的表格 HTML。
- * 排序与状态筛选完全在内存中完成（基于传入的 rows），不重新请求后端。
- *
- * 字段：
- *  - id 容器 id（用于点击事件作用域）
- *  - stateKey 排序状态写入 state[stateKey]，键形如 {col:'time', dir:'desc'}
- *  - cols: [{key, label, type, firstDir?, sortable?, opts?}]
- *      type: 'time' | 'num' | 'str' | 'status' | 'raw'  ← status 列会渲染下拉；raw 是占位列
- *      firstDir: 'asc' | 'desc'   ← 该列首次点击时的方向（time 列习惯 desc，其余 asc）
- *      sortable: false            ← 关闭该列排序：不显示箭头 + 不响应点击（仅 status 列还可保留下拉筛选）
- *      opts: 当 type='status' 时必填，{values:[{value,label,cls?}], getValue:row=>row.status}
- *  - rows: 当前数据集
- *  - rowHtml: (row) => string   ← 单行 HTML
- *  - emptyText: 数据空时显示的 colspan
- *  - defaultSort: {col, dir}
- *  - filterStatus: {col, value}   ← 当前状态过滤
- *  - onSortChange: (newSort) => void   ← 可选：排序变化时通知外层（用于持久化或重新 fetch）
- */
-// 管理列表页做「全量筛选+排序后分页」时使用：返回 [filteredSortedRows, total]
-// 与 buildSortableTable 内部逻辑保持一致（cfg 结构相同），避免两处实现漂移
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function filterAndSortRows(cfg){
   const filterList = cfg.filterStatusList
     ? cfg.filterStatusList
@@ -1279,7 +3502,7 @@ function filterAndSortRows(cfg){
   }
   return [rows, rows.length];
 }
-// 分页切片：rows 全量 → [当前页 rows, total, page, limit, offset]
+
 function paginateRows(rows, state, keys){
   const page = Math.max(1, +(state[keys.pageKey] || 1));
   const limit = Math.max(1, Math.min(500, +(state[keys.limitKey] || 50)));
@@ -1289,38 +3512,38 @@ function paginateRows(rows, state, keys){
   return [rows.slice(offset, offset + limit), total, page, limit, offset];
 }
 function buildSortableTable(cfg){
-  // 把 cfg 暴露到 window 上，让 _tableToggleSort 能在点表头时查 firstDir
+  
   if (cfg.refresh) {
     window.__tableCfg = window.__tableCfg || {};
     window.__tableCfg[cfg.refresh] = cfg;
   }
   const sort = cfg.state[cfg.stateKey] || cfg.defaultSort;
-  // presorted: 管理列表页已用 filterAndSortRows 完成筛选+排序+分页切片，
-  // 这里直接渲染传入的 rows（cfg.rows 已是当前页），不再重复筛选/排序。
+  
+  
   if (cfg.presorted) {
     return renderTable(cfg, sort);
   }
-  // 状态筛选：支持多列同时筛（cfg.filterStatusList 数组），单列 cfg.filterStatus 兼容
-  //   形如 [{col:'level', value:'error'}, {col:'type', value:'uplink'}]
+  
+  
   const filterList = cfg.filterStatusList
     ? cfg.filterStatusList
     : (cfg.filterStatus ? [cfg.filterStatus] : []);
   const fk = cfg.filterStatus ? cfg.filterStatus.col : null;
   const fv = cfg.filterStatus ? cfg.filterStatus.value : '';
-  // 应用状态过滤（按列分别匹配；多列 AND 关系）
+  
   let rows = cfg.rows || [];
   for (const f of filterList) {
     if (!f || !f.col || !f.value) continue;
     const fcol = cfg.cols.find(c => c.key === f.col);
     if (fcol && fcol.opts && fcol.opts.getValue) {
       const getV = fcol.opts.getValue;
-      // 支持「全部/具体值/类别（2xx/4xx）」三种匹配
+      
       const opt = fcol.opts.values.find(o => o.value === f.value);
       const matchFn = opt && opt.match ? opt.match : (v => String(v) === f.value);
       rows = rows.filter(r => matchFn(getV(r)));
     }
   }
-  // 应用排序
+  
   if (sort && sort.col) {
     const c = cfg.cols.find(x => x.key === sort.col);
     if (c) {
@@ -1330,10 +3553,10 @@ function buildSortableTable(cfg){
         if (c.type === 'time') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
         else if (c.type === 'num') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
         else if (c.type === 'status') {
-          // 状态列：按 opts.values 数组的「下标」排序（业务顺序）
-          //   - DL_STATUS 示例：[pending, scheduled, sent, acknowledged, failed, timeout, error]
-          //   - desc 时 error(6) 排首，pending(0) 排末（业务严重度降序）
-          //   - 不在 values 列表里的"未知状态"统一排到末尾（不参与业务顺序）
+          
+          
+          
+          
           const vals = c.opts && c.opts.values ? c.opts.values : [];
           const getV = c.opts && c.opts.getValue ? c.opts.getValue : (r => r[c.key]);
           const vaRaw = getV(a), vbRaw = getV(b);
@@ -1341,7 +3564,7 @@ function buildSortableTable(cfg){
           const ib = vals.findIndex(o => String(o.value) === String(vbRaw));
           const idxA = ia >= 0 ? ia : Number.MAX_SAFE_INTEGER;
           const idxB = ib >= 0 ? ib : Number.MAX_SAFE_INTEGER;
-          // 索引相等时（如两个都是未知状态）按 value 字典序做稳定排序
+          
           if (idxA === idxB) return String(vaRaw ?? '').localeCompare(String(vbRaw ?? '')) * dir;
           va = idxA; vb = idxB;
         }
@@ -1352,20 +3575,20 @@ function buildSortableTable(cfg){
       });
     }
   }
-  // 关键：把筛选/排序后的行写回 cfg.rows，renderTable 读取的是 cfg.rows！
-  // （否则日志页筛选/排序无效——renderTable 拿到的是原始 rows，箭头变了数据不动）
+  
+  
   cfg.rows = rows;
   return renderTable(cfg, sort);
 }
-// 表格 HTML 渲染（表头 + 行）。cfg.rows 即待渲染行：
-//   - 日志页：buildSortableTable 内部筛选/排序后的当前页
-//   - 管理列表页（presorted）：已由 filterAndSortRows + paginateRows 处理过的当前页
+
+
+
 function renderTable(cfg, sort){
   const rows = cfg.rows || [];
   const filterList = cfg.filterStatusList
     ? cfg.filterStatusList
     : (cfg.filterStatus ? [cfg.filterStatus] : []);
-  // 表头
+  
   const arrow = (k) => {
     if (!sort || sort.col !== k) return '<span class="sort-arrow" style="opacity:.3;margin-left:4px">↕</span>';
     return sort.dir === 'asc'
@@ -1373,8 +3596,8 @@ function renderTable(cfg, sort){
       : '<span class="sort-arrow" style="opacity:1;margin-left:4px;color:var(--acc)">↓</span>';
   };
   const header = cfg.cols.map(c => {
-    // 是否可排序：默认 true（除 raw 占位列）；c.sortable=false 显式关闭（不显示箭头 + 不响应点击）
-    // status 类型列默认 true（业务顺序排序）；如不需要可在列定义里 sortable:false（只保留下拉筛选）
+    
+    
     const sortable = c.sortable !== false && c.type !== 'raw';
     const cursor = sortable ? 'cursor:pointer' : '';
     const title = sortable ? `点表头排序（${c.label}）` : '';
@@ -1382,12 +3605,12 @@ function renderTable(cfg, sort){
       ? ` onclick="window['${cfg.stateKey}_sort']('${c.key}')"`
       : '';
     if (c.type === 'status') {
-      // 状态列表头：下拉负责筛选，箭头仅在 sortable=true 时显示
-      //   - opts.values 是「业务顺序」（用于 sort 时按下标排），如 [info, warn, error] 让 desc 时 error 排前
-      //   - 若 values 第一项 value 非空，会自动前置「全部」选项（value=''），UX 不变
+      
+      
+      
       const vals = c.opts.values || [];
       const allOpt = (vals[0] && vals[0].value !== '') ? [{value:'',label:'全部'}, ...vals] : vals;
-      // 命中本列的当前筛选值（多列筛选 filterStatusList）
+      
       const curF = filterList.find(f => f.col === c.key);
       const curVal = curF ? curF.value : '';
       const sel = `<select style="font-weight:600;background:transparent;border:0;color:var(--txt);${sortable?'cursor:pointer':'cursor:default'}" onchange="event.stopPropagation();window['${cfg.stateKey}_fstatus']('${c.key}', this.value)">` +
@@ -1397,53 +3620,53 @@ function renderTable(cfg, sort){
     }
     return `<th style="${cursor}" ${title?`title="${title}"`:''} ${onclick}>${esc(c.label)}${sortable?arrow(c.key):''}</th>`;
   }).join('');
-  // 行
+  
   const bodyHtml = rows.length
     ? rows.map(r => cfg.rowHtml(r)).join('')
     : `<tr><td colspan="${cfg.cols.length}" class="muted">${esc(cfg.emptyText||'暂无数据')}</td></tr>`;
   return `<table class="sortable"><thead><tr>${header}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
 }
 
-// 通用排序调度：state 上读/写 {col, dir}，三态循环（firstDir → 翻转 → 清除）
-//   - 点新列：进入 cfg[col].firstDir
-//     time 列习惯 desc（最新在上），数字列习惯 asc（弱信号 / 小值排前 → 排查问题），
-//     状态列习惯 desc（失败 / 错误排前），字符串列习惯 asc（字典序 / 0-9）
-//   - 点同列：翻转 dir（firstDir↔other）
-//   - 再点一次：清除排序，回原始顺序
-// key 是 state 上的字段名（upsSort / dlsSort / evsSort / apiLogSort），re 是对应刷新函数名
+
+
+
+
+
+
+
 function _tableToggleSort(key, re, col){
   const cur = state[key] || {col:null, dir:'desc'};
   if (cur.col !== col) {
-    // 新列：进入 firstDir
+    
     const cfg = (window.__tableCfg && window.__tableCfg[re]) || null;
     const c = cfg && cfg.cols ? cfg.cols.find(x => x.key === col) : null;
     const firstDir = (c && c.firstDir) ? c.firstDir : 'desc';
     state[key] = {col, dir:firstDir};
   }
   else {
-    // 同列：根据 firstDir 判断"再点是否进入清除"
+    
     const cfg = (window.__tableCfg && window.__tableCfg[re]) || null;
     const c = cfg && cfg.cols ? cfg.cols.find(x => x.key === col) : null;
     const firstDir = (c && c.firstDir) ? c.firstDir : 'desc';
-    if (cur.dir === firstDir) state[key] = {col, dir: firstDir==='desc' ? 'asc' : 'desc'}; // 翻转
-    else state[key] = {col:null, dir:'desc'}; // 已翻转过，再点清除
+    if (cur.dir === firstDir) state[key] = {col, dir: firstDir==='desc' ? 'asc' : 'desc'}; 
+    else state[key] = {col:null, dir:'desc'}; 
   }
   window[re]();
 }
-// 状态下拉筛选回调：按列写回对应 state 字段
-//   fieldName: 要写入的 state 字段名（如 evsFType），由各 view 注册时指定
+
+
 function _tableSetFStatus(fieldName, re, val){
   state[fieldName] = val;
   window[re]();
 }
 
-/**
- * 通用分页条：每页 N 条下拉 + 上一页/下一页/页码 + 跳到 X 页 + 共 N 条
- *  cfg: { total, limit, offset, pageKey, limitKey, refresh }
- *   - state[pageKey]   当前页号（1-based）
- *   - state[limitKey]  每页大小
- *   - refresh          调 window[refresh]()
- */
+
+
+
+
+
+
+
 function buildPager(cfg){
   const total = +cfg.total || 0;
   const limit = +cfg.limit || 50;
@@ -1452,7 +3675,7 @@ function buildPager(cfg){
   const pages = Math.max(1, Math.ceil(total / Math.max(1, limit)));
   const from = total === 0 ? 0 : (offset + 1);
   const to = Math.min(offset + limit, total);
-  // 窗口化页码：cur-2 .. cur+2
+  
   const win = [];
   for (let i = Math.max(1, cur - 2); i <= Math.min(pages, cur + 2); i++) win.push(i);
   const pageBtn = (p, label, extra) => {
@@ -1493,14 +3716,14 @@ function _pagerSetLimit(key, re, lim){
   state[key.offsetKey] = 0;
   window[re]();
 }
-// 切换页面：显示加载遮罩，渲染完成后（finally）再隐藏；渲染抛错时显示错误提示而非冻结页面。
-// silent=true 用于每 5 秒自动刷新，避免遮罩频繁闪烁。
+
+
 async function nav(v, silent=false){
   state.view = v;
   closeNav(); closeGrps();
   document.querySelectorAll('.nav').forEach(a=>a.classList.toggle('active', a.dataset.v===v));
   if(!silent){
-    // 同步地址栏 hash（不触发 hashchange，避免双渲染）；浏览器前进/后退/手改 hash 由 hashchange 监听处理
+    
     if((location.hash||'').slice(1)!==v) history.replaceState(null,'','#'+v);
     showLoader();
   }
@@ -1523,7 +3746,7 @@ async function nav(v, silent=false){
     else if (v==='apidocs') { await applyPublicSettings(); await viewApiDocs(); }
     else if (v==='settings') await viewSettings();
     else document.getElementById('view').innerHTML = '<div class="muted">未知页面</div>';
-    // 演示账号：列表页写操作按钮（删除/新建/停用/启用）灰禁用，但"编辑"可点击打开弹窗
+    
     if (isDemo()) disableDemoWriteButtons();
   } catch(e){
     if(!silent) document.getElementById('view').innerHTML = `<div class="err-box">加载失败：${esc(e && e.message ? e.message : e)}</div>`;
@@ -1534,16 +3757,16 @@ async function nav(v, silent=false){
 function toggleNav(){ document.getElementById('mobilePanel').classList.toggle('open'); }
 function closeNav(){ document.getElementById('mobilePanel').classList.remove('open'); }
 
-// 地址栏 hash 变化（浏览器前进/后退、手动修改 URL）→ 切换对应页面
+
 window.addEventListener('hashchange', ()=>{
   const v = (location.hash||'').slice(1) || 'dashboard';
   if (v !== state.view) nav(v);
 });
 
-// 自动刷新：只读的实时视图（概览/网关/上行/下行/日志）每 5 秒刷新；模态框打开时暂停，避免打断编辑
+
 const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','downlinks','events'];
 setInterval(()=>{
-  if (document.getElementById('modal').classList.contains('show')) return; // 弹窗打开时暂停
+  if (document.getElementById('modal').classList.contains('show')) return; 
   if (AUTO_REFRESH_VIEWS.includes(state.view)) nav(state.view, true);
 }, 5000);
 
@@ -1572,20 +3795,47 @@ async function viewDashboard(){
     </div>
 
     <div class="log-cols">
-      <div class="log-col">
-        <h3>最近设备日志</h3>
-        ${devLogs.length? devLogs.map(e=>dashLogRow(e,'dev #'+(e.dev_id||''))).join('') : '<div class="log-empty">暂无设备日志</div>'}
+      <div class="log-col" data-kind="dev">
+        <div class="log-head" onclick="toggleLogCol(this)">
+          <h3>最近设备日志</h3>
+          <span class="log-fold">▼ 展开</span>
+          <button class="log-more" onclick="event.stopPropagation();nav('events')">查看全部</button>
+        </div>
+        <div class="log-body">${devLogs.length? devLogs.map(e=>dashLogRow(e,'dev #'+(e.dev_id||''))).join('') : '<div class="log-empty">暂无设备日志</div>'}</div>
       </div>
-      <div class="log-col">
-        <h3>最近网关日志</h3>
-        ${gwLogs.length? gwLogs.map(e=>dashLogRow(e,'网关 '+esc(e.gateway_id||''))).join('') : '<div class="log-empty">暂无网关日志</div>'}
+      <div class="log-col" data-kind="gw">
+        <div class="log-head" onclick="toggleLogCol(this)">
+          <h3>最近网关日志</h3>
+          <span class="log-fold">▼ 展开</span>
+          <button class="log-more" onclick="event.stopPropagation();nav('events')">查看全部</button>
+        </div>
+        <div class="log-body">${gwLogs.length? gwLogs.map(e=>dashLogRow(e,'网关 '+esc(e.gateway_id||''))).join('') : '<div class="log-empty">暂无网关日志</div>'}</div>
       </div>
     </div>`;
+  if (window.innerWidth <= 760) document.querySelectorAll('.log-col').forEach(c=>c.classList.add('collapsed'));
 }
-/* 环形图卡片：split=true 时按 online(绿)/offline(红) 分段；否则整圈 accent 色显示总数。 */
+async function toggleLogCol(head){
+  if (window.innerWidth > 760) return;
+  const col = head.closest('.log-col');
+  const expanding = col.classList.contains('collapsed');
+  col.classList.toggle('collapsed');
+  const fold = col.querySelector('.log-fold');
+  if (fold) fold.textContent = expanding ? '▼ 折叠' : '▼ 展开';
+  if (!expanding) return;
+  const kind = col.getAttribute('data-kind');
+  try {
+    const r = await api('GET','/api/stats');
+    const logs = kind==='dev' ? (r.device_logs||[]) : (r.gateway_logs||[]);
+    const who = kind==='dev' ? e => ('dev #'+(e.dev_id||'')) : e => ('网关 '+esc(e.gateway_id||''));
+    col.querySelector('.log-body').innerHTML = logs.length
+      ? logs.map(e=>dashLogRow(e, who(e))).join('')
+      : '<div class="log-empty">暂无'+(kind==='dev'?'设备':'网关')+'日志</div>';
+  } catch(e){}
+}
+
 function dashRingCard(title, total, online, offline, split, extra){
   const r=70, cx=90, cy=90, sw=18, C=2*Math.PI*r;
-  // 从 CSS 变量取色，确保主题切换即时生效
+  
   const cs = getComputedStyle(document.documentElement);
   const cLine = cs.getPropertyValue('--line').trim() || '#2b3650';
   const cTxt  = cs.getPropertyValue('--txt').trim() || '#e6ecf5';
@@ -1612,7 +3862,7 @@ function dashRingCard(title, total, online, offline, split, extra){
   } else {
     legend = `<div class="hl-row"><span>应用总数</span><b>${total}</b></div>`;
   }
-  // 应用卡片附加行（设备模板 / 组播组，左右分栏）
+  
   legend += extra || '';
   return `<div class="ring-card">
     <svg viewBox="0 0 180 180" class="ring">${arcs}
@@ -1630,7 +3880,7 @@ function dashLogRow(ev, who){
     <div class="log-msg">${esc(ev.message||'')}</div>
   </div>`;
 }
-// 用户配置筛选下拉（仅 admin 可见；tenant 角色用户由后端强制过滤，无需此控件）
+
 async function tenantFilterHtml(){
   if (!isAdmin()) return '';
   let opts = '';
@@ -1661,7 +3911,7 @@ async function viewApplications(){
      <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`,
     emptyText:'暂无应用',
   };
-  // 管理列表页分页通用套路：全量筛选+排序 → 取总数 → 切片当前页 → presorted 渲染 + buildPager
+  
   const [filteredRows, filteredTotal] = filterAndSortRows(cfg);
   cfg.rows = paginateRows(filteredRows, state, {pageKey:'appsPage', limitKey:'appsLimit', offsetKey:'appsOffset'})[0];
   cfg.presorted = true;
@@ -1687,7 +3937,7 @@ async function viewDevices(){
   const apps = ar.data||[];
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? esc(a.name) : ('#'+id); };
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.devAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  // 分类下拉筛选：激活方式 / Class / 在线状态 / 入网状态（全部在最前）
+  
   const activationValues = [
     {value:'', label:'全部'},
     {value:'OTAA', label:'OTAA'},
@@ -1761,7 +4011,7 @@ async function viewDevices(){
   const table = buildSortableTable(devCfg);
   const pager = buildPager({ total: devsTotal, limit: state.devsLimit, offset: state.devsOffset, pageKey:'devsPage', limitKey:'devsLimit', offsetKey:'devsOffset', totalKey:'devsTotal', refresh:'viewDevices' });
   window.devsSort_sort = col => _tableToggleSort('devsSort','viewDevices',col);
-  // 4 个分类列的下拉筛选：colKey → state 字段
+  
   window.devsSort_fstatus = (col, v) => {
     const map = {activation:'devsFActivation', cls:'devsFCls', online:'devsFOnline', status:'devsFStatus'};
     _tableSetFStatus(map[col] || 'devsFStatus', 'viewDevices', v);
@@ -1777,7 +4027,7 @@ async function viewDevices(){
 async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
   const d=(state.devs||[]).find(x=>x.id===id); if(!d)return;
-  // 设备密钥：readonly input，点一下自动复制 + 右上角 toast
+  
   const kv=(label,val)=>`<label>${label}</label><input value="${esc(val||'')}" readonly style="cursor:pointer" title="点击自动复制" onclick="copyKeyField(this, '${label}')">`;
   openModal(`<h3>${t('设备密钥')} #${id} ${esc(d.name)}</h3>
     ${kv('DevEUI', d.dev_eui)}
@@ -1786,10 +4036,10 @@ async function deviceDetail(id){
       : kv('DevAddr', d.dev_addr) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
-/**
- * 复制 readonly input 的值到剪贴板 + 右上角 toast
- *   优先用 navigator.clipboard（异步），失败降级 document.execCommand
- */
+
+
+
+
 async function copyKeyField(input, label){
   const val = input.value || '';
   let ok = false;
@@ -1860,7 +4110,7 @@ async function viewUplinks(){
   const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : '', 'limit='+state.upsLimit, 'offset='+state.upsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
   if (typeof r.total === 'number') state.upsTotal = r.total;
-  // 设备下拉随应用筛选联动（后端 listDevices 支持 app_id）
+  
   const devQ = [tq, state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
     api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
@@ -1871,7 +4121,7 @@ async function viewUplinks(){
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.upsAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  // FCnt / Port 筛选：从当前页数据去重生成下拉选项（全部在最前，数值升序）
+  
   const fcntValues = [{value:'', label:'全部'}].concat(
     [...new Set((state.ups||[]).map(u=>u.fcnt).filter(v=>v!==null && v!==undefined && v!==''))].sort((a,b)=>a-b)
       .map(f=>({value:String(f), label:'FCnt '+f}))
@@ -1948,7 +4198,7 @@ async function showRaw(id){
   openModal(`<h3>${t('原始 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
-// ----------------------- 下行日志模块 -----------------------
+
 const DL_STATUS = {
   pending:    {label:'待发送', cls:'pending'},
   scheduled:  {label:'已调度', cls:'pending'},
@@ -1963,7 +4213,7 @@ async function viewDownlinks(){
   const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : '', 'limit='+state.dlsLimit, 'offset='+state.dlsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
   if (typeof r.total === 'number') state.dlsTotal = r.total;
-  // 设备下拉随应用筛选联动
+  
   const devQ = [tq, state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
     api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
@@ -1975,7 +4225,7 @@ async function viewDownlinks(){
   const devName = id => { const d = devs.find(x=>x.id===id); return d ? (d.name+' (#'+id+')') : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.dlDevFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.dlAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  // 状态筛选：状态列下拉；按 DL_STATUS 全部枚举 + 1 个"全部"
+  
   const statusValues = [
     {value:'',label:'全部'},
     ...Object.entries(DL_STATUS).map(([k,v]) => ({value:k,label:v.label})),
@@ -2037,7 +4287,7 @@ async function viewDownlinks(){
 }
 async function showDownlinkRaw(id){
   const d=(state.dls||[]).find(x=>x.id===id); if(!d)return;
-  // 优先显示后端存的原始报文（txpk 结构，downlinks.raw_json）；旧数据没有则回退解析结构
+  
   if (d.raw_json && d.raw_json !== '') {
     let proto = {};
     try { proto = JSON.parse(d.raw_json); } catch(e) {}
@@ -2047,7 +4297,7 @@ async function showDownlinkRaw(id){
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
     return;
   }
-  // 解析 payload_hex -> 字节数组 + 可打印 ASCII
+  
   let bytes=[], ascii='';
   const hexStr = (d.payload_hex||'').replace(/\s+/g,'');
   for (let i=0;i<hexStr.length;i+=2){ const b=parseInt(hexStr.substr(i,2),16); bytes.push(b); ascii += (b>=32&&b<127)?String.fromCharCode(b):'.'; }
@@ -2076,14 +4326,14 @@ async function showDownlinkRaw(id){
 
 async function viewEvents(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  // 拉取设备/网关列表供下拉筛选（随租户筛选联动）
+  
   const [rd, rg, tf] = await Promise.all([
     api('GET','/api/devices' + (tq ? '?'+tq : '')),
     api('GET','/api/gateways' + (tq ? '?'+tq : '')),
     tenantFilterHtml()
   ]);
   state.devs = rd.data||[]; state.gws = rg.data||[];
-  // 构建筛选查询串
+  
   let q = [];
   if (tq) q.push(tq);
   if (state.evsDevFilter) q.push('dev_id=' + state.evsDevFilter);
@@ -2100,16 +4350,16 @@ async function viewEvents(){
   const gwOpts = ['<option value="">全部网关</option>'].concat(
     state.gws.map(g=>`<option value="${esc(g.gw_id)}" ${g.gw_id===state.evsGwFilter?'selected':''}>${esc(g.gw_id)} · ${esc(g.name)}</option>`)
   ).join('');
-  // 级别筛选下拉（info / warn / error / 全部）
-  //   「全部」放在最前以符合用户习惯；排序按下标 0/1/2 走业务严重度（失败优先）
+  
+  
   const levelValues = [
     {value:'', label:'全部'},
     {value:'info',  label:'info · 信息'},
     {value:'warn',  label:'warn · 警告'},
     {value:'error', label:'error · 错误'},
   ];
-  // 类型筛选下拉：与 NetworkServer::logEvent 写入的 type 对齐（真实 DB 事件类型）
-  //   「全部」在最前；option 顺序即业务顺序（网关上下线 → 入网 → 上下行 → 确认 → FUOTA）
+  
+  
   const typeValues = [
     {value:'',       label:'全部'},
     {value:'gateway', label:'网关上下线'},
@@ -2145,7 +4395,7 @@ async function viewEvents(){
     rowHtml: e => {
       const lvl = e.level==='error' ? 'err' : (e.level==='warn' ? 'pending' : 'ok');
       const who = e.gateway_id ? ('gw '+e.gateway_id) : (e.dev_id ? ('dev #'+e.dev_id) : '');
-      // 类型徽章按真实事件类型分色：join 绿 / downlink 黄 / uplink 蓝灰 / gateway 灰 / 其余默认
+      
       const tCls = e.type==='join' ? 'ok' : (e.type==='downlink' || e.type==='txack' ? 'pending' : (e.type==='gateway' ? 'muted' : ''));
       return `<tr><td><span class="tag ${tCls}">${esc(e.type)}</span></td><td><span class="tag ${lvl}">${e.level}</span></td>
         <td class="muted">${esc(who)}</td><td>${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td>
@@ -2213,25 +4463,25 @@ async function viewUsers(){
     ${pager}`;
 }
 
-// ================= API 调用日志 =================
-// admin 看全部 + 租户/应用/IP 筛选；tenant 仅看本租户 + 应用筛选；operator 演示可看全部只读
+
+
 async function viewApiLogs(){
   const showTenant = isAdmin() || isDemo();
   const params = [];
   if (state.apiLogFilter.path) params.push('path_contains=' + encodeURIComponent(state.apiLogFilter.path));
   if (state.apiLogFilter.ip) params.push('ip=' + encodeURIComponent(state.apiLogFilter.ip));
-  // 状态筛选改为本地（更灵活：支持 2xx/3xx/4xx/5xx/具体码 几类合一）
+  
   if (state.apiLogFilter.method) params.push('method=' + state.apiLogFilter.method);
   if (showTenant && state.apiLogFilter.tenant_id) params.push('tenant_id=' + state.apiLogFilter.tenant_id);
   if (state.apiLogFilter.application_id) params.push('application_id=' + state.apiLogFilter.application_id);
-  // 分页：每页条数 + 当前偏移（由 buildPager / _pagerGo 维护）
+  
   params.push('limit=' + (state.apiLogLimit|0 || 50));
   params.push('offset=' + (state.apiLogOffset|0 || 0));
   const url = '/api/api-logs' + (params.length ? '?' + params.join('&') : '');
   const r = await api('GET', url);
   const rowsAll = (r.data || []);
   state.apiLogTotal = +r.total || 0;
-  // 拉取租户/应用下拉选项（admin）
+  
   let tenantOpts = '';
   let appOpts = '';
   if (showTenant) {
@@ -2249,7 +4499,7 @@ async function viewApiLogs(){
     if (s>=500) return `<span class="tag pending">${s}</span>`;
     return `<span class="tag">${s}</span>`;
   };
-  // 状态分类下拉：全部 / 2xx / 3xx / 4xx / 5xx / 具体码（在前端筛选）
+  
   const statusValues = [
     {value:'',label:'全部', match: () => true},
     {value:'2xx',label:'2xx 成功', match: s => s>=200 && s<300},
@@ -2341,7 +4591,7 @@ function resetApiLogFilter(){
   busy('重置中…', viewApiLogs);
 }
 
-// ================= 站点设置（仅 admin） =================
+
 async function viewSettings(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/settings'); const s = r.data||{};
@@ -2369,7 +4619,7 @@ async function viewSettings(){
         <h3>基础信息</h3>
         <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="HolaStack">
         <label>顶部图标 URL（可选，留空则显示文字名称）</label><input id="st_logo" value="${val('site_logo_url')}" placeholder="https://example.com/logo.png">
-        <label>站点 Favicon URL（可选，浏览器标签页小图标，推荐 .ico/.png/.svg）</label><input id="st_favicon" value="${val('favicon_url')}" placeholder="https://example.com/favicon.ico">
+        <label>站点 Favicon URL</label><input id="st_favicon" value="${val('favicon_url')}" placeholder="https://example.com/favicon.ico">
         <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
       </div>
       <div class="st-cat hidden" id="stcat-login">
@@ -2380,8 +4630,8 @@ async function viewSettings(){
       </div>
       <div class="st-cat hidden" id="stcat-footer">
         <h3>页脚与集成</h3>
-        <label>页面底部 Footer（支持 HTML，留空使用默认"© 年份 网站名称"，可用占位符 {Y}/{YEAR}/{SITE}）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
-        <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
+        <label>页面底部 Footer（支持 HTML）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
+        <label>API 基础地址</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
         <button class="ghost" onclick="nav('dashboard')">取消</button>
@@ -2390,7 +4640,7 @@ async function viewSettings(){
     </div>
   </div>`;
 }
-/* 站点设置分类切换（仿 apidocs 左栏）：仅显示当前分类；输入框全部保留在 DOM，saveSettings 一次提交不变 */
+
 function stCat(id, btn){
   document.querySelectorAll('.st-cat').forEach(c => c.classList.toggle('hidden', c.id !== 'stcat-'+id));
   document.querySelectorAll('.st-item').forEach(b => b.classList.toggle('active', b === btn));
@@ -2411,11 +4661,11 @@ async function saveSettings(){
   const r = await api('POST','/api/settings', body);
   if (r.error) { toast(r.error, 'err'); return; }
   await applyPublicSettings();
-  // 应用新语言：拉取对应字典并静默重渲染当前页（模板源语言为中文，双向切换都正确）
+  
   await applyLanguage(body.ui_lang);
   toast(t('设置已保存'), 'ok');
 }
-// 拉取公开设置并应用到顶栏品牌、登录页 LOGO、页面标题（无需登录即可读取）
+
 async function applyPublicSettings(){
   try {
     const r = await fetch('/api/public-settings');
@@ -2432,12 +4682,12 @@ async function applyPublicSettings(){
       else ll.innerHTML = '';
     }
     if (d.site_name) document.title = d.site_name;
-    // API 文档页 curl 示例的基础地址（留空则用当前站点 origin）
+    
     window.ELW_API_BASE_URL = d.api_base_url || '';
     const fav = document.getElementById('faviconLink');
     if (fav && d.favicon_url) fav.href = d.favicon_url;
-    // 页脚：服务端给的是 HTML 字符串，允许富文本（链接/版权符号等）；仅剥离 <script> 防止 XSS
-    // 注意：登录框内不再显示 footer，避免与底部页脚重复
+    
+    
     const siteName = d.site_name || 'HolaStack';
     const rawFooter = d.footer || ('© ' + new Date().getFullYear() + ' ' + siteName);
     const safeFooter = String(rawFooter).replace(/<script[\s\S]*?<\/script>/gi, '');
@@ -2449,7 +4699,7 @@ async function applyPublicSettings(){
     if (ln) {
       if (d.login_notice && d.login_notice.trim()) {
         ln.innerHTML = `<span class="ln-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg></span><span class="ln-txt">${esc(d.login_notice)}</span>`;
-        // 单行公告整体居中；多行（含换行）保持左对齐便于阅读
+        
         ln.classList.toggle('single', !/(\r\n|\n|\r)/.test(d.login_notice.trim()));
         ln.classList.remove('hidden');
       }
@@ -2458,7 +4708,7 @@ async function applyPublicSettings(){
   } catch(e) {}
 }
 async function changePw(){
-  // operator（演示）只读，禁止修改密码（含自己的）
+  
   if (isDemo()) {
     toast(t('演示模式：当前为只读账号，不能修改密码'), 'warn');
     return;
@@ -2498,7 +4748,7 @@ async function savePwFor(id){
   const r=await api('POST','/api/users/password',{user_id:id,new_password:np}); if(r.error){err.textContent=r.error;return;} closeModal(); alert('已修改该用户密码');
 }
 
-// 表单
+
 const randHex = (n) => Array.from({length:n},()=>Math.floor(Math.random()*16).toString(16)).join('');
 function newApplication(){ openModal(`<h3>新建应用</h3><label>名称</label><input id="m_name">
   <label>AppEUI（可选，留空自动随机生成）</label>
@@ -2514,7 +4764,7 @@ async function editApplication(id){ const r = await api('GET','/api/applications
   <label>描述</label><input id="m_desc" value="${esc(a.description)}">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveAppEdit(${id}))">保存</button></div>`); }
 async function saveAppEdit(id){ const r = await api('PUT',`/api/applications/${id}`,{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(t(r.error));return;} closeModal(); viewApplications(); }
-async function delApplication(id){ if(!confirm('确认删除该应用及其下所有设备？'))return; const r = await api('DELETE',`/api/applications/${id}`); if(r.error){alert(t(r.error));return;} viewApplications(); }
+async function delApplication(id){ confirmDlg('确认删除该应用及其下所有设备？', async ()=>{ const r = await api('DELETE',`/api/applications/${id}`); if(r.error){alert(t(r.error));return;} viewApplications(); }); }
 
 async function newDevice(appId){ const regions=regionOptions(""); const dps=await dpOptions(0);
   const ar = await api('GET','/api/applications'); const apps = ar.data||[];
@@ -2547,7 +4797,7 @@ async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class
   if(document.getElementById('m_join_eui')) body.join_eui=v('m_join_eui');
   if(document.getElementById('m_dev_addr')){ body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
   const r = await api('PUT',`/api/devices/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewDevices(); }
-async function delDevice(id){ if(!confirm('确认删除该设备及其上下行记录？'))return; const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(t(r.error));return;} viewDevices(); }
+async function delDevice(id){ confirmDlg('确认删除该设备及其上下行记录？', async ()=>{ const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(t(r.error));return;} viewDevices(); }); }
 
 function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveGateway)">保存</button></div>`); }
@@ -2556,7 +4806,7 @@ async function editGateway(gwId){ const r = await api('GET','/api/gateways'); co
   openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveGatewayEdit('${gwId}'))">保存</button></div>`); }
 async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
-async function delGateway(gwId){ if(!confirm('确认删除该网关？'))return; const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }
+async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
 function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><label class="check"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('发送中…', ()=>sendDown(${devId}))">发送</button></div>`); }
@@ -2587,29 +4837,29 @@ async function saveUser(){
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;
-    else body.new_tenant_name = v('m_user'); // 未指定 → 自动新建同名租户
+    else body.new_tenant_name = v('m_user'); 
   }
   const r = await api('POST','/api/users',body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
-async function delUser(id){ if(!confirm('确认删除该用户？'))return; const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(t(r.error));return;} viewUsers(); }
+async function delUser(id){ confirmDlg('确认删除该用户？', async ()=>{ const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(t(r.error));return;} viewUsers(); }); }
 
-// 设备模板下拉（含“默认模板”）
+
 async function dpOptions(sel){
   if(!state.dps.length){ const r=await api('GET','/api/device-profiles'); state.dps=r.data||[]; }
   return `<option value="0" ${(sel==0||sel===''||sel==null)?'selected':''}>默认模板</option>`+(state.dps||[]).map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
 }
 
-// ================= 设备模板 =================
+
 async function viewDeviceProfiles(){
   const q = state.tenantFilter ? ('?tenant_id='+state.tenantFilter) : '';
   const [r, tf] = await Promise.all([api('GET','/api/device-profiles'+q), tenantFilterHtml()]);
   state.dps = r.data||[];
-  // Class 列显示：A / B / C / B+C（由 supports_class_b / supports_class_c 组合）
+  
   const clsOf = d => {
     const cls = []; if(+d.supports_class_b) cls.push('B'); if(+d.supports_class_c) cls.push('C');
     return cls.length ? cls.join('+') : 'A';
   };
-  // 区域筛选：从数据去重（EU868 / CN470 / ...）
+  
   const regions = [...new Set((state.dps||[]).map(d=>d.region).filter(Boolean))].sort();
   const regionValues = [{value:'', label:'全部'}, ...regions.map(rg=>({value:rg, label:rg}))];
   const classValues = [
@@ -2662,7 +4912,7 @@ async function viewDeviceProfiles(){
     ${pager}`;
 }
 
-// ---------------- 用户配置 ----------------
+
 async function viewTenants(){
   const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
   const rows = state.tenants.map(row=>{
@@ -2674,12 +4924,12 @@ async function viewTenants(){
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('用户配置')}</h2>${adminBtn(`<button onclick="newTenant()">${t('+ 新建用户配置')}</button>`)}</div>
     <table><thead><tr><th>ID</th><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('私有网关上限')}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
-function tenantForm(t){
-  t = t || {};
-  const unlimited = +t.private_gateways_unlimited === 1;
-  const limit = t.private_gateways_limit || 0;
-  return `<label>${t('名称')}</label><input id="t_name" value="${esc(t.name||'')}">
-  <label>${t('描述')}</label><input id="t_desc" value="${esc(t.description||'')}">
+function tenantForm(d){
+  d = d || {};
+  const unlimited = +d.private_gateways_unlimited === 1;
+  const limit = d.private_gateways_limit || 0;
+  return `<label>${t('名称')}</label><input id="t_name" value="${esc(d.name||'')}">
+  <label>${t('描述')}</label><input id="t_desc" value="${esc(d.description||'')}">
   <div class="row" style="align-items:flex-end">
     <div><label>${t('启用私有网关上限')}</label>
       <label class="check" style="margin:6px 0 0">
@@ -2692,12 +4942,12 @@ function tenantForm(t){
   </div>`;
 }
 function newTenant(){
-  // 新建默认：启用上限 + 上限 0（用户明确要求"默认创建的用户为有上限且上限为0"）
+  
   openModal(`<h3>${t('新建用户配置')}</h3>${tenantForm({ private_gateways_unlimited: 0, private_gateways_limit: 0 })}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(0))">${t('保存')}</button></div>`);
 }
 async function saveTenant(id){
-  const unlimited = !document.getElementById('t_unlimited').checked; // 勾选=受限，不勾=无限
+  const unlimited = !document.getElementById('t_unlimited').checked; 
   const body = {
     name: v('t_name'),
     description: v('t_desc'),
@@ -2713,7 +4963,7 @@ async function editTenant(id){
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(${id}))">${t('保存')}</button></div>`);
 }
 async function delTenant(id){
-  if(!confirm(t('删除用户配置？其下资源将回退到默认用户配置。'))) return;
+  confirmDlg(t('删除用户配置？其下资源将回退到默认用户配置。'), async ()=>{ const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(t(r.error));return;} viewTenants(); });
   const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(t(r.error));return;} viewTenants();
 }
 function deviceProfileForm(d){
@@ -2732,7 +4982,7 @@ function deviceProfileForm(d){
     <div><label>ADR 算法</label><input id="m_adr" value="${esc(d.adr_algorithm||'default')}"></div>
     <div><label>编解码运行时</label><select id="m_codec">${codec(d.payload_codec_runtime||'NONE')}</select></div>
   </div>
-  <label>编解码脚本（JS / Cayenne 说明；纯 PHP 环境不支持 JS 运行时，仅 NONE/CAYENNE_LPP 生效）</label><textarea id="m_script">${esc(d.payload_codec_script||'')}</textarea>
+  <label>编解码脚本（仅 NONE / CAYENNE_LPP 生效）</label><textarea id="m_script">${esc(d.payload_codec_script||'')}</textarea>
   <div class="row">
     <div><label>支持 OTAA</label><select id="m_otaa">${yesno(d.supports_otaa)}</select></div>
     <div><label>支持 Class B</label><select id="m_cb">${yesno(d.supports_class_b)}</select></div>
@@ -2782,9 +5032,9 @@ async function editDeviceProfile(id){
   openModal(`<h3>${t('编辑模板')} #${id}</h3>${deviceProfileForm(d)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDeviceProfile(${id}))">保存</button></div>`);
 }
-async function delDeviceProfile(id){ if(!confirm('确认删除该模板？引用该模板的设备将回退到默认模板。'))return; const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }
+async function delDeviceProfile(id){ confirmDlg('确认删除该模板？引用该模板的设备将回退到默认模板。', async ()=>{ const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }); }
 
-// ================= API 密钥 =================
+
 async function viewApiKeys(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
@@ -2819,7 +5069,7 @@ async function viewApiKeys(){
   window.viewApiKeys__page = p => _pagerGo({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',p);
   window.viewApiKeys__limit = l => _pagerSetLimit({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',l);
   document.getElementById('view').innerHTML=`<h2>API 密钥</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${opts}</select></div>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';state.apiKeysPage=1;state.apiKeysOffset=0;state.apiKeysLimit=50;state.apiKeysSort={col:'time',dir:'desc'};}, viewApiKeys)">重置</button>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
    ${table}
    ${pager}`;
 }
@@ -2836,9 +5086,9 @@ async function saveApiKey(){
    <label>Token</label><input id="m_tok" value="${esc(token)}" readonly onclick="this.select()">
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button onclick="(navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('m_tok').value));closeModal();viewApiKeys()">我已复制，关闭</button></div>`);
 }
-async function delApiKey(id){ if(!confirm('确认删除该 API 密钥？'))return; const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }
+async function delApiKey(id){ confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
 
-// ================= 外部集成 =================
+
 async function viewIntegrations(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
@@ -2921,9 +5171,9 @@ async function saveIntegration(){
   const r=await api('POST','/api/integrations',body); if(r.error){alert(t(r.error));return;} closeModal(); viewIntegrations();
 }
 async function toggleIntegration(id,enabled){ const r=await api('PUT',`/api/integrations/${id}`,{enabled}); if(r.error){alert(t(r.error));return;} viewIntegrations(); }
-async function delIntegration(id){ if(!confirm('确认删除该外部集成？'))return; const r=await api('DELETE',`/api/integrations/${id}`); if(r.error){alert(t(r.error));return;} viewIntegrations(); }
+async function delIntegration(id){ confirmDlg('确认删除该外部集成？', async ()=>{ const r=await api('DELETE',`/api/integrations/${id}`); if(r.error){alert(t(r.error));return;} viewIntegrations(); }); }
 
-// ================= 组播组 =================
+
 async function viewMulticastGroups(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
   const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
@@ -2971,7 +5221,7 @@ async function saveMulticast(id){
 async function editMulticast(id){ const r=await api('GET',`/api/multicast-groups/${id}`); const m=r; if(!m||m.error){alert('未找到');return;}
   openModal(`<h3>${t('编辑组播组')} #${id}</h3>${multicastForm(m)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveMulticast(${id}))">保存</button></div>`); }
-async function delMulticast(id){ if(!confirm('确认删除该组播组及其设备/网关/队列？'))return; const r=await api('DELETE',`/api/multicast-groups/${id}`); if(r.error){alert(t(r.error));return;} viewMulticastGroups(); }
+async function delMulticast(id){ confirmDlg('确认删除该组播组及其设备/网关/队列？', async ()=>{ const r=await api('DELETE',`/api/multicast-groups/${id}`); if(r.error){alert(t(r.error));return;} viewMulticastGroups(); }); }
 async function mcDetail(id){
   const g = await api('GET',`/api/multicast-groups/${id}`);
   const devs = await api('GET',`/api/multicast-groups/${id}/devices`);
@@ -3001,7 +5251,7 @@ async function rmMcGw(id,e){ const r=await api('DELETE',`/api/multicast-groups/$
 function openModal(html){
   document.getElementById('modalBox').innerHTML=html;
   document.getElementById('modal').classList.add('show');
-  // 演示账号：禁用弹窗内写操作按钮（保存/删除等），保留"取消/关闭"与"随机生成"（后者只填表单不写库）
+  
   if (isDemo()) {
     document.querySelectorAll('#modalBox button').forEach(btn => {
       const txt = (btn.textContent || '').trim();
@@ -3013,8 +5263,8 @@ function openModal(html){
     });
   }
 }
-// 演示账号：禁用列表页中的"删除"/"停用"/"启用"按钮（不可逆写操作）。
-// "新建"/"编辑"不禁用（允许打开弹窗查看表单内容，弹窗内保存按钮由 openModal 禁用）。
+
+
 function disableDemoWriteButtons(){
   document.querySelectorAll('#view button').forEach(btn => {
     const txt = (btn.textContent || '').trim();
@@ -3027,8 +5277,22 @@ function disableDemoWriteButtons(){
   });
 }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
+window.alert = function(msg){
+  openModal(`<h3>${t('提示')}</h3><p style="margin:8px 0 16px;color:var(--txt);word-break:break-word">${esc(String(msg))}</p><div style="display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('关闭')}</button></div>`);
+};
+function confirmDlg(msg, onOk){
+  const box = document.getElementById('modalBox');
+  box.innerHTML = `<h3>${t('确认')}</h3><p style="margin:8px 0 16px;color:var(--txt);word-break:break-word">${esc(String(msg))}</p><div style="display:flex;gap:10px;justify-content:flex-end"><button class="ghost" data-act="cancel">${t('取消')}</button><button class="danger" data-act="ok">${t('删除')}</button></div>`;
+  document.getElementById('modal').classList.add('show');
+  box.querySelector('[data-act="cancel"]').onclick = closeModal;
+  box.querySelector('[data-act="ok"]').onclick = () => { closeModal(); onOk(); };
+  if (isDemo()) {
+    const ok = box.querySelector('[data-act="ok"]');
+    ok.disabled = true; ok.style.opacity = '0.45'; ok.style.cursor = 'not-allowed'; ok.title = '演示模式：只读账号不能进行实际操作';
+  }
+}
 function v(id){ return document.getElementById(id).value.trim(); }
-// 粘贴 MAC/EUI/密钥时自动去除冒号、连字符等分隔符，只保留十六进制字符
+
 function hexOnly(el){ el.value = el.value.replace(/[^0-9a-fA-F]/g,''); }
 
 boot();

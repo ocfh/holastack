@@ -1,11 +1,12 @@
 <?php
 namespace holastack\Web;
 
-/**
- * 服务端视图渲染器：把 LoRa 计算器 / API 文档等后台视图的模板与全部中文文案
- * 由 PHP 生成（经 elw_t() 按当前界面语言翻译），JS 仅保留计算引擎与交互逻辑。
- * 这样界面语言、样式与后台统一，不再把中文模板散落在各 .js 文件里。
- */
+
+
+
+
+
+
 class ViewRenderer
 {
     private static function regionOptions(): string
@@ -35,9 +36,12 @@ class ViewRenderer
             . '<option value="3">4/7</option><option value="4">4/8</option>';
     }
 
-    // ============================================================
-    //  LoRa / LoRaWAN 参数计算器
-    // ============================================================
+    
+
+    
+
+    
+
     public static function renderLoraCalc(): string
     {
         $t = 'elw_t';
@@ -273,14 +277,18 @@ class ViewRenderer
 HTML;
     }
 
-    // ============================================================
-    //  API 文档（应用开放 API v1）
-    // ============================================================
+    
+
+    
+
+    
+
     public static function renderApiDocs(): string
     {
         $t = 'elw_t';
         $groups = self::apiGroups();
-        // 字母排序标题/描述全部经 elw_t 翻译；先构建侧栏与详情
+        
+
         $side = '';
         $main = '';
         $first = true;
@@ -328,7 +336,8 @@ HTML;
     private static function adDetail(array $a, bool $active): string
     {
         $t = 'elw_t';
-        // 参数表
+        
+
         $paramsRows = '';
         if (!empty($a['params'])) {
             foreach ($a['params'] as $p) {
@@ -339,7 +348,8 @@ HTML;
         } else {
             $paramsRows = '<tr><td colspan="5" class="ad-note">' . $t('无参数') . '</td></tr>';
         }
-        // 响应字段
+        
+
         $respRows = '';
         if (!empty($a['respFields'])) {
             foreach ($a['respFields'] as $f) {
@@ -348,7 +358,8 @@ HTML;
         } else {
             $respRows = '<tr><td colspan="3" class="ad-note">—</td></tr>';
         }
-        // 错误码
+        
+
         $errRows = '';
         if (!empty($a['errors'])) {
             foreach ($a['errors'] as $e) {
@@ -357,10 +368,12 @@ HTML;
         } else {
             $errRows = '<tr><td colspan="2" class="ad-note">—</td></tr>';
         }
-        // curl 示例（服务端按 API 基础地址或空串）
+        
+
         $curl = self::adCurl($a);
         $body = self::adCode($curl);
-        // 响应示例 JSON
+        
+
         $respJson = json_encode($a['respExample'] ?? new \stdClass(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $bodyBlock = ($a['method'] === 'POST' && !empty($a['sample']))
             ? '<div class="ad-sec"><h3>' . $t('请求体 (JSON)') . '</h3>' . self::adCode(json_encode($a['sample'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</div>'
