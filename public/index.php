@@ -697,7 +697,7 @@ function renderPage(): string
   .hamburger{display:none;border:1px solid var(--line);background:var(--bg-deep);color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer;flex:0 0 auto}
   .spacer{flex:1}
   .who{color:var(--mut);font-size:12px}
-  main{padding:22px;max-width:1100px;margin:0 auto}
+  main{padding:0 64px}
   .cards{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;min-width:140px}
   .card .n{font-size:26px;font-weight:700;color:var(--acc)} .card .l{color:var(--mut);font-size:12px}
@@ -808,7 +808,7 @@ function renderPage(): string
   @keyframes elw-spin{to{transform:rotate(360deg)}}
   .err-box{background:var(--err-box-bg);border:1px solid var(--err-box-border);color:var(--err-box-txt);padding:14px 16px;border-radius:10px;margin:8px 0}
   /* 页面底部 footer：支持 HTML（由站点设置提供），暗色低对比度不抢戏 */
-  footer.site-footer{margin:24px auto 18px;padding:14px 18px;max-width:1100px;text-align:center;color:var(--mut);font-size:12px;border-top:1px solid var(--line)}
+  footer.site-footer{margin:24px 0 18px;padding:14px 64px;text-align:center;color:var(--mut);font-size:12px;border-top:1px solid var(--line)}
   footer.site-footer a{color:var(--mut);text-decoration:underline;text-decoration-color:var(--line)}
   footer.site-footer a:hover{color:var(--txt)}
   footer.site-footer.login-footer{margin:14px auto 0;max-width:380px;border:0;padding:0 18px}
@@ -965,7 +965,7 @@ window.alert = (m) => {
 const _origConfirm = window.confirm;
 window.confirm = (q) => _origConfirm.call(window, t(q));
 
-let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, dpsSort:{col:null,dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', devsFActivation:'', devsFCls:'', devsFOnline:'', devsFStatus:'', gwsFOnline:'', dpsFRegion:'', dpsFCls:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, appsPage:1, devsPage:1, gwsPage:1, usersPage:1, apiKeysPage:1, intgPage:1, dpsPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, appsLimit:50, devsLimit:50, gwsLimit:50, usersLimit:50, apiKeysLimit:50, intgLimit:50, dpsLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, appsOffset:0, devsOffset:0, gwsOffset:0, usersOffset:0, apiKeysOffset:0, intgOffset:0, dpsOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0, appsTotal:0, devsTotal:0, gwsTotal:0, usersTotal:0, apiKeysTotal:0, intgTotal:0, dpsTotal:0};
+let state = {user:null, token:null, view:'dashboard', stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, dpsSort:{col:null,dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', devsFActivation:'', devsFCls:'', devsFOnline:'', devsFStatus:'', gwsFOnline:'', dpsFRegion:'', dpsFCls:'', upsFFcnt:'', upsFPort:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, appsPage:1, devsPage:1, gwsPage:1, usersPage:1, apiKeysPage:1, intgPage:1, dpsPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, appsLimit:50, devsLimit:50, gwsLimit:50, usersLimit:50, apiKeysLimit:50, intgLimit:50, dpsLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, appsOffset:0, devsOffset:0, gwsOffset:0, usersOffset:0, apiKeysOffset:0, intgOffset:0, dpsOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0, appsTotal:0, devsTotal:0, gwsTotal:0, usersTotal:0, apiKeysTotal:0, intgTotal:0, dpsTotal:0};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -1334,6 +1334,9 @@ function buildSortableTable(cfg){
       });
     }
   }
+  // 关键：把筛选/排序后的行写回 cfg.rows，renderTable 读取的是 cfg.rows！
+  // （否则日志页筛选/排序无效——renderTable 拿到的是原始 rows，箭头变了数据不动）
+  cfg.rows = rows;
   return renderTable(cfg, sort);
 }
 // 表格 HTML 渲染（表头 + 行）。cfg.rows 即待渲染行：
@@ -1558,9 +1561,7 @@ async function viewDashboard(){
         <h3>最近网关日志</h3>
         ${gwLogs.length? gwLogs.map(e=>dashLogRow(e,'网关 '+esc(e.gateway_id||''))).join('') : '<div class="log-empty">暂无网关日志</div>'}
       </div>
-    </div>
-
-    <p class="muted" style="margin-top:16px">网络服务器监听 UDP 端口由 ELW_GW_UDP_PORT 配置（默认 1700）。先创建应用，再创建设备（OTAA 或 ABP，Class A/B/C），然后用网关连接并发送数据。</p>`;
+    </div>`;
 }
 /* 环形图卡片：split=true 时按 online(绿)/offline(红) 分段；否则整圈 accent 色显示总数。 */
 function dashRingCard(title, total, online, offline, split){
@@ -1762,7 +1763,6 @@ async function deviceDetail(id){
     ${d.activation==='OTAA'
       ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
       : kv('DevAddr', d.dev_addr) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
-    <p class="muted" style="font-size:12px">点击任意输入框即可复制到剪贴板（右上角有提示）。修改请点"编辑"。</p>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 /**
@@ -1850,16 +1850,25 @@ async function viewUplinks(){
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.upsAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
+  // FCnt / Port 筛选：从当前页数据去重生成下拉选项（全部在最前，数值升序）
+  const fcntValues = [{value:'', label:'全部'}].concat(
+    [...new Set((state.ups||[]).map(u=>u.fcnt).filter(v=>v!==null && v!==undefined && v!==''))].sort((a,b)=>a-b)
+      .map(f=>({value:String(f), label:'FCnt '+f}))
+  );
+  const portValues = [{value:'', label:'全部'}].concat(
+    [...new Set((state.ups||[]).map(u=>u.port).filter(v=>v!==null && v!==undefined && v!==''))].sort((a,b)=>a-b)
+      .map(p=>({value:String(p), label:'Port '+p}))
+  );
   const table = buildSortableTable({
     state, stateKey:'upsSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (u, k) => ({id:u.id, app:appName(u.app_id), dev_addr:u.dev_addr, fcnt:u.fcnt, port:u.port, confirmed:u.confirmed?1:0, payload:u.decrypted_hex, text:hexToText(u.decrypted_hex), phy:u.phy_payload, gw:u.gateway_id, rssi_snr:(u.rssi??'-') + ' / ' + (u.snr??'-'), time:u.received_at}[k]),
+    cellValue: (u, k) => ({id:u.id, app:appName(u.app_id), dev_addr:u.dev_addr, fcnt:u.fcnt, port:u.port, confirmed:(+u.confirmed)?1:0, payload:u.decrypted_hex, text:hexToText(u.decrypted_hex), phy:u.phy_payload, gw:u.gateway_id, rssi_snr:(u.rssi??'-') + ' / ' + (u.snr??'-'), time:u.received_at}[k]),
     cols:[
       {key:'id',        label:'ID',                   type:'str', firstDir:'asc', sortable:false},
       {key:'app',       label:'应用',                  type:'str', firstDir:'asc', sortable:false},
       {key:'dev_addr',  label:'DevAddr',              type:'str', firstDir:'asc', sortable:false},
-      {key:'fcnt',      label:'FCnt',                 type:'num', firstDir:'asc', sortable:false},
-      {key:'port',      label:'Port',                 type:'num', firstDir:'asc', sortable:false},
+      {key:'fcnt',      label:'FCnt',                 type:'status', firstDir:'asc', sortable:false, opts:{getValue:u=>u.fcnt, values:fcntValues}},
+      {key:'port',      label:'Port',                 type:'status', firstDir:'asc', sortable:false, opts:{getValue:u=>u.port, values:portValues}},
       {key:'confirmed', label:'确认',                  type:'num', firstDir:'asc', sortable:false},
       {key:'payload',   label:'解密 payload (hex)',   type:'str', firstDir:'asc', sortable:false},
       {key:'text',      label:'解密 payload (文本)',  type:'str', firstDir:'asc', sortable:false},
@@ -1869,13 +1878,17 @@ async function viewUplinks(){
       {key:'time',      label:'时间',                  type:'time', firstDir:'desc'},
       {key:'_raw',      label:'',                     type:'raw'},
     ],
+    filterStatusList: [
+      {col:'fcnt', value: state.upsFFcnt},
+      {col:'port', value: state.upsFPort},
+    ],
     rows: state.ups,
     rowHtml: u => {
       const textDisp = hexToText(u.decrypted_hex);
       return `<tr><td>${u.id}</td>
       <td class="muted"><span class="pill" style="margin:0">${esc(appName(u.app_id))}</span></td>
       <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(u.dev_addr)}</a></td>
-      <td>${u.fcnt}</td><td>${u.port}</td><td>${u.confirmed?'✓':'-'}</td>
+      <td>${u.fcnt}</td><td>${u.port}</td><td>${(u.confirmed==1||u.confirmed==='1')?'✓':'-'}</td>
       <td><code>${hex(u.decrypted_hex)}</code></td>
       <td class="muted" style="font-family:monospace;word-break:break-all;max-width:280px">${esc(textDisp)}</td>
       <td><code class="muted">${hex(u.phy_payload)}</code></td>
@@ -1892,18 +1905,25 @@ async function viewUplinks(){
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsPage=1;state.upsOffset=0;state.upsLimit=50;state.tenantFilter='';viewUplinks()">重置</button>
+      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsFFcnt='';state.upsFPort='';state.upsPage=1;state.upsOffset=0;state.upsLimit=50;state.tenantFilter='';viewUplinks()">重置</button>
     </div>
-    <p class="muted">应用维度已在每行"应用"标签中区分；phy 列为原始 LoRaWAN 帧（hex）；点 DevAddr 跳转到设备；点"JSON"查看网关上报元数据。点击表头可排序（再次点击切换方向，第三次清除）。</p>
     ${table}
     ${pager}`;
   window.upsSort_sort = col => _tableToggleSort('upsSort','viewUplinks',col);
+  window.upsSort_fstatus = (col, v) => {
+    const map = {fcnt:'upsFFcnt', port:'upsFPort'};
+    _tableSetFStatus(map[col] || 'upsFPort', 'viewUplinks', v);
+  };
   window.viewUplinks__page = p => _pagerGo({pageKey:'upsPage',limitKey:'upsLimit',offsetKey:'upsOffset',totalKey:'upsTotal'},'viewUplinks',p);
   window.viewUplinks__limit = l => _pagerSetLimit({pageKey:'upsPage',limitKey:'upsLimit',offsetKey:'upsOffset',totalKey:'upsTotal'},'viewUplinks',l);
 }
 async function showRaw(id){
   const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
   let j={}; try { j = u.raw_json ? JSON.parse(u.raw_json) : {}; } catch(e){}
+  if (!Object.keys(j).length) {
+    openModal(`<h3>${t('原始 JSON')} #${id}</h3><p class="muted">该上行无原始协议报文。</p><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    return;
+  }
   openModal(`<h3>${t('原始 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
@@ -1987,7 +2007,6 @@ async function viewDownlinks(){
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${devOpts}</select></div>
       <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';state.tenantFilter='';viewDownlinks()">重置</button>
     </div>
-    <p class="muted">点"JSON"查看下行记录的结构化（格式化）与解析展示（含 payload 解码）。点击表头可排序（再次点击切换方向，第三次清除）；状态列是下拉筛选器。</p>
     ${table}
     ${pager}`;
   window.dlsSort_sort = col => _tableToggleSort('dlsSort','viewDownlinks',col);
@@ -1997,6 +2016,16 @@ async function viewDownlinks(){
 }
 async function showDownlinkRaw(id){
   const d=(state.dls||[]).find(x=>x.id===id); if(!d)return;
+  // 优先显示后端存的原始报文（txpk 结构，downlinks.raw_json）；旧数据没有则回退解析结构
+  if (d.raw_json && d.raw_json !== '') {
+    let proto = {};
+    try { proto = JSON.parse(d.raw_json); } catch(e) {}
+    openModal(`<h3>${t('下行 JSON')} #${id}</h3>
+      <p class="muted" style="margin:4px 0 10px">网关协议原文（txpk / phy_payload）</p>
+      <pre>${esc(JSON.stringify(proto, null, 2))}</pre>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    return;
+  }
   // 解析 payload_hex -> 字节数组 + 可打印 ASCII
   let bytes=[], ascii='';
   const hexStr = (d.payload_hex||'').replace(/\s+/g,'');
@@ -2111,7 +2140,6 @@ async function viewEvents(){
       <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${gwOpts}</select></div>
       <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50; state.tenantFilter=''; viewEvents()">重置</button>
     </div>
-    <p class="muted">网关上下线 / 入网 / 上行 / 下行 / 错误等事件。点"JSON"查看事件原始数据，上行事件的 JSON 含网关上报元数据（rxpk）。点击表头可排序（仅时间列），类型与级别列是下拉筛选器。</p>
     ${table}
     ${pager}`;
   window.evsSort_sort = col => _tableToggleSort('evsSort','viewEvents',col);
@@ -2121,8 +2149,12 @@ async function viewEvents(){
 }
 async function showEventRaw(id){
   const e=(state.evs||[]).find(x=>x.id===id); if(!e)return;
-  let j={}; try { j = e.raw_json ? JSON.parse(e.raw_json) : {}; } catch(err){}
-  if (!Object.keys(j).length) { j = e; delete j.raw_json; }
+  let j=null;
+  if (e.raw_json) { try { j = JSON.parse(e.raw_json); } catch(err){} }
+  if (!j || !Object.keys(j).length) {
+    openModal(`<h3>${t('事件 JSON')} #${id}</h3><p class="muted">该事件无原始协议报文（网关系统事件 / 流程事件）。</p><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    return;
+  }
   openModal(`<h3>${t('事件 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 async function viewUsers(){
@@ -2255,7 +2287,6 @@ async function viewApiLogs(){
        <div style="flex:0 0 auto"><button onclick="applyApiLogFilter()">${t('应用筛选')}</button> <button class="ghost" onclick="resetApiLogFilter()">${t('重置')}</button></div>
      </div>
    </div>
-   <p class="muted" style="margin:-4px 0 10px">${t('点击表头可排序（再次点击切换方向，第三次清除）；状态列是下拉筛选器（全部/2xx/3xx/4xx/5xx/具体码）。')}</p>
    ${table}
    ${pager}`;
   window.apiLogSort_sort = col => _tableToggleSort('apiLogSort','viewApiLogs',col);

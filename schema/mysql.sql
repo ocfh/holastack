@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS devices (
     battery INT DEFAULT -1,
     margin INT DEFAULT NULL,
     dev_status_req_at INT DEFAULT 0,
+    device_time_valid TINYINT NOT NULL DEFAULT 0,
+    device_time INT NOT NULL DEFAULT 0,
     latitude DOUBLE DEFAULT 0,
     longitude DOUBLE DEFAULT 0,
     altitude DOUBLE DEFAULT 0,
@@ -128,6 +130,7 @@ CREATE TABLE IF NOT EXISTS downlinks (
     sent_at INT DEFAULT 0,
     transmissions INT NOT NULL DEFAULT 0,
     acknowledged_at INT DEFAULT 0,
+    raw_json TEXT,
     INDEX idx_downlinks_dev (dev_id)
 );
 

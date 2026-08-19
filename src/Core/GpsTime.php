@@ -17,19 +17,16 @@ class GpsTime
     /** 1980 年至今累计闰秒（截至 2026 年 = 18 秒）。 */
     public const LEAP_SECONDS = 18;
 
-    /** Unix 秒 → GPS 秒（截断到 32 位）。 */
     public static function toGps(int $unixSec): int
     {
         return (int) (($unixSec - self::GPS_EPOCH_UNIX - self::LEAP_SECONDS) & 0xFFFFFFFF);
     }
 
-    /** GPS 秒 → Unix 秒。 */
     public static function fromGps(int $gpsSec): int
     {
         return (int) ($gpsSec + self::GPS_EPOCH_UNIX + self::LEAP_SECONDS);
     }
 
-    /** 当前 Unix 秒 → GPS 秒。 */
     public static function nowGps(): int
     {
         return self::toGps(time());

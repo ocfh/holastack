@@ -17,6 +17,12 @@ class Region
         'EU868' => [
             'rx2_frequency' => 869525000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 869525000,
+            'beacon_dr' => 3,
+            'beacon_rfu1' => 2,
+            'beacon_rfu2' => 0,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -38,6 +44,12 @@ class Region
         'US915' => [
             'rx2_frequency' => 923300000,
             'rx2_dr' => 8,
+            'beacon_frequency' => 923300000,
+            'beacon_dr' => 8,
+            'beacon_rfu1' => 5,
+            'beacon_rfu2' => 3,
+            'beacon_nb_channels' => 8,
+            'beacon_channel_step' => 600000,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -62,6 +74,12 @@ class Region
         'CN470' => [
             'rx2_frequency' => 505300000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 508300000,
+            'beacon_dr' => 2,
+            'beacon_rfu1' => 3,
+            'beacon_rfu2' => 1,
+            'beacon_nb_channels' => 8,
+            'beacon_channel_step' => 200000,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -81,6 +99,12 @@ class Region
         'AS923' => [
             'rx2_frequency' => 921400000,
             'rx2_dr' => 2,
+            'beacon_frequency' => 923400000,
+            'beacon_dr' => 3,
+            'beacon_rfu1' => 2,
+            'beacon_rfu2' => 0,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -101,6 +125,12 @@ class Region
         'AU915' => [
             'rx2_frequency' => 923300000,
             'rx2_dr' => 8,
+            'beacon_frequency' => 923300000,
+            'beacon_dr' => 10,
+            'beacon_rfu1' => 3,
+            'beacon_rfu2' => 1,
+            'beacon_nb_channels' => 8,
+            'beacon_channel_step' => 600000,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -127,6 +157,12 @@ class Region
         'CN779' => [
             'rx2_frequency' => 786000000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 785000000,
+            'beacon_dr' => 3,
+            'beacon_rfu1' => 2,
+            'beacon_rfu2' => 0,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -147,6 +183,12 @@ class Region
         'EU433' => [
             'rx2_frequency' => 434665000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 434665000,
+            'beacon_dr' => 3,
+            'beacon_rfu1' => 2,
+            'beacon_rfu2' => 0,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -167,6 +209,12 @@ class Region
         'IN865' => [
             'rx2_frequency' => 866550000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 866550000,
+            'beacon_dr' => 4,
+            'beacon_rfu1' => 1,
+            'beacon_rfu2' => 3,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -187,6 +235,12 @@ class Region
         'KR920' => [
             'rx2_frequency' => 921900000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 923100000,
+            'beacon_dr' => 3,
+            'beacon_rfu1' => 2,
+            'beacon_rfu2' => 0,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -206,6 +260,12 @@ class Region
         'RU864' => [
             'rx2_frequency' => 869100000,
             'rx2_dr' => 0,
+            'beacon_frequency' => 869100000,
+            'beacon_dr' => 3,
+            'beacon_rfu1' => 2,
+            'beacon_rfu2' => 0,
+            'beacon_nb_channels' => 1,
+            'beacon_channel_step' => 0,
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -245,7 +305,6 @@ class Region
         return array_keys(self::$REGIONS);
     }
 
-    /** 返回频段详细信息（用于前端展示/设备创建时选择）。 */
     public static function allDetails(): array
     {
         $out = [];
@@ -253,6 +312,8 @@ class Region
             $out[$name] = [
                 'rx2_frequency' => $cfg['rx2_frequency'],
                 'rx2_dr' => $cfg['rx2_dr'],
+                'beacon_frequency' => $cfg['beacon_frequency'],
+                'beacon_dr' => $cfg['beacon_dr'],
                 'receive_delay1' => $cfg['receive_delay1'],
                 'receive_delay2' => $cfg['receive_delay2'],
                 'join_accept_delay1' => $cfg['join_accept_delay1'],
@@ -295,6 +356,34 @@ class Region
 
     public function getRx2Frequency(): int { return (int) $this->cfg['rx2_frequency']; }
     public function getRx2DataRate(): int { return (int) $this->cfg['rx2_dr']; }
+    /** Class B 信标频点（Hz）/ 数据速率索引（对齐 ChirpStack region beacon 配置）。 */
+    public function getBeaconFrequency(): int { return (int) $this->cfg['beacon_frequency']; }
+    public function getBeaconDataRate(): int { return (int) $this->cfg['beacon_dr']; }
+    /** Class B 信标 RFU1 长度（字节），区域相关（EU868=2 / CN470=3 / US915=5 / AU915=3 / IN865=1…）。 */
+    public function getBeaconRfu1(): int { return (int) ($this->cfg['beacon_rfu1'] ?? 0); }
+    public function getBeaconRfu2(): int { return (int) ($this->cfg['beacon_rfu2'] ?? 0); }
+    public function getBeaconNbChannels(): int { return (int) ($this->cfg['beacon_nb_channels'] ?? 1); }
+    public function getBeaconChannelStep(): int { return (int) ($this->cfg['beacon_channel_step'] ?? 0); }
+
+    /**
+     * Class B 信标频点（Hz），含跳频。
+     *   freq = beacon_frequency + (floor(beaconGps / 128) % nb_channels) * channel_step
+     * nb_channels<=1 或 step<=0 时返回固定 beacon_frequency（EU868 / AS923 / 单信道区域）。
+     * 对齐固件 RegionCN470.c 的 PHY_BEACON_CHANNEL_FREQ 跳频公式：
+     *   CN470      = 508.3MHz + (floor(beacon/128) % 8) * 200kHz
+     *   US915/AU915 = 923.3MHz + (floor(beacon/128) % 8) * 600kHz
+     */
+    public function getBeaconChannelFrequency(int $beaconGps): int
+    {
+        $base = (int) $this->cfg['beacon_frequency'];
+        $nb = (int) ($this->cfg['beacon_nb_channels'] ?? 1);
+        $step = (int) ($this->cfg['beacon_channel_step'] ?? 0);
+        if ($nb <= 1 || $step <= 0) {
+            return $base;
+        }
+        $idx = (intdiv($beaconGps, 128) % $nb + $nb) % $nb;
+        return $base + $idx * $step;
+    }
     public function getReceiveDelay1(): int { return (int) $this->cfg['receive_delay1']; }
     public function getReceiveDelay2(): int { return (int) $this->cfg['receive_delay2']; }
     public function getJoinAcceptDelay1(): int { return (int) $this->cfg['join_accept_delay1']; }

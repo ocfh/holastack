@@ -98,6 +98,7 @@ class Frame
             'dev_addr'  => $devAddr,
             'fctrl'     => $fctrl,
             'adr'       => ($fctrl & 0x80) ? 1 : 0,
+            'adr_ack_req' => ($fctrl & 0x40) ? 1 : 0,
             'ack'       => ($fctrl & 0x20) ? 1 : 0,
             'fopts'     => $fopts,
             'fcnt_lo'   => $fcntLo,
@@ -108,7 +109,6 @@ class Frame
         ];
     }
 
-    /** 根据已保存的 32 位上行计数还原完整 32 位帧计数。 */
     public static function fullFCnt(int $fcntLo, int $lastFCnt): int
     {
         $lastHi = ($lastFCnt >> 16) & 0xFFFF;
@@ -192,7 +192,6 @@ class Frame
         return "\x20" . $encryptedBody;
     }
 
-    /** 1.1 上行数据 MIC 校验（双密钥 B0+B1）。 */
     public static function verifyDataMIC1_1(string $fNwkSIntKey, string $sNwkSIntKey, string $devAddr, int $fcnt, string $dataWithoutMic, string $mic, int $txDr = 0, int $txCh = 0): bool
     {
         return LoRaWANCrypto::dataMICUp1_1($fNwkSIntKey, $sNwkSIntKey, $devAddr, $fcnt, $dataWithoutMic, $txDr, $txCh) === $mic;

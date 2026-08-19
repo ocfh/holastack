@@ -10,13 +10,11 @@ use holastack\DB\Database;
  */
 class ApiKey
 {
-    /** 生成形如 "holask-<40hex>" 的 API Key 明文。 */
     public static function generateToken(): string
     {
         return 'holask-' . bin2hex(random_bytes(20));
     }
 
-    /** 创建 API Key，返回 ['token'=>明文, 'id'=>...]；明文仅此一次。 */
     public static function create(int $applicationId, string $name): array
     {
         if ($applicationId <= 0) {
@@ -35,7 +33,6 @@ class ApiKey
         return ['id' => Database::lastInsertId(), 'token' => $token, 'name' => $name, 'created_at' => $now];
     }
 
-    /** 校验 API Key 明文，返回对应 application_id（无效返回 0）。 */
     public static function validate(string $token): int
     {
         if ($token === '' || $token === null) {
@@ -50,7 +47,6 @@ class ApiKey
         return 0;
     }
 
-    /** 从请求中提取 API Key：仅认 Authorization: Bearer 与 ?api_key=（不接收登录令牌 X-Elw-Token）。 */
     public static function tokenFromRequest(): ?string
     {
         $h = $_SERVER['HTTP_AUTHORIZATION'] ?? '';

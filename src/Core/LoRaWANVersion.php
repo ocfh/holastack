@@ -18,10 +18,6 @@ class LoRaWANVersion
     /** 未知/空版本一律按 1.0 处理（向后兼容）。 */
     public const DEFAULT = '1.0.3';
 
-    /**
-     * 归一化版本字符串 → "major.minor" 两段式（如 "1.0" / "1.1"）。
-     * 容忍 "1.0.4" / "1.0" / "1.1.0" / "v1.0.3" 等写法。
-     */
     public static function normalize(string $v): string
     {
         $v = strtolower(trim($v));
@@ -32,7 +28,6 @@ class LoRaWANVersion
         return $m[1] . '.' . $m[2];
     }
 
-    /** 是否 LoRaWAN 1.1 及以上（含 Regional Parameters 随版本变化）。 */
     public static function is1_1(string $v): bool
     {
         $n = self::normalize($v);
@@ -40,19 +35,16 @@ class LoRaWANVersion
         return $maj > 1 || ($maj === 1 && $min >= 1);
     }
 
-    /** 是否 LoRaWAN 1.0.x 族（含 1.0.3 / 1.0.4 等）。 */
     public static function is1_0(string $v): bool
     {
         return !self::is1_1($v);
     }
 
-    /** 大版本族标识：'1.0' 或 '1.1'。 */
     public static function family(string $v): string
     {
         return self::is1_1($v) ? '1.1' : '1.0';
     }
 
-    /** 取 MAC 版本数字（如 "1.0.3"），空则返回默认。 */
     public static function value(string $v): string
     {
         $v = trim($v);

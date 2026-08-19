@@ -8,7 +8,6 @@ namespace holastack\Web;
  */
 class ViewRenderer
 {
-    /** 计算器：可选区域（中文+翻译）。 */
     private static function regionOptions(): string
     {
         $list = [
@@ -30,7 +29,6 @@ class ViewRenderer
         return $out;
     }
 
-    /** 计算器：数据率下拉选项（由 JS 按区域填充，这里只给空壳）。 */
     private static function crOptions(): string
     {
         return '<option value="1" selected>4/5</option><option value="2">4/6</option>'
@@ -317,7 +315,6 @@ HTML;
 HTML;
     }
 
-    /** 安全读取站点设置（DB 不可用时回退默认值）。 */
     private static function setting(string $key, string $default = ''): string
     {
         try {
@@ -327,7 +324,6 @@ HTML;
         }
     }
 
-    /** 单个 API 详情块。 */
     private static function adDetail(array $a, bool $active): string
     {
         $t = 'elw_t';
@@ -409,7 +405,6 @@ HTML;
         return 'curl -X ' . $a['method'] . ' "' . $url . "\" \\\n  -H \"Authorization: Bearer <YOUR_API_KEY>\"";
     }
 
-    /** API 文档数据（服务端唯一数据源，文案经 elw_t 服务端翻译）。 */
     private static function apiGroups(): array
     {
         return [

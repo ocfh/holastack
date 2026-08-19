@@ -41,7 +41,6 @@ class Auth
         return null;
     }
 
-    /** 校验账号密码，成功返回用户记录（含 id/username/role），失败返回 null。 */
     public static function authenticate(string $username, string $password): ?array
     {
         $user = Database::fetch(
@@ -57,7 +56,6 @@ class Auth
         return $user;
     }
 
-    /** 签发令牌：清掉该用户旧令牌后写入新令牌，返回令牌字符串。 */
     public static function issueToken(array $user): string
     {
         $token = bin2hex(random_bytes(32));
@@ -69,7 +67,6 @@ class Auth
         return $token;
     }
 
-    /** 按令牌查出用户记录；无效/过期返回 null。 */
     public static function userFromToken(?string $token): ?array
     {
         if (!$token) {
@@ -115,7 +112,6 @@ class Auth
         return true;
     }
 
-    /** 注销：删除指定令牌（缺省则清除当前请求令牌）。 */
     public static function logout(?string $token = null): void
     {
         $token = $token ?? self::tokenFromRequest();
@@ -161,7 +157,6 @@ class Auth
 
     // ---------------- 守卫（Guard）----------------
 
-    /** API 守卫：未登录或角色不足则输出 JSON 错误并终止。minRole 支持 admin / tenant / operator。 */
     public static function guardApi(string $minRole = self::ROLE_OPERATOR): void
     {
         if (!self::isLoggedIn()) {
@@ -178,7 +173,6 @@ class Auth
         }
     }
 
-    /** 页面守卫：未登录跳转到 /login。 */
     public static function guardPage(): void
     {
         if (!self::isLoggedIn()) {
@@ -190,7 +184,6 @@ class Auth
         }
     }
 
-    /** 写操作守卫：admin / tenant 可写，operator（演示）只读。未登录 401，权限不足 403。 */
     public static function guardWrite(): void
     {
         $u = self::currentUser();

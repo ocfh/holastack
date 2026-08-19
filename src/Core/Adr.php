@@ -110,7 +110,6 @@ class Adr
         return self::REQUIRED_HISTORY;
     }
 
-    /** 与当前 tx_power_index 相同的历史条目数。 */
     private static function historyCountForTxPower(array $req): int
     {
         $history = $req['uplink_history'] ?? [];
@@ -136,7 +135,6 @@ class Adr
         return $max;
     }
 
-    /** 上行丢包率（百分比）。历史不足时不计算，返回 0。 */
     private static function packetLossPct(array $req): float
     {
         $history = $req['uplink_history'] ?? [];
@@ -157,7 +155,6 @@ class Adr
         return ($lost / count($history)) * 100.0;
     }
 
-    /** nb_trans 查表：行=丢包率档位，列=当前 nb_trans(1..3)。 */
     private static function getNbTrans(int $currentNbTrans, float $pktLossRate): int
     {
         $table = [
@@ -178,7 +175,6 @@ class Adr
         return $table[3][$idx];
     }
 
-    /** 求区域允许的最大 LoRa 125kHz 数据速率索引。 */
     private static function maxLoraDr($region, int $maxDr): int
     {
         if ($region instanceof Region) {

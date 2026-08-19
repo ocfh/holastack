@@ -11,14 +11,12 @@ namespace holastack\Install;
  */
 class Installer
 {
-    /** 安装向导当前语言（zh / en / ...），取自会话所选，缺省 zh。与 lib 端设置无关，安装阶段站点尚未建。 */
     private static function lang(): string
     {
         $l = (string)($_SESSION['install_lang'] ?? 'zh');
         return preg_replace('/[^A-Za-z0-9_-]/', '', $l) ?: 'zh';
     }
 
-    /** 翻译安装向导文案：以会话所选语言查 lang/<lang>.php 词典，缺失回退中文原文。 */
     private static function tl(string $zh): string
     {
         return elw_t($zh, self::lang());
@@ -52,7 +50,6 @@ class Installer
         }
     }
 
-    /** AJAX：仅测试数据库连接，不写入任何东西。 */
     private static function testDb(array $g): array
     {
         $dbType = ($g['db_type'] ?? 'mysql') === 'sqlite' ? 'sqlite' : 'mysql';
@@ -106,7 +103,6 @@ class Installer
         return ['ok' => false, 'error' => implode('；', $errors)];
     }
 
-    /** 把用户输入的 SQLite 相对/绝对路径解析为绝对路径。默认 ELW_ROOT/runtime/server.db。 */
     private static function resolveSqlitePath(string $file): string
     {
         // 去掉潜在的 "sqlite:" 前缀与首尾空白

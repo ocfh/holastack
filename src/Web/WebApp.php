@@ -39,7 +39,6 @@ class WebApp
         ];
     }
 
-    /** 计算生效的租户过滤值；null = 不过滤（全部）。admin 可显式指定，tenant 固定本租户，operator 看全部。 */
     private static function effectiveTenant(?int $explicit = null): ?int
     {
         $s = self::scope();
@@ -52,7 +51,6 @@ class WebApp
         return $s['tenant_id'];
     }
 
-    /** 校验当前用户能否访问该资源行（写操作/单资源操作前调用）。tenant 要求归属本租户。 */
     private static function canAccess(array $row, string $tenantCol = 'tenant_id'): bool
     {
         $s = self::scope();
@@ -62,7 +60,6 @@ class WebApp
         return (int) ($row[$tenantCol] ?? 0) === $s['tenant_id'];
     }
 
-    /** 创建资源时写入的 tenant_id：admin 可显式指定（body.tenant_id），tenant 固定本租户。 */
     private static function createTenantId(array $p = []): int
     {
         $s = self::scope();
@@ -72,14 +69,12 @@ class WebApp
         return $s['tenant_id'];
     }
 
-    /** 当前作用域内是否可见指定应用（null=全部可见时恒真）。 */
     private static function appInScope(int $appId): bool
     {
         $appIds = self::visibleAppIds();
         return $appIds === null || in_array($appId, $appIds, true);
     }
 
-    /** 当前作用域内可见的应用 ID 列表；null = 全部可见。 */
     private static function visibleAppIds(?int $explicit = null): ?array
     {
         $tid = self::effectiveTenant($explicit);

@@ -14,13 +14,11 @@ class AES
         return openssl_encrypt($data, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
     }
 
-    /** AES-128 ECB 解密（无填充）。 */
     public static function ecbDecrypt(string $key, string $data): string
     {
         return openssl_decrypt($data, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
     }
 
-    /** 两个等长二进制串逐字节异或。 */
     public static function xorBytes(string $a, string $b): string
     {
         $len = strlen($a);
@@ -31,7 +29,6 @@ class AES
         return $out;
     }
 
-    /** 128 位整数左移 1 位（用于 CMAC 子密钥生成）。 */
     private static function leftShift128(string $block): string
     {
         $carry = 0;

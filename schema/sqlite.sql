@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS devices (
     battery INTEGER DEFAULT -1,
     margin INTEGER DEFAULT NULL,
     dev_status_req_at INTEGER DEFAULT 0,
+    device_time_valid INTEGER NOT NULL DEFAULT 0,
+    device_time INTEGER NOT NULL DEFAULT 0,
     latitude REAL DEFAULT 0,
     longitude REAL DEFAULT 0,
     altitude REAL DEFAULT 0,
@@ -127,7 +129,8 @@ CREATE TABLE IF NOT EXISTS downlinks (
     created_at INTEGER NOT NULL,
     sent_at INTEGER DEFAULT 0,
     transmissions INTEGER NOT NULL DEFAULT 0,
-    acknowledged_at INTEGER DEFAULT 0
+    acknowledged_at INTEGER DEFAULT 0,
+    raw_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS auth_tokens (

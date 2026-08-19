@@ -57,7 +57,6 @@ class Database
         return (int) self::pdo()->lastInsertId();
     }
 
-    /** 若列不存在则补齐（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。 */
     private static function ensureColumn(string $table, string $column, string $def): void
     {
         $cols = self::pdo()->query("PRAGMA table_info($table)")->fetchAll(\PDO::FETCH_COLUMN, 1);
@@ -66,7 +65,6 @@ class Database
         }
     }
 
-    /** MySQL 下判断列是否存在（用于兼容已存在的旧库加列）。 */
     private static function mysqlColumnExists(string $table, string $column): bool
     {
         $pdo = self::pdo();
@@ -77,7 +75,6 @@ class Database
         return (int) $r > 0;
     }
 
-    /** 初始化数据库结构（按 DSN 类型选择 sqlite/mysql schema）。 */
     public static function migrate(): void
     {
         $dsn = ELW_DB_DSN;
@@ -114,6 +111,8 @@ class Database
                 ['devices', 'rx2_dr', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'rx2_frequency', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'rx_delay', 'INTEGER NOT NULL DEFAULT 1'],
+                ['devices', 'device_time', 'INTEGER NOT NULL DEFAULT 0'],
+                ['devices', 'device_time_valid', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'max_supported_tx_power_index', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'min_supported_tx_power_index', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'enabled_uplink_channel_indices', 'TEXT DEFAULT \'\''],
@@ -131,6 +130,7 @@ class Database
                 ['uplinks', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['downlinks', 'transmissions', 'INTEGER NOT NULL DEFAULT 0'],
                 ['downlinks', 'acknowledged_at', 'INTEGER DEFAULT 0'],
+                ['downlinks', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['applications', 'callback_url', 'TEXT DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
@@ -259,6 +259,11 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INT AUTO_INCREMENT PRIMARY KEY, created_at INT NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path VARCHAR(255) DEFAULT \'\', status INT NOT NULL DEFAULT 0, latency_ms INT NOT NULL DEFAULT 0, ip VARCHAR(64) DEFAULT \'\', user_id INT NOT NULL DEFAULT 0, username VARCHAR(64) DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INT NOT NULL DEFAULT 0, application_id INT NOT NULL DEFAULT 0, query VARCHAR(512) DEFAULT \'\', body_size INT NOT NULL DEFAULT 0, INDEX idx_api_logs_tenant (tenant_id), INDEX idx_api_logs_app (application_id), INDEX idx_api_logs_created (created_at))');
             foreach ([
                 ['devices', 'last_seen', 'INT DEFAULT 0'],
+                ['devices', 'last_gw_id', 'VARCHAR(32) DEFAULT \'\''],
+                ['devices', 'ping_period', 'INT DEFAULT 0'],
+                ['devices', 'beacon_epoch', 'INT NOT NULL DEFAULT 0'],
+                ['devices', 'device_time', 'INT NOT NULL DEFAULT 0'],
+                ['devices', 'device_time_valid', 'TINYINT NOT NULL DEFAULT 0'],
                 ['devices', 'device_profile_id', 'INT DEFAULT 0'],
                 ['devices', 'mac_version', 'VARCHAR(16) DEFAULT \'1.0.3\''],
                 ['devices', 'nwk_key', 'VARCHAR(64) DEFAULT \'\''],
@@ -297,6 +302,7 @@ class Database
                 ['multicast_groups', 'tenant_id', 'INT DEFAULT 0'],
                 ['downlinks', 'transmissions', 'INT DEFAULT 0'],
                 ['downlinks', 'acknowledged_at', 'INT DEFAULT 0'],
+                ['downlinks', 'raw_json', 'TEXT'],
                 ['roaming_servers', 'net_id', 'VARCHAR(6) DEFAULT \'\''],
                 ['roaming_servers', 'kek_label', 'VARCHAR(32) DEFAULT \'\''],
                 ['roaming_servers', 'ca_cert', 'TEXT'],

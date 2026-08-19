@@ -35,6 +35,7 @@ class MacCommands
     public const CID_REJOIN_PARAM_SETUP_REQ = 0x0F;
     public const CID_PING_SLOT_INFO_REQ     = 0x10;
     public const CID_PING_SLOT_CHANNEL_REQ  = 0x11;
+    public const CID_BEACON_TIMING_REQ      = 0x12;
     public const CID_BEACON_FREQ_REQ        = 0x13;
     public const CID_DEVICE_MODE_IND        = 0x20;
     public const CID_RESET_IND              = 0x21;
@@ -62,11 +63,17 @@ class MacCommands
     public const CID_REJOIN_PARAM_SETUP_ANS= 0x0F;
     public const CID_PING_SLOT_INFO_ANS    = 0x10;
     public const CID_PING_SLOT_CHANNEL_ANS = 0x11;
+    public const CID_BEACON_TIMING_ANS     = 0x12;
     public const CID_BEACON_FREQ_ANS       = 0x13;
     public const CID_DEVICE_MODE_CONF      = 0x20;
     public const CID_RESET_CONF            = 0x21;
 
-    /** 解析原始 MAC 字节流 → [['cid'=>int,'payload'=>string(去 CID 后的剩余字节)], ...] */
+    // GPS 纪元（1980-01-06 00:00:00 UTC）相对 Unix 纪元（1970-01-01）的秒数偏移。
+    private const GPS_EPOCH_OFFSET = 315964800;
+    // 自 GPS 纪元以来插入 UTC 的闰秒数（GPS 时间 = UTC + 闰秒）。
+    // 截至 2026 年最后一个闰秒为 2016-12-31，累计 18 秒，与 ChirpStack gpstime.rs 一致。
+    private const GPS_LEAP_SECONDS = 18;
+
     public static function parse(string $bytes): array
     {
         $out = [];
@@ -88,7 +95,6 @@ class MacCommands
         return $out;
     }
 
-    /** 标准 MAC 命令负载长度（CID 之后的有效字节；未知返回 -1）。FUOTA 消歧扫描复用。 */
     public static function cmdLen(int $cid): int
     {
         switch ($cid) {
@@ -122,6 +128,8 @@ class MacCommands
             case self::CID_PING_SLOT_INFO_ANS:     return 0;
             case self::CID_PING_SLOT_CHANNEL_REQ:  return 4;
             case self::CID_PING_SLOT_CHANNEL_ANS:  return 1;
+            case self::CID_BEACON_TIMING_REQ:      return 0;
+            case self::CID_BEACON_TIMING_ANS:      return 3;
             case self::CID_BEACON_FREQ_REQ:        return 3;
             case self::CID_BEACON_FREQ_ANS:        return 1;
             case self::CID_DEVICE_MODE_IND:        return 1;
@@ -234,11 +242,12 @@ class MacCommands
     {
         switch ($cid) {
             case self::CID_LINK_CHECK_REQ:    return self::onLinkCheckReq($uplink);
-            case self::CID_DEVICE_TIME_REQ:   return self::onDeviceTimeReq();
+            case self::CID_DEVICE_TIME_REQ:   return self::onDeviceTimeReq($device);
             case self::CID_RESET_IND:         return self::onResetInd($blocks);
             case self::CID_REKEY_IND:         return self::onRekeyInd($blocks);
             case self::CID_DEVICE_MODE_IND:   return self::onDeviceModeInd($device, $blocks);
             case self::CID_PING_SLOT_INFO_REQ:return self::onPingSlotInfoReq($device, $blocks);
+            case self::CID_BEACON_TIMING_REQ: return self::onBeaconTimingReq($device);
             case self::CID_LINK_ADR_ANS:      return self::onLinkADRAns($device, $region, $blocks);
             case self::CID_RX_PARAM_SETUP_ANS:return self::onRxParamSetupAns($device, $blocks);
             case self::CID_RX_TIMING_SETUP_ANS: return self::onRxTimingSetupAns();
@@ -263,27 +272,96 @@ class MacCommands
 
     private static function onLinkCheckReq(array $uplink): array
     {
-        // LinkCheckAns: margin(1) + gwCnt(1)。margin = 最强网关 SNR - 该 DR 解调门限。
-        $snr = (float) ($uplink['snr'] ?? 0);
+        // LinkCheckAns: margin(1) + gwCnt(1)。对齐 ChirpStack chirpstack/src/maccommand/link_check.rs：
+        //   - margin = 所有收到该上行的网关中的最大 SNR − 该上行 DR 的解调门限（required SNR），
+        //     小于 0 取 0；值域 clamp 到 [0,254]（ChirpStack 用 `as u8` 截断，此处按规范更稳）。
+        //   - gw_cnt = 收到该上行的去重网关数（对齐 ufs.rx_info_set.len()），下限 1，上限 255。
         $dr = (int) ($uplink['dr'] ?? 0);
         $region = $uplink['region'] ?? null;
         $reqSnr = $region instanceof Region ? $region->requiredSnrForDr($dr) : 0.0;
-        $margin = (int) round($snr - $reqSnr);
+
+        $rxSet = $uplink['rx_set'] ?? null;
+        $maxSnr = (float) ($uplink['snr'] ?? 0); // 无 rx_set（单网关）时回退到本网关 SNR
+        $gwCnt = 1;
+        if (is_array($rxSet) && count($rxSet) > 0) {
+            $maxSnr = max(array_map('floatval', array_column($rxSet, 'snr')));
+            $gwCnt = count(array_unique(array_column($rxSet, 'gw')));
+        }
+
+        $margin = (int) floor($maxSnr - $reqSnr); // ChirpStack: max_snr - required_snr（截断）
         if ($margin < 0) {
             $margin = 0;
         }
-        if ($margin > 255) {
-            $margin = 255;
+        if ($margin > 254) {
+            $margin = 254;
         }
-        return ['bytes' => chr(self::CID_LINK_CHECK_ANS) . chr($margin) . chr(1), 'mustRespond' => false];
+        if ($gwCnt < 1) {
+            $gwCnt = 1;
+        }
+        if ($gwCnt > 255) {
+            $gwCnt = 255;
+        }
+        return ['bytes' => chr(self::CID_LINK_CHECK_ANS) . chr($margin) . chr($gwCnt), 'mustRespond' => false];
     }
 
-    private static function onDeviceTimeReq(): array
+    private static function onDeviceTimeReq(array &$device): array
     {
-        $now = time();
-        $secs = pack('V', $now & 0xFFFFFFFF);
+        // DeviceTimeAns 携带「自 GPS 纪元（1980-01-06 00:00:00 UTC）以来的秒数」+ 1/256 秒分数，
+        // 与 Unix 纪元（1970）不同，且 GPS 时间 = UTC + 闰秒（对齐 ChirpStack gpstime.rs to_gps_time）。
+        $unix = time();
+        $gpsSeconds = ($unix - self::GPS_EPOCH_OFFSET + self::GPS_LEAP_SECONDS) & 0xFFFFFFFF;
+        $secs = pack('V', $gpsSeconds);
         $frac = chr((int) (fmod(microtime(true), 1.0) * 256) & 0xFF);
+        // 标记设备内部 UTC/GPS 时间已有效：设备据此才允许切换到 Class-B。
+        // 缺失 DeviceTimeAns → 永远禁止切换 Class-B（对齐 ChirpStack 行为）。
+        $device['device_time_valid'] = 1;
+        $device['device_time'] = $gpsSeconds;
         return ['bytes' => chr(self::CID_DEVICE_TIME_ANS) . $secs . $frac, 'mustRespond' => false];
+    }
+
+    /**
+     * BeaconTimingAns（CID 0x12，设备→NS 发 BeaconTimingReq 后回应）。
+     * 设备拿到 DeviceTimeAns 取得网络时间后发出 BeaconTimingReq，NS 据此告知
+     * 「距下一个信标还有多久」以助设备对齐 128s 信标网格。
+     * 字节布局（对齐 LoRaWAN 规范）：CID + TimingDelay(2B, 单位 30ms, 小端) + Channel(1B)。
+     * TimingDelay = 下一个信标 GPS 秒 − 当前 GPS 秒，换算为 30ms 单位。
+     */
+    private static function onBeaconTimingReq(array &$device): array
+    {
+        $gpsNow = (int) ($device['device_time'] ?? 0);
+        if ($gpsNow <= 0) {
+            $gpsNow = self::gpsSecondsNow();
+        }
+        $period = 128; // 信标周期（秒）
+        // 锚点必须是 128s 网格边界（多 128 的倍数皆可）；若未设置或不是 128 倍数，
+        // 回退到当前 GPS 秒向下取整的网格边界，避免 nextBeacon 退化成当前秒（delay=0）。
+        $ref = (int) ($device['beacon_epoch'] ?? 0);
+        if ($ref <= 0 || ($ref % $period) !== 0) {
+            $ref = intdiv($gpsNow, $period) * $period;
+        }
+        // 下一个信标边界（≥ 当前）
+        $nextBeacon = (int) ceil(($gpsNow - $ref) / $period) * $period + $ref;
+        $delaySec = $nextBeacon - $gpsNow;
+        if ($delaySec < 0) {
+            $delaySec = 0;
+        }
+        $timingDelay = (int) round($delaySec * 1000 / 30); // 30ms 单位
+        if ($timingDelay > 0xFFFF) {
+            $timingDelay = 0xFFFF;
+        }
+        // 记录锚点，供 ping-slot / 信标下发对齐；EU868 信标在固定信道 0
+        $device['beacon_epoch'] = $ref;
+        $channel = 0;
+        $bytes = chr(self::CID_BEACON_TIMING_ANS)
+            . chr($timingDelay & 0xFF) . chr(($timingDelay >> 8) & 0xFF)
+            . chr($channel);
+        return ['bytes' => $bytes, 'mustRespond' => false];
+    }
+
+    /** 当前 GPS 纪元秒（1980-01-06 + 闰秒），与 onDeviceTimeReq 同源。 */
+    public static function gpsSecondsNow(): int
+    {
+        return (time() - self::GPS_EPOCH_OFFSET + self::GPS_LEAP_SECONDS) & 0xFFFFFFFF;
     }
 
     private static function onResetInd(array $blocks): array
@@ -307,6 +385,11 @@ class MacCommands
         $class = $pl[0] ?? 'A';
         $map = ['A' => 'A', 'B' => 'B', 'C' => 'C'];
         $newClass = $map[$class] ?? 'A';
+        // Class-B 切换必须以设备已取得有效网络时间（DeviceTimeAns）为前提：
+        // 否则信标/ping-slot 时序无法对齐，禁止切换（回显当前 Class，由设备先发 DeviceTimeReq）。
+        if ($newClass === 'B' && empty($device['device_time_valid'])) {
+            return ['bytes' => chr(self::CID_DEVICE_MODE_CONF) . ($device['class'] ?? 'A'), 'mustRespond' => false];
+        }
         $device['class'] = $newClass;
         // DeviceModeConf: 回显设备请求切换到的 Class
         return ['bytes' => chr(self::CID_DEVICE_MODE_CONF) . $newClass, 'mustRespond' => false];
@@ -514,7 +597,6 @@ class MacCommands
         return ['bytes' => null, 'mustRespond' => false];
     }
 
-    /** 由 LinkADR 信道掩码（ChMaskCntl=0 → 16 信道；其余 cntl 做尽力映射）计算启用信道索引。 */
     private static function channelsFromMask(Region $region, int $chMask, int $chMaskCntl, array $cur): array
     {
         if ($chMaskCntl === 0) {

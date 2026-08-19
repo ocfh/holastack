@@ -35,7 +35,6 @@ class Roaming
 
     // ---------------- Client 注册（对齐 backend/roaming.rs::setup / set / get） ----------------
 
-    /** 从 roaming_servers 表加载全部启用的伙伴，按 net_id 注册到运行期表。返回注册数量。 */
     public static function setup(): int
     {
         self::$clients = [];
@@ -78,7 +77,6 @@ class Roaming
         return self::$clients[strtoupper($netId)] ?? null;
     }
 
-    /** 调试用：返回当前注册表全部伙伴 NetID。 */
     public static function debugClients(): array
     {
         return array_keys(self::$clients);

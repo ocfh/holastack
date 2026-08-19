@@ -145,7 +145,6 @@ class Integration
         }
     }
 
-    /** 构造 TTN v3 风格 uplink_message（与 NetworkServer::fireCallback 对齐）。 */
     public static function buildPayload(array $device, array $uplinkData, array $telemetry, string $eventType = 'up'): array
     {
         $appId = (int) ($device['app_id'] ?? $uplinkData['app_id'] ?? 0);
@@ -340,7 +339,6 @@ class Integration
         return $pos === false ? $resp : substr($resp, $pos + 4);
     }
 
-    /** 通用 HTTP(S) POST（非阻塞式发送，失败仅记录）。 */
     private static function httpPostRaw(string $url, string $body, array $headers, callable $log): void
     {
         self::httpsRequest($url, $body, $headers, $log);

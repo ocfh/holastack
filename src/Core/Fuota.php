@@ -140,7 +140,6 @@ class Fuota
         return ['id' => Database::lastInsertId()];
     }
 
-    /** campaign 详情（含部署与进度汇总）。 */
     public static function campaignDetail(int $id): ?array
     {
         $camp = self::getCampaign($id);
@@ -478,7 +477,6 @@ class Fuota
         ];
     }
 
-    /** 兼容旧调用：startCampaign 的别名。 */
     public static function enqueueCampaign(int $campaignId, string $firmwareBin): array
     {
         return self::startCampaign($campaignId, $firmwareBin, []);
@@ -664,7 +662,6 @@ class Fuota
         );
     }
 
-    /** 取 campaign 未发送的下一批帧（seq >= offset，最多 count 条）。 */
     public static function nextFrames(int $campaignId, int $offset, int $count): array
     {
         return Database::fetchAll(

@@ -58,13 +58,11 @@ class DeviceProfile
         ];
     }
 
-    /** 返回数据库中名为「默认模板」的配置（无则 null）。 */
     public static function getDefault(): ?array
     {
         return Database::fetch("SELECT * FROM device_profiles WHERE name=? ORDER BY id ASC LIMIT 1", ['默认模板']);
     }
 
-    /** 若不存在名为「默认模板」的配置，则插入一条 EU868 默认模板（供未指定模板的新建设备回退）。幂等。 */
     public static function ensureDefault(): void
     {
         if (self::getDefault()) {
@@ -175,7 +173,6 @@ class DeviceProfile
         ];
     }
 
-    /** 解析模板内的 Relay 参数（TS011）。返回 null 表示未配置中继能力。 */
     public static function relayParams(?array $dp): ?array
     {
         if (!$dp || empty($dp['relay_params'])) {

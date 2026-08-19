@@ -8,7 +8,6 @@ namespace holastack\Core;
  */
 class Multicast
 {
-    /** 以组播密钥构造一条下行物理层帧。 */
     public static function buildDownlink(array $group, int $fPort, string $payloadHex): string
     {
         $mcNwk = hex2bin($group['mc_nwk_s_key']);
@@ -18,7 +17,6 @@ class Multicast
         return Frame::buildDataDown($mcNwk, $mcApp, 1, $devAddr, $fcnt, false, false, $fPort, hex2bin($payloadHex), 0, '');
     }
 
-    /** 随机生成组播会话参数（mc_addr / mc_nwk_s_key / mc_app_s_key）。 */
     public static function generateSession(): array
     {
         return [
@@ -28,7 +26,6 @@ class Multicast
         ];
     }
 
-    /** 该组播组关联的网关（无则空数组，调用方回退到全部网关）。 */
     public static function groupGateways(int $groupId): array
     {
         return \holastack\DB\Database::fetchAll(
@@ -37,7 +34,6 @@ class Multicast
         );
     }
 
-    /** 该组播组的设备（用于展示/管理，不参与单播下发）。 */
     public static function groupDevices(int $groupId): array
     {
         return \holastack\DB\Database::fetchAll(

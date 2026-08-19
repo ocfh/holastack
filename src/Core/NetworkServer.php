@@ -28,6 +28,11 @@ class NetworkServer
     private $lastDlCheck = 0; // 周期下行调度节流时间戳
     private $joinBuf = [];    // Join-Request 去重缓冲：micKey => 下行候选（合并镜像频率等重复副本）
     private $uplinkBuf = [];   // 上行去重缓冲：devAddr+fcnt => 首收时间戳（合并多网关重复上送，避免重复 Webhook/ACK/下行）
+    private $uplinkRxSets = []; // "devAddr:fcntLo" => [['snr'=>float,'gw'=>gwEui,'t'=>time()], ...]
+                               // 多网关接收质量聚合（对齐 ChirpStack UplinkFrameSet.rx_info_set）：
+                               // LinkCheckAns 的 margin 取所有网关最大 SNR、gw_cnt 取去重网关数。
+    private $lastBeaconGps = 0; // 已调度的上一信标 GPS 秒（128s 网格，避免重复下发）
+    private $beaconMacVersion = '1.0.3'; // 信标帧 MAC 版本（与设备默认 mac_version 对齐）
 
     // FUOTA 每个调度 tick 最多下发的组播分片帧数（节流，避免瞬间打爆网关）
     private const FUOTA_FRAMES_PER_TICK = 2;
@@ -35,6 +40,11 @@ class NetworkServer
     private const FUOTA_SETUP_RESEND_INTERVAL = 30;
     // SETUP 阶段最长等待（秒），超时后未应答设备直接进入分片（其部署在收尾时置 FAILED）
     private const FUOTA_SETUP_MAX_SECONDS = 120;
+
+    // Class B 信标调度：提前 BEACON_SCHEDULE_LEAD 秒经 PULL_RESP 下发，确保网关在 tmst 前收到；
+    // 网关 concentrator 时间参考超过 BEACON_REF_MAX_AGE 秒视为过期，过期则信标以 imme 下发（失准告警）。
+    private const BEACON_SCHEDULE_LEAD = 6;
+    private const BEACON_REF_MAX_AGE = 60;
 
     public function __construct(int $port = ELW_GW_UDP_PORT)
     {
@@ -62,7 +72,14 @@ class NetworkServer
             // stream_select 会改写 $read，仅保留就绪的流，因此每次循环都要重建
             $read = [$this->sock];
             // Class B / Class C 主动下行调度（约每 1s 触发一次）
-            $this->runScheduled();
+            // ★ 全局异常隔离：任何调度步骤/单个数据包的处理异常都只记日志，绝不中断主循环。
+            //   否则一次 SQL/缺列/缺类错误就会让进程崩溃（Supervisor 重启间隙恰好吞掉
+            //   Join-Accept 的 PULL_RESP → 设备 RX 窗口空等 → +EVT:JOIN FAILED，表现为“时好时坏”）。
+            try {
+                $this->runScheduled();
+            } catch (\Throwable $e) {
+                $this->log("SCHED FATAL（已隔离，主循环继续）: " . $e->getMessage() . " @ " . $e->getFile() . ":" . $e->getLine());
+            }
             $write = $except = null;
             $n = @stream_select($read, $write, $except, 1);
             if ($n === false) {
@@ -72,7 +89,11 @@ class NetworkServer
                 $peer = '';
                 $data = stream_socket_recvfrom($this->sock, 65535, 0, $peer);
                 if ($data !== false && $data !== '') {
-                    $this->handlePacket($data, $peer, microtime(true));
+                    try {
+                        $this->handlePacket($data, $peer, microtime(true));
+                    } catch (\Throwable $e) {
+                        $this->log("PACKET ERROR（已隔离，不影响后续包）peer=$peer: " . $e->getMessage() . " @ " . $e->getFile() . ":" . $e->getLine());
+                    }
                 }
             }
         }
@@ -139,6 +160,11 @@ class NetworkServer
     /**
      * 周期调度 tick（Class B/C 下行、组播、FUOTA、未确认重传、Join 缓冲）。
      * LNS 进程（无 UDP 主循环）每 ~1s 调用一次；run() 主循环内部亦复用本方法。
+     *
+     * ★ Join-Accept 缓冲刷新必须最先执行且不可被其他调度模块的异常阻断：
+     *   入网窗口（RX1/RX2，5/6s）是一次性的，任何延迟/中断都会直接导致设备 JOIN FAILED
+     *   （设备 RX 窗口打开却等不到下行 → +EVT:JOIN FAILED）。
+     *   各调度步骤独立 try/catch 隔离，避免新增模块（如信标调度）抛异常拖垮整条链路。
      */
     public function runScheduled(): void
     {
@@ -146,11 +172,22 @@ class NetworkServer
             return;
         }
         $this->lastDlCheck = time();
-        $this->processScheduledDownlinks();
-        $this->processScheduledMulticast();
-        $this->processScheduledFuota();
-        $this->rescheduleUnackedDownlinks();
-        $this->flushJoinBuffer();
+        $this->runSafe('join buffer', function (): void { $this->flushJoinBuffer(); });
+        $this->runSafe('scheduled downlinks', function (): void { $this->processScheduledDownlinks(); });
+        $this->runSafe('scheduled multicast', function (): void { $this->processScheduledMulticast(); });
+        $this->runSafe('beacon scheduler', function (): void { $this->processBeaconScheduler(); });
+        $this->runSafe('scheduled fuota', function (): void { $this->processScheduledFuota(); });
+        $this->runSafe('unacked retx', function (): void { $this->rescheduleUnackedDownlinks(); });
+    }
+
+    /** 执行一个调度步骤并隔离其异常（任何一步失败不中断其余调度）。 */
+    private function runSafe(string $name, callable $fn): void
+    {
+        try {
+            $fn();
+        } catch (\Throwable $e) {
+            $this->log("SCHED WARN $name 异常（已隔离，不影响其他调度）: " . $e->getMessage());
+        }
     }
 
     // ---------------- 包分发 ----------------
@@ -180,7 +217,12 @@ class NetworkServer
                 break;
             case 0x02: // PULL_DATA
                 $this->sendAck(0x04, $token, $peer, $gwEui);
+                $prevAddr = $this->gateways[$gwEui]['addr'] ?? '';
                 $this->registerGateway($peer, $gwEui);
+                // 诊断：PULL_DATA 源地址（下行通道）与 PUSH_DATA 源不同 → 下行必须发往这里
+                if ($prevAddr !== $peer) {
+                    $this->log("PULL_DATA gw=$gwEui peer=$peer（下行通道" . ($prevAddr === '' ? '首次登记' : '地址更新') . "）");
+                }
                 // 记下本次 PULL_DATA 的 token，作为 PULL_RESP 的关联 ID（网关只原样回显到 TX_ACK，并不据此校验）
                 $this->gateways[$gwEui]['pull_token'] = $token;
                 $this->flushDownlink($gwEui, $peer);
@@ -189,8 +231,14 @@ class NetworkServer
                 $ackJson = json_decode(substr($data, 12), true);
                 $ackStatus = $ackJson['txpk_ack']['error'] ?? 'ok';
                 $this->log("TX_ACK gw=$gwEui status=$ackStatus");
-                // 下行发射失败反压（对齐 ChirpStack：网关拒绝发射时记录 txack 错误事件，便于排查）
-                if ($ackStatus !== 'ok' && $ackStatus !== '' && $ackStatus !== 'NONE') {
+                // 下行发射结果分级（对齐 ChirpStack TxAckStatus 语义，见 chirpstack downlink/tx_ack.rs）：
+                //  - Class A 下行 RX1+RX2 双窗口同时入队，后发窗口可能与先发窗口发射时间重叠
+                //    （如 SF12 长 airtime），网关对重叠包回 COLLISION_PACKET / IGNORED——
+                //    这是双窗口冗余的正常行为：任一窗口发射成功设备即可收到，
+                //    ChirpStack 对 DownlinkTxAck.items 遍历取「任一 OK 即整体成功」，不记错误。
+                //  - 仅真正的发射失败（太晚/太早/频率/功率/GPS 未锁定/队列满等）才记 txack 错误事件。
+                $benign = ['', 'OK', 'NONE', 'IGNORED', 'COLLISION_PACKET', 'COLLISION_BEACON'];
+                if (!in_array(strtoupper($ackStatus), $benign, true)) {
                     $this->logEvent('txack', 'warn', "网关下行发射失败 gw=$gwEui error=$ackStatus", $gwEui);
                 }
                 break;
@@ -275,11 +323,27 @@ class NetworkServer
         $rssi = isset($rxpk['rssi']) ? (int) $rxpk['rssi'] : 0;
         $lsnr = isset($rxpk['lsnr']) ? (float) $rxpk['lsnr'] : 0;
 
+        // 记录网关 concentrator 时间参考（tmst + NS 主机时刻），供信标 tmst 推算对齐 GPS 时间。
+        // ★ 注意：addr（下行回程地址）必须保留 PULL_DATA 源（registerGateway 登记）。
+        //   这里仅做「尚无地址」时的 PUSH 源兜底，绝不覆盖已有地址——否则 PULL_RESP 会发到
+        //   PUSH_DATA 源端口；若与 PULL_DATA 源端口不同，网关静默丢弃（无 TX_ACK → 设备 JOIN FAILED）。
+        if ($tmst > 0 && $gwEui !== '') {
+            $this->gateways[$gwEui] = $this->gateways[$gwEui] ?? [];
+            if (!isset($this->gateways[$gwEui]['addr'])) {
+                $this->gateways[$gwEui]['addr'] = $peer; // 兜底：尚未收到 PULL_DATA 时暂用 PUSH 源
+            }
+            $this->gateways[$gwEui]['c_ref'] = [
+                'tmst'    => $tmst,
+                'host_us' => (int) round(microtime(true) * 1000000),
+                'host'    => time(),
+            ];
+        }
+
         if ($mtype === Frame::MTYPE_JOIN_REQUEST) {
             $this->log(sprintf("RX JoinRequest: gw=%s tmst=%d freq=%.3f datr=%s rssi=%d snr=%.1f (mtype=%d)", $gwEui, $tmst, $freq, $datr, $rssi, $lsnr, $mtype));
             $this->handleJoinRequest($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer, $rxTime);
         } elseif ($mtype === Frame::MTYPE_UNCONFIRMED_UP || $mtype === Frame::MTYPE_CONFIRMED_UP) {
-            $this->handleDataUp($phy, $mtype, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer);
+            $this->handleDataUp($phy, $mtype, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $peer, $rxTime);
         } else {
             $this->log("Uplink ignored, mtype=$mtype");
         }
@@ -314,7 +378,7 @@ class NetworkServer
                 return; // 已成功转发，等待 Home NS 经 bin/roaming-inbound.php 回送 JoinAns 下行
             }
             $this->log("JOIN: unknown device devEUI=$devEui appEUI=$appEUI");
-            $this->logEvent('join', 'error', "入网请求：未知设备 devEUI=$devEui appEUI=$appEui", $gwEui);
+            $this->logEvent('join', 'error', "Join Request：未知设备 devEUI=$devEui appEUI=$appEui", $gwEui, 0, 0, $this->buildJoinRequestLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
             return;
         }
         // 解析 MAC 版本（由设备模板决定 1.0.x / 1.1，缺省 1.0 以保证存量兼容）
@@ -330,7 +394,7 @@ class NetworkServer
             : LoRaWANCrypto::verifyJoinRequestMIC($appKey, $phy);
         if (!$joinMicOk) {
             $this->log("JOIN: MIC failed for devEUI=$devEui (mac_version=$macVersion)");
-            $this->logEvent('join', 'error', "入网请求：MIC 校验失败 devEUI=$devEui (mac_version=$macVersion)", $gwEui, $device['id'], $device['app_id']);
+            $this->logEvent('join', 'error', "Join Request：MIC 校验失败 devEUI=$devEui (mac_version=$macVersion)", $gwEui, $device['id'], $device['app_id'], $this->buildJoinRequestLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
             return;
         }
         $t5 = microtime(true);
@@ -388,7 +452,7 @@ class NetworkServer
             Database::execute("UPDATE devices SET " . implode(',', $setCols) . " WHERE id=?", $setParams);
             $this->log("JOIN OK devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . " (mac_version=$macVersion)" . sprintf(" (parse=%.0fms db_q=%.0fms mic=%.0fms key=%.0fms ja=%.0fms total=%.0fms)",
                 ($t1-$t0)*1000, ($t3-$t2)*1000, ($t5-$t4)*1000, ($t6-$t5)*1000, 0, (microtime(true)-$t6)*1000));
-            $this->logEvent('join', 'info', "入网成功 devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . " (mac_version=$macVersion)", $gwEui, $device['id'], $device['app_id']);
+            $this->logEvent('join', 'info', "Join Request → Join Accept 已生成 devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . " (mac_version=$macVersion)", $gwEui, $device['id'], $device['app_id'], $this->buildJoinRequestLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
         } else {
             // 重复副本（如 SX130x 镜像频率）：沿用首份会话，仅更新“最强信号”副本用于下行频点选择
             $region = $this->joinBuf[$micKey]['region'];
@@ -398,7 +462,7 @@ class NetworkServer
 
         // 缓冲下行：按 MIC 去重，约 80ms 后统一下发（取 RSSI 最强副本的频点/时隙），
         // 避免同一物理包被网关重复上送（真实信号 + 镜像频率）导致 NS 调度两次下行 → 网关 COLLISION_PACKET。
-        $this->bufferJoinDownlink($micKey, $region, $joinAccept, $tmst, $freq, $datr, $rssi, $gwEui, $peer);
+        $this->bufferJoinDownlink($micKey, $region, $joinAccept, $tmst, $freq, $datr, $rssi, $gwEui, $peer, $device['id'] ?? 0, $device['app_id'] ?? 0);
     }
 
     private function generateDevAddr(): string
@@ -431,7 +495,6 @@ class NetworkServer
         return $ks;
     }
 
-    /** 按版本选择下行帧构造方法（1.1 用 SNwkSIntKey/NwkSEncKey/双密钥 MIC）。 */
     private function buildDownPhy(array $ks, string $devAddrBin, int $fcnt, bool $confirmed, bool $ack, $fport, string $payload, int $adr, string $fopts, int $confFCnt = 0): string
     {
         if ($ks['family'] === '1.1') {
@@ -447,7 +510,7 @@ class NetworkServer
 
     // ---------------- 数据上行 ----------------
 
-    private function handleDataUp(string $phy, int $mtype, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, string $peer): void
+    private function handleDataUp(string $phy, int $mtype, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, string $peer, float $rxTime = 0): void
     {
         $p = Frame::parseDataUp($phy);
         $devAddrHex = bin2hex($p['dev_addr']);
@@ -459,9 +522,17 @@ class NetworkServer
         foreach ($this->uplinkBuf as $k => $t) {
             if ($nowU - $t > 1.0) {
                 unset($this->uplinkBuf[$k]);
+                unset($this->uplinkRxSets[$k]);
             }
         }
         $dupKey = $devAddrHex . ':' . (int) ($p['fcnt_lo'] ?? 0);
+        // 多网关接收质量聚合（对齐 ChirpStack UplinkFrameSet.rx_info_set）：
+        // 同一上行可能被多个网关重复上送，即使后续判定为重复帧也要记录，
+        // 供首个副本应答 LinkCheckAns 时取「所有网关最大 SNR」与「去重网关数」。
+        $this->uplinkRxSets[$dupKey][] = ['snr' => $lsnr, 'gw' => $gwEui, 't' => time()];
+        if (count($this->uplinkRxSets[$dupKey]) > 32) {
+            $this->uplinkRxSets[$dupKey] = array_slice($this->uplinkRxSets[$dupKey], -32);
+        }
         if (isset($this->uplinkBuf[$dupKey])) {
             $this->log("DATA UP DEDUP skip devAddr=$devAddrHex (多网关重复上送)");
             return;
@@ -475,7 +546,7 @@ class NetworkServer
                 return; // 已发送 XmitDataReq，等待 Home NS 经 bin/roaming-inbound.php 回送下行
             }
             $this->log("DATA UP: unknown devAddr=$devAddrHex");
-            $this->logEvent('uplink', 'error', "上行：未知设备 devAddr=$devAddrHex", $gwEui);
+            $this->logEvent('uplink', 'error', "上行：未知设备 devAddr=$devAddrHex", $gwEui, 0, 0, $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
             return;
         }
         Database::execute("UPDATE devices SET last_gw_id=? WHERE id=?", [$gwEui, $device['id']]);
@@ -496,7 +567,7 @@ class NetworkServer
         // 帧计数防重放
         if ($fcnt <= (int) $device['fcnt_up']) {
             $this->log("DATA UP: old/duplicate fcnt=$fcnt (last=" . $device['fcnt_up'] . ")");
-            $this->logEvent('uplink', 'warn', "上行：重复/过期帧 devAddr=$devAddrHex fcnt=$fcnt", $gwEui, $device['id'], $device['app_id']);
+            $this->logEvent('uplink', 'warn', "上行：重复/过期帧 devAddr=$devAddrHex fcnt=$fcnt", $gwEui, $device['id'], $device['app_id'], $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
             return;
         }
 
@@ -512,30 +583,22 @@ class NetworkServer
         }
 
         // FUOTA 应用层载荷（FPort 200 FuotaSetupAns / 201 FuotaStatusAns，AppSKey 加密）
-        $this->handleFuotaAppPayload($device, $p['fport'] ?? null, $decrypted);
+        $this->handleFuotaAppPayload($device, $p['fport'] ?? null, $decrypted, $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
 
         Database::execute(
             "UPDATE devices SET fcnt_up=?, last_seen=? WHERE id=?",
             [$fcnt, time(), $device['id']]
         );
+        // 内存同步 last_seen：后续下行调度（Class C imme 时序保护）需要"本上行"的时间基准
+        $device['last_seen'] = time();
 
-        // 原始帧 + 网关元数据（用于前端“原始 JSON”查看与第三方对接）
-        $rawJson = json_encode([
-            'dev_addr'   => $devAddrHex,
-            'dev_eui'    => $device['dev_eui'],
-            'fcnt'       => $fcnt,
-            'port'       => $p['fport'] ?? 0,
-            'confirmed'  => ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 1 : 0,
-            'decrypted_hex' => bin2hex($decrypted),
-            'phy_payload'=> bin2hex($phy),
-            'gateway_id' => $gwEui,
-            'rssi'       => $rssi,
-            'snr'        => $lsnr,
-            'frequency'  => $freq,
-            'data_rate'  => $datr,
-            'tmst'       => $tmst,
-            'received_at'=> time(),
-        ], JSON_UNESCAPED_UNICODE);
+        // 原始报文 + 网关元数据（用于前端“原始 JSON”查看与第三方对接）
+        // 主结构 = 网关协议原文（phy_payload/tx_info/rx_info，对齐 ChirpStack 网关 JSON）；
+        // 解密负载附加在 payload 内，不破坏原始报文结构。
+        $rawJson = $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime);
+        $rawLog = json_decode($rawJson, true);
+        $rawLog['phy_payload']['payload']['decrypted_hex'] = bin2hex($decrypted);
+        $rawJson = json_encode($rawLog, JSON_UNESCAPED_SLASHES);
 
         Database::execute(
             "INSERT INTO uplinks (dev_id, app_id, dev_addr, dev_eui, fcnt, port, confirmed, payload_hex, decrypted_hex, phy_payload, data_rate, frequency, rssi, snr, gateway_id, received_at, raw_json)
@@ -558,7 +621,7 @@ class NetworkServer
             $this->persistDeviceMacState($device);
         } catch (\Throwable $e) {
             $this->log("WARN uplink MAC/telemetry error devAddr=$devAddrHex class={$device['class']} mac_version={$ks['mac_version']}: " . $e->getMessage());
-            $this->logEvent('uplink', 'warn', "上行 MAC/遥测处理异常（已跳过，通知仍下发）devAddr=$devAddrHex: " . $e->getMessage(), $gwEui, $device['id'], $device['app_id']);
+            $this->logEvent('uplink', 'warn', "上行 MAC/遥测处理异常（已跳过，通知仍下发）devAddr=$devAddrHex: " . $e->getMessage(), $gwEui, $device['id'], $device['app_id'], $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
             $telemetry = [];
             $mac = ['fopts' => '', 'port0' => ''];
         }
@@ -602,7 +665,7 @@ class NetworkServer
 
         // 3) 设备回执（ACK 位）→ 确认型下行被设备确认，闭环下行队列（对齐 ChirpStack 下行 ACK 处理）
         if (!empty($p['ack'])) {
-            $this->acknowledgeDownlinks($device, $gwEui, $uplinkData, $telemetry);
+            $this->acknowledgeDownlinks($device, $gwEui, $uplinkData, $telemetry, $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
         }
         // 4) 设备状态事件（DevStatusAns → 电量/链路余量变化），对齐 ChirpStack status 事件
         if ($statusEvent) {
@@ -612,7 +675,7 @@ class NetworkServer
             $this->logEvent('status', 'info',
                 "设备状态更新 dev#{$device['id']} battery=" . var_export($telemetry['battery'] ?? null, true)
                 . " margin=" . ($telemetry['margin'] ?? ''),
-                $gwEui, $device['id'], $device['app_id']);
+                $gwEui, $device['id'], $device['app_id'], $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
         }
 
         // 确认帧（ConfirmedDataUp）—— MAC 命令随 ACK 帧一并下发（若未被应用下行占用）
@@ -630,6 +693,22 @@ class NetworkServer
 
         // 应用层待发下行（rxpk.tmst = end of reception, no airtime needed）
         $this->dispatchPendingAppDownlinks($device, $region, $tmst, $freq, $datr, $gwEui, $peer, $p['dev_addr'], $ks, $mac, $macConsumed);
+
+        // ADRACKReq 响应（对齐 ChirpStack：must_send = fctrl.adr_ack_req）
+        // 设备被 ADR 压到低速率后，累计 FCnt 超过 ADR_ACK_LIMIT 会在 FCtrl 置 ADRACKReq，
+        // 要求 NS 在 RX1/RX2 窗口回下行（LinkADRReq 或空 ACK 帧），否则设备认为下行丢失会持续降功率重试。
+        // 若本次已发下行（confirmed ACK / 应用下行 / MAC-only），无需重复回。
+        if (!empty($p['adr_ack_req']) && $mtype !== Frame::MTYPE_CONFIRMED_UP && $macConsumed === false) {
+            $this->log("ADRACKReq: dev#{$device['id']} devAddr=$devAddrHex 回空 ACK 下行 (ADR ack)");
+            // 空下行帧（FHDR 仅 ADR 位，无 FPort/负载）——设备据此认为下行链路仍通，停止降功率重试
+            $downPhy = $this->buildDownFrame(
+                $ks, $p['dev_addr'], (int) $device['fcnt_down'] + 1,
+                false, false, null, '', (bool) $device['adr'], '', '', $fcnt
+            );
+            $this->bumpDownFCnt($device['id']);
+            $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
+            $this->logEvent('downlink', 'info', "ADRACKReq 应答：空 ACK 下行 dev#{$device['id']} (ADR ack, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $freq, $datr, $gwEui));
+        }
     }
 
     // ---------------- 漫游（Passive Roaming，服务 NS 出站转发） ----------------
@@ -727,23 +806,25 @@ class NetworkServer
             $fopts = $macCarried ? $mac['fopts'] : '';
             $downPhy = $this->buildDownFrame($ks, $devAddrBin, $fcntDown, $confirmed, false, (int) $dl['port'], $payload, (bool) $device['adr'], $fopts, '');
             $this->bumpDownFCnt($device['id']);
+            // 下行原始报文（txpk 结构，写入 downlinks.raw_json 供前端"原始 JSON"查看）
+            $dlRawJson = $this->buildDataDownLog($downPhy, $tmst, $freq, $datr, $gwEui);
             if ($classC) {
-                // Class C：设备持续开启 RXC 窗口，上行结束后立即下发（imme），无需等待 RX1/RX2
-                // （对齐 ChirpStack Class C 的 RXC 窗口下发行为）
-                $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $freq, $datr, true);
-                $this->log("APP DOWNLINK -> dev_id={$device['id']} port={$dl['port']} (Class C RXC imme)");
-                $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class C RXC 立即下发)", $gwEui, $device['id'], $device['app_id']);
+                // Class C：优先 RXC imme（RX2 频点/速率），但刚上行且空口会越过 RX1 起点时
+                // 改走 Class A RX1/RX2 窗口（enqueueClassCDownlink 内做时序判断）。
+                // 下行频点/速率必须用 RX2 参数，不能用上行频点——否则设备 RXC 收不到。
+                // 对齐 ChirpStack set_tx_info_for_rx2：Class C 下行一律走 rx2_frequency / rx2_dr。
+                [$dlFreq, $dlDatr, $mode] = $this->enqueueClassCDownlink($device, $region, $downPhy, $tmst, $freq, $datr, $gwEui, $peer);
+                $dlRawJson = $this->buildDataDownLog($downPhy, $tmst, $dlFreq, $dlDatr, $gwEui);
+                $modeDesc = ($mode === 'a-windows') ? '刚上行，改走 RX1/RX2 窗口' : 'RXC imme';
+                $this->log("APP DOWNLINK -> dev_id={$device['id']} port={$dl['port']} (Class C $modeDesc)");
+                $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class C $modeDesc)", $gwEui, $device['id'], $device['app_id'], $dlRawJson);
             } else {
-                // Class A：RX1 + RX2 双窗口
-                $rx1Tmst = $tmst + $region->getReceiveDelay1() * 1000;
-                $this->enqueueDownlink($gwEui, $peer, $downPhy, $rx1Tmst, $freq, $datr, false);
-                // Class A 的 RX2 窗口（与 RX1 相同时频规划下使用 RX2 频点/速率）
-                $rx2Tmst = $tmst + $region->getReceiveDelay2() * 1000;
-                $this->enqueueDownlink($gwEui, $peer, $downPhy, $rx2Tmst, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), false);
+                // Class A：RX1 + 条件 RX2 双窗口（长空口时跳过 RX2，避免重叠损坏 RX1 尾部）
+                $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
                 $this->log("APP DOWNLINK -> dev_id={$device['id']} port={$dl['port']}");
-                $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id']);
+                $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $dlRawJson);
             }
-            Database::execute("UPDATE downlinks SET status='sent', fcnt=?, sent_at=? WHERE id=?", [$fcntDown, time(), $dl['id']]);
+            Database::execute("UPDATE downlinks SET status='sent', fcnt=?, sent_at=?, raw_json=? WHERE id=?", [$fcntDown, time(), $dlRawJson, $dl['id']]);
             $macConsumed = $macConsumed || $macCarried;
         }
 
@@ -780,12 +861,61 @@ class NetworkServer
             if (!empty($cmds)) {
                 $uplink = [
                     'snr'    => $lsnr,
-                    'dr'     => (int) $device['dr'],
+                    'dr'     => $region->datrToDr($datr) ?? (int) $device['dr'], // 上行实际 DR（对齐 ChirpStack 用 uplink dr）
                     'region' => $region,
                     'freq'   => $freq,
+                    'rx_set' => $this->uplinkRxSets[bin2hex($p['dev_addr']) . ':' . (int) ($p['fcnt_lo'] ?? 0)] ?? null,
                 ];
                 $res = MacCommands::handleUplink($device, $region, $uplink, $cmds);
                 $fopts = implode('', $res['responses']);
+                // 可观测性：NS 已应答 DeviceTimeReq，设备内部 UTC/GPS 时间标记有效
+                foreach ($res['responses'] as $rb) {
+                    if (!empty($rb) && $rb[0] === chr(MacCommands::CID_DEVICE_TIME_ANS)) {
+                        $this->log(sprintf(
+                            "DEVTIME: dev#%d 应答 DeviceTimeReq（device_time_valid=1, GPS秒=%d）",
+                            $device['id'], (int) ($device['device_time'] ?? 0)
+                        ));
+                    }
+                    if (!empty($rb) && $rb[0] === chr(MacCommands::CID_LINK_CHECK_ANS)) {
+                        // 对齐 ChirpStack link_check.rs：margin = 最强网关 SNR − required SNR；gw_cnt = 收到该上行的网关数
+                        $this->log(sprintf(
+                            "LINKCHECK: dev#%d 应答 LinkCheckAns margin=%d gw_cnt=%d (上行DR=%s)",
+                            $device['id'], ord($rb[1] ?? "\x00"), ord($rb[2] ?? "\x00"), $datr
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Class B 激活编排：设备经 DeviceModeInd(B) 且已取得有效网络时间（device_time_valid=1）后，
+        // NS 主动下发 BeaconFreqReq(0x13) + PingSlotChannelReq(0x11) 把设备引导到信标网格上，
+        // 随后设备发 BeaconTimingReq → NS 回 BeaconTimingAns（Phase B）完成信标锁定。
+        // 仅当尚未下发过才排队（避免每次上行重复下发）。
+        // ★ 独立隔离：信标编排依赖 Beacon 类/beacon_epoch 列，任何缺失都不应中断本上行的正常应答。
+        if (($device['class'] ?? 'A') === 'B' && !empty($device['device_time_valid'])) {
+            try {
+                if (MacCommands::getPending($device, MacCommands::CID_BEACON_FREQ_REQ) === null) {
+                    $bf = MacCommands::buildBeaconFreqReq($region->getBeaconFrequency());
+                    MacCommands::setPending($device, MacCommands::CID_BEACON_FREQ_REQ, $bf);
+                    $fopts .= $bf;
+                }
+                if (MacCommands::getPending($device, MacCommands::CID_PING_SLOT_CHANNEL_REQ) === null) {
+                    $psc = MacCommands::buildPingSlotChannelReq($region->getBeaconFrequency(), $region->getBeaconDataRate());
+                    MacCommands::setPending($device, MacCommands::CID_PING_SLOT_CHANNEL_REQ, $psc);
+                    $fopts .= $psc;
+                }
+                // 记录信标锚点（128s 网格边界 GPS 秒），供 ping-slot / 信标下发对齐。
+                // 锚点必须是 128 的倍数（任意多 128 值皆可），否则 BeaconTimingAns/nextPingSlot 会退化成 delay=0。
+                if (empty($device['beacon_epoch'])) {
+                    $g = MacCommands::gpsSecondsNow();
+                    $device['beacon_epoch'] = intdiv($g, Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD;
+                }
+                $this->log(sprintf(
+                    "CLASSB: dev#%d 进入 Class B，下发 BeaconFreqReq/PingSlotChannelReq 引导信标锁定 (beacon_epoch=%d)",
+                    $device['id'], (int) ($device['beacon_epoch'] ?? 0)
+                ));
+            } catch (\Throwable $e) {
+                $this->log("CLASSB WARN dev#{$device['id']} 信标编排异常（已隔离，不影响本上行应答）: " . $e->getMessage());
             }
         }
 
@@ -891,13 +1021,13 @@ class NetworkServer
         return ['fopts' => $fopts, 'port0' => $port0];
     }
 
-    /** 持久化 MAC/ADR 引擎修改过的设备会话状态。 */
     private function persistDeviceMacState(array $device): void
     {
         $cols = [
             'dr', 'tx_power_index', 'nb_trans', 'rx2_frequency', 'rx2_dr', 'rx1_dr_offset',
             'enabled_uplink_channel_indices', 'pending_mac', 'mac_command_error_count',
             'uplink_adr_history', 'class', 'battery', 'margin', 'relay_state', 'dev_status_req_at',
+            'device_time_valid', 'device_time', 'beacon_epoch',
         ];
         $upd = [];
         $params = [];
@@ -915,7 +1045,6 @@ class NetworkServer
         }
     }
 
-    /** 由设备已启用上行信道构造 16 位 LinkADR 信道掩码（ChMaskCntl=0）。 */
     private function channelMask(array $device, Region $region): int
     {
         $ch = json_decode($device['enabled_uplink_channel_indices'] ?? '[]', true);
@@ -932,7 +1061,6 @@ class NetworkServer
         return $mask & 0xFFFF;
     }
 
-    /** 构造下行物理层帧，自动处理 MAC 命令在 FOpts / Port0 的承载（版本感知密钥）。 */
     private function buildDownFrame(array $ks, string $devAddrBin, int $fcnt, bool $confirmed, bool $ack, $fport, string $payload, bool $adr, string $macFopts, string $macPort0, int $confFCnt = 0): string
     {
         if ($macPort0 !== '') {
@@ -942,7 +1070,6 @@ class NetworkServer
         return $this->buildDownPhy($ks, $devAddrBin, $fcnt, $confirmed, $ack, $fport, $payload, $adr ? 1 : 0, $macFopts, $confFCnt);
     }
 
-    /** 无应用下行时单独下发 MAC 命令帧（Class A RX1/RX2；Class C 立即 RXC）。 */
     private function sendMacOnlyDownlink(array $device, Region $region, int $tmst, float $freq, string $datr, string $gwEui, string $peer, string $devAddrBin, array $ks, array $mac): void
     {
         if (empty($mac['fopts']) && empty($mac['port0'])) {
@@ -953,17 +1080,45 @@ class NetworkServer
         $this->bumpDownFCnt($device['id']);
         $classC = (($device['class'] ?? 'A') === 'C');
         if ($classC) {
-            $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $freq, $datr, true);
-            $this->log("MAC DOWNLINK -> dev_id={$device['id']} (Class C RXC imme)");
-            $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (MAC-only, Class C RXC 立即下发)", $gwEui, $device['id'], $device['app_id']);
+            // Class C：优先 RXC imme（RX2 频点/速率），刚上行且空口会越过 RX1 起点时改走 Class A 窗口
+            //（enqueueClassCDownlink 内做时序判断；对齐 ChirpStack set_tx_info_for_rx2）。
+            [$dlFreq, $dlDatr, $mode] = $this->enqueueClassCDownlink($device, $region, $downPhy, $tmst, $freq, $datr, $gwEui, $peer);
+            $modeDesc = ($mode === 'a-windows') ? '刚上行，改走 RX1/RX2 窗口' : 'RXC imme';
+            $this->log("MAC DOWNLINK -> dev_id={$device['id']} (Class C $modeDesc)");
+            $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (MAC-only, Class C $modeDesc)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $tmst, $dlFreq, $dlDatr, $gwEui));
         } else {
-            $rx1Tmst = $tmst + $region->getReceiveDelay1() * 1000;
-            $this->enqueueDownlink($gwEui, $peer, $downPhy, $rx1Tmst, $freq, $datr, false);
-            $rx2Tmst = $tmst + $region->getReceiveDelay2() * 1000;
-            $this->enqueueDownlink($gwEui, $peer, $downPhy, $rx2Tmst, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), false);
+            $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
             $this->log("MAC DOWNLINK -> dev_id={$device['id']} (Class A RX1/RX2)");
-            $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (MAC-only, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id']);
+            $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (MAC-only, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $freq, $datr, $gwEui));
         }
+    }
+
+    /**
+     * Class C 下行入队（默认 RXC imme），带"刚上行"时序保护。
+     *
+     * 背景：设备每次上行后都会打开 Class A 的 RX1/RX2 窗口（期间 RX_C 挂起、射频切走）。
+     * 若在此时 imme 下发，且下行空口（RX2 默认 DR0/SF12 ≈1.32s）会越过 RX1 窗口起点，
+     * 设备会放弃接收中的 RX_C 包去听 RX1 → 包丢失；设备端表现为 RX1/RX2 全超时
+     * （即便网关 TX_ACK=ok，如 2026-08-19 实测 fcnt=2 案例）。
+     * 该场景改走 Class A RX1/RX2 窗口（设备正在听，可靠）。
+     *
+     * @return array [dlFreq, dlDatr, mode] mode: 'c-imme' | 'a-windows'
+     */
+    private function enqueueClassCDownlink(array $device, Region $region, string $downPhy, int $ulTmst, float $ulFreq, string $ulDatr, string $gwEui, string $peer): array
+    {
+        $dlFreq = (int) ($device['rx2_frequency'] ?? 0) > 0 ? (int) $device['rx2_frequency'] / 1e6 : $region->getRx2Frequency() / 1e6;
+        $dlDatr = $region->drToDatr((int) ($device['rx2_dr'] ?? 0) > 0 ? (int) $device['rx2_dr'] : $region->getRx2DataRate());
+        $sinceUp = time() - (int) ($device['last_seen'] ?? 0);
+        $airtimeUs = $this->uplinkAirtimeUs($downPhy, $dlDatr, $region);
+        $rx1DelayS = $region->getReceiveDelay1() / 1000.0;
+        if ($sinceUp >= 0 && $sinceUp < 2.5 && ($sinceUp + $airtimeUs / 1e6) > $rx1DelayS + 0.05) {
+            // 刚上行 + 空口会越过 RX1 起点 → 走 Class A RX1/RX2 双窗口（设备正在听）
+            $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $ulTmst, $region, $ulFreq, $ulDatr);
+            return [$dlFreq, $dlDatr, 'a-windows'];
+        }
+        // 常态：RXC 立即下发（RX2 频点/速率）
+        $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $dlFreq, $dlDatr, true);
+        return [$dlFreq, $dlDatr, 'c-imme'];
     }
 
     private function bumpDownFCnt(int $devId): void
@@ -977,7 +1132,7 @@ class NetworkServer
      * NS 据此将对应的确认型下行从队列中闭环（status='acknowledged'），并发布 ack 集成事件。
      * 同时对应重传计数（nb_trans）核销，避免被定时器重复下发。
      */
-    private function acknowledgeDownlinks(array $device, string $gwEui, array $uplinkData, array $telemetry): void
+    private function acknowledgeDownlinks(array $device, string $gwEui, array $uplinkData, array $telemetry, string $rawJson = ''): void
     {
         $dl = Database::fetch(
             "SELECT * FROM downlinks WHERE dev_id=? AND confirmed=1 AND status='sent' AND acknowledged_at=0 ORDER BY id DESC LIMIT 1",
@@ -993,7 +1148,7 @@ class NetworkServer
             [time(), $dl['id']]
         );
         $this->log("DOWNLINK ACKED dev#{$device['id']} downlink#{$dl['id']} fcnt={$dl['fcnt']}");
-        $this->logEvent('ack', 'info', "下行被设备确认 dev#{$device['id']} downlink#{$dl['id']} fcnt={$dl['fcnt']}", $gwEui, $device['id'], $device['app_id']);
+        $this->logEvent('ack', 'info', "下行被设备确认 dev#{$device['id']} downlink#{$dl['id']} fcnt={$dl['fcnt']}", $gwEui, $device['id'], $device['app_id'], $rawJson);
         // ack 集成事件（消费者可见是哪条下行被确认）
         $ackData = $uplinkData + ['downlink_id' => (int) $dl['id'], 'downlink_fcnt' => (int) $dl['fcnt']];
         Integration::dispatch($device['app_id'], $device, $ackData, $telemetry, function (string $m): void {
@@ -1189,6 +1344,7 @@ class NetworkServer
         $rows = Database::fetchAll(
             "SELECT d.*, dev.nwk_s_key, dev.app_s_key, dev.dev_addr, dev.class, dev.last_gw_id,
                     dev.ping_period, dev.beacon_epoch, dev.region, dev.fcnt_down AS dev_fcnt_down,
+                    dev.last_seen,
                     dev.f_nwk_s_int_key, dev.s_nwk_s_int_key, dev.nwk_s_enc_key, dev.mac_version
              FROM downlinks d
              JOIN devices dev ON dev.id = d.dev_id
@@ -1212,6 +1368,7 @@ class NetworkServer
                 'beacon_epoch'     => (int) $dl['beacon_epoch'],
                 'region'           => $dl['region'],
                 'fcnt_down'        => (int) $dl['dev_fcnt_down'],
+                'last_seen'        => (int) $dl['last_seen'],
             ];
             $sendAt = ($device['class'] === 'C') ? $now : $this->nextPingSlot($device, $now);
             if ($now < $sendAt) {
@@ -1219,6 +1376,105 @@ class NetworkServer
             }
             $this->sendDeviceDownlink($device, $dl, true);
         }
+    }
+
+    // ---------------- Class B 信标生成与调度 ----------------
+
+    /**
+     * Class B 信标调度器（每 128s 触发一次）。
+     * 计算下一个信标 GPS 秒 → Beacon::buildFrame 构造 PHYS 帧 → 按各区域信标频点/DR，
+     * 由网关 concentrator 时间参考推算 tmst，经 PULL_RESP 下发所有在线网关（提前 BEACON_SCHEDULE_LEAD 秒）。
+     *
+     * 关键前提：NS 主机时钟须与 GPS 对齐（NTP/UTC 误差 < 百 ms 级）。信标 tmst 由「网关最近一次
+     * 上行 rxpk.tmst + (信标unix − 上行主机unix)」推算；若网关无 concentrator 时间参考，则 imme 下发并告警
+     * （信标与 GPS 失准，设备无法锁定）。更精确的做法是网关 GPS 锁定时改用 txpk.tmms（GPS 毫秒），后续可扩展。
+     */
+    private function processBeaconScheduler(): void
+    {
+        // 仅当网络中存在 Class B 设备才发射信标，避免纯 A/C 网络占用信标频点
+        $hasB = Database::fetch("SELECT 1 FROM devices WHERE class='B' LIMIT 1");
+        if (!$hasB) {
+            return;
+        }
+        $gpsNow = MacCommands::gpsSecondsNow();
+        $nextBeaconGps = (int) ceil($gpsNow / Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD;
+        if ($nextBeaconGps <= $this->lastBeaconGps) {
+            return; // 已调度过本个信标
+        }
+        $beaconUnix = $this->gpsToUnix($nextBeaconGps);
+        $dt = $beaconUnix - time();
+        if ($dt > self::BEACON_SCHEDULE_LEAD || $dt < -2) {
+            return; // 未进入下发窗口（或已错过太久，等下一个）
+        }
+        $this->lastBeaconGps = $nextBeaconGps;
+
+        $gwSpecific = str_repeat("\x00", 7); // InfoDesc=0（网关无 GPS），设备用默认下行→上行时延
+
+        $gateways = $this->collectBeaconGateways(); // region => [['gw_id'=>...], ...]
+        $total = 0;
+        foreach ($gateways as $regionName => $gws) {
+            $region = Region::get($regionName ?: ELW_DEFAULT_REGION);
+            // 按区域构造信标帧：RFU 长度随区域不同（EU868=2/0，CN470=3/1，US915=5/3…），
+            // 固件按 phyParam.BeaconFormat.BeaconSize 做 size 校验，错则整帧丢弃 → 必须按区域构建
+            $beaconPhy = Beacon::buildFrame(
+                $nextBeaconGps,
+                $gwSpecific,
+                $this->beaconMacVersion,
+                $region->getBeaconRfu1(),
+                $region->getBeaconRfu2()
+            );
+            // 信标频点含跳频（CN470/US915/AU915 在 8 个信道间跳频），其余区域固定频点
+            $freq = $region->getBeaconChannelFrequency($nextBeaconGps) / 1e6;
+            $datr = $region->drToDatr($region->getBeaconDataRate());
+            foreach ($gws as $gw) {
+                $gwEui = $gw['gw_id'];
+                $peer = $this->gateways[$gwEui]['addr'] ?? '';
+                if ($peer === '') {
+                    continue; // 网关当前无下行回程（未发 PULL_DATA/上行），跳过
+                }
+                $ref = $this->gateways[$gwEui]['c_ref'] ?? null;
+                if (is_array($ref) && (time() - (int) ($ref['host'] ?? 0)) <= self::BEACON_REF_MAX_AGE) {
+                    // 由网关 concentrator 时间参考推算信标 tmst（对齐 GPS 秒）
+                    $deltaUs = ($beaconUnix * 1000000) - (int) ($ref['host_us'] ?? 0);
+                    $tmst = ((int) ($ref['tmst'] ?? 0) + $deltaUs) & 0xFFFFFFFF;
+                    $imme = false;
+                } else {
+                    // 无 concentrator 时间参考 → 立即下发（信标可能与 GPS 失准，记告警）
+                    $tmst = 0;
+                    $imme = true;
+                    $this->log("BEACON WARN gw=$gwEui 无 concentrator 时间参考，信标以 imme 下发（可能与 GPS 失准）");
+                }
+                $this->enqueueDownlink($gwEui, $peer, $beaconPhy, $tmst, $freq, $datr, $imme);
+                $total++;
+            }
+        }
+        $this->log(sprintf(
+            "BEACON: 调度信标 GPS秒=%d unix=%d 区域数=%d 网频数=%d",
+            $nextBeaconGps, $beaconUnix, count($gateways), $total
+        ));
+    }
+
+    /** GPS 秒 → Unix 秒（与 MacCommands::gpsSecondsNow 互逆）。
+     * gps = unix − 315964800 + 18 ⇒ unix = gps + 315964800 − 18。
+     * 注意 GpsTime::fromGps 闰秒符号相反（bug），此处用正确公式。 */
+    private function gpsToUnix(int $gpsSec): int
+    {
+        return (int) ($gpsSec + GpsTime::GPS_EPOCH_UNIX - GpsTime::LEAP_SECONDS);
+    }
+
+    /** 收集在线网关并按区域分组（信标频点/DR 随区域不同）。 */
+    private function collectBeaconGateways(): array
+    {
+        $rows = Database::fetchAll(
+            "SELECT gw_id, region FROM gateways WHERE last_seen >= ? ORDER BY gw_id",
+            [time() - 600]
+        );
+        $out = [];
+        foreach ($rows as $r) {
+            $region = $r['region'] ?: ELW_DEFAULT_REGION;
+            $out[$region][] = $r;
+        }
+        return $out;
     }
 
     /** 确认型下行重传（对齐 ChirpStack nb_trans）。
@@ -1262,29 +1518,54 @@ class NetworkServer
                 ];
                 $this->sendDeviceDownlink($device, $dl, true);
                 $this->log("RETX downlink#{$dl['id']} dev#{$dl['dev_id']} (Class C, tx=$tx/$nbTrans)");
-                $this->logEvent('downlink', 'warn', "下行重传 dev#{$dl['dev_id']} downlink#{$dl['id']} (Class C RXC, tx=$tx/$nbTrans)", $dl['last_gw_id'] ?? '', $dl['dev_id'], $dl['app_id']);
+                $this->logEvent('downlink', 'warn', "下行重传 dev#{$dl['dev_id']} downlink#{$dl['id']} (Class C RXC, tx=$tx/$nbTrans)", $dl['last_gw_id'] ?? '', $dl['dev_id'], $dl['app_id'], $dl['raw_json'] ?? '');
             } else {
                 // Class A/B：退回 pending，等下一次上行由 dispatchPendingAppDownlinks 重传
                 Database::execute("UPDATE downlinks SET status='pending' WHERE id=?", [$dl['id']]);
                 $this->log("RETX downlink#{$dl['id']} dev#{$dl['dev_id']} -> pending (Class A/B, tx=$tx/$nbTrans)");
-                $this->logEvent('downlink', 'warn', "下行重传排队 dev#{$dl['dev_id']} downlink#{$dl['id']} (Class A/B, tx=$tx/$nbTrans)", '', $dl['dev_id'], $dl['app_id']);
+                $this->logEvent('downlink', 'warn', "下行重传排队 dev#{$dl['dev_id']} downlink#{$dl['id']} (Class A/B, tx=$tx/$nbTrans)", '', $dl['dev_id'], $dl['app_id'], $dl['raw_json'] ?? '');
             }
         }
     }
+    /**
+     * 计算下一個 ping-slot 的墙钟时刻（unix 秒），对齐固件 ComputePingOffset。
+     * ping-slot 网格：nextBeacon + pingOffset*30ms + k*pingPeriod，其中
+     *   - nextBeacon = 距设备当前 GPS 时间最近的 128s 信标边界；
+     *   - pingOffset  = AES-128(零密钥, [gps(4)||devAddr(4)])[0..1] mod pingPeriod30；
+     *   - pingPeriod  = 设备 ping_period（秒）。
+     * 无有效 GPS 时间时回退到 NS 当前 GPS 秒（设备侧 device_time 优先）。
+     */
     private function nextPingSlot(array $device, int $now): int
     {
-        $period = $device['ping_period'] > 0 ? $device['ping_period'] : ELW_PING_PERIOD;
-        $epoch = $device['beacon_epoch'] > 0 ? $device['beacon_epoch']
-            : (ELW_BEACON_EPOCH > 0 ? ELW_BEACON_EPOCH : $now);
-        if ($epoch >= $now) {
-            return $epoch;
+        $gpsNow = (int) ($device['device_time'] ?? 0);
+        if ($gpsNow <= 0) {
+            $gpsNow = \holastack\Core\MacCommands::gpsSecondsNow();
         }
-        $k = (int) ceil(($now - $epoch) / $period);
-        $next = $epoch + $k * $period;
-        return $next >= $now ? $next : $now;
+        $period = (int) ($device['ping_period'] > 0 ? $device['ping_period'] : ELW_PING_PERIOD);
+        if ($period <= 0) {
+            $period = ELW_PING_PERIOD;
+        }
+        $pingPeriod30 = (int) round($period * 1000 / 30);
+        if ($pingPeriod30 <= 0) {
+            $pingPeriod30 = 1;
+        }
+        $ref = (int) ($device['beacon_epoch'] ?? 0);
+        if ($ref <= 0 || ($ref % Beacon::BEACON_PERIOD) !== 0) {
+            $ref = intdiv($gpsNow, Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD;
+        }
+        $nextBeacon = (int) ceil(($gpsNow - $ref) / Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD + $ref;
+        $devAddrHex = sprintf('%08s', $device['dev_addr'] ?? '00000000');
+        $devAddr = unpack('N', hex2bin($devAddrHex))[1];
+        $pingOffset30 = Beacon::computePingOffset($nextBeacon, $devAddr, $pingPeriod30);
+        // GPS 秒 → 墙钟秒 映射（now 对应 gpsNow）
+        $baseUnix = $now + ($nextBeacon - $gpsNow);
+        $slotUnix = $baseUnix + ($pingOffset30 * 30) / 1000.0;
+        while ($slotUnix < $now) {
+            $slotUnix += $period;
+        }
+        return (int) ceil($slotUnix);
     }
 
-    /** 构造并下发单条设备下行（用于 Class B/C 主动调度）。 */
     private function sendDeviceDownlink(array $device, array $dl, bool $imme): void
     {
         // 服务网关解析：优先使用设备最近保活网关；若为空（NS 重启后该 Class B/C 设备尚未上行），
@@ -1295,6 +1576,15 @@ class NetworkServer
             return;
         }
         $region = Region::get($device['region'] ?: ELW_DEFAULT_REGION);
+        // Class C 时序保护：设备刚上行（RX1/RX2 窗口期，RX_C 挂起）时 imme 下发会丢包
+        //（尤其 RX2 默认 SF12 长空口：包还在空中设备已切去听 RX1）。等设备回到 RXC 再发。
+        if ($imme && ($device['class'] ?? '') === 'C') {
+            $sinceUp = time() - (int) ($device['last_seen'] ?? 0);
+            if ($sinceUp >= 0 && $sinceUp < 2.5) {
+                $this->log("SCHED DOWNLINK SKIP -> dev_id={$device['id']} class=C port={$dl['port']} (刚上行 RX1/RX2 窗口期，等设备回到 RXC 再发, sinceUp={$sinceUp}s)");
+                return; // 保持 pending，下轮 tick 重试
+            }
+        }
         $ks = $this->deviceKeySet($device);
         $devAddrBin = hex2bin($device['dev_addr']);
         $payload = hex2bin($dl['payload_hex']);
@@ -1306,7 +1596,7 @@ class NetworkServer
         $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), $imme);
         Database::execute("UPDATE downlinks SET status='sent', fcnt=?, sent_at=? WHERE id=?", [$fcntDown, time(), $dl['id']]);
         $this->log("SCHED DOWNLINK -> dev_id={$device['id']} class={$device['class']} port={$dl['port']} gw=$gwEui");
-        $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} class={$device['class']} port={$dl['port']} gw=$gwEui", $gwEui, $device['id'], $device['app_id']);
+        $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} class={$device['class']} port={$dl['port']} gw=$gwEui", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), $gwEui));
     }
 
     /**
@@ -1380,7 +1670,7 @@ class NetworkServer
             Database::execute("UPDATE multicast_groups SET f_cnt = f_cnt + 1 WHERE id=?", [$q['multicast_group_id']]);
             Database::execute("DELETE FROM multicast_queue WHERE id=?", [$q['id']]);
         $this->log("MULTICAST DOWNLINK -> group={$q['multicast_group_id']} port={$q['f_port']} gw=" . count($gws));
-        $this->logEvent('downlink', 'info', "组播下行下发 group={$q['multicast_group_id']} port={$q['f_port']}", '', 0, 0);
+        $this->logEvent('downlink', 'info', "组播下行下发 group={$q['multicast_group_id']} port={$q['f_port']}", '', 0, 0, $this->buildDataDownLog($phy, $tmst, $freq, $datr, $gwEui ?? ''));
     }
 }
 
@@ -1454,7 +1744,7 @@ private function fuotaSetupPhase(array $camp, int $now): void
         $peer = $this->gateways[$gwEui]['addr'] ?? '';
         $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), true);
         $this->log("FUOTA: campaign#$campId McGroupSetupReq -> dev#{$dev['dev_id']} ({$dev['dev_eui']}) gw=$gwEui");
-        $this->logEvent('fuota', 'info', "FUOTA 组播会话下发 dev_eui={$dev['dev_eui']}", $gwEui, (int) $dev['dev_id'], (int) $dev['app_id']);
+        $this->logEvent('fuota', 'info', "FUOTA 组播会话下发 dev_eui={$dev['dev_eui']}", $gwEui, (int) $dev['dev_id'], (int) $dev['app_id'], $this->buildDataDownLog($downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), $gwEui));
     }
 
     // 全部确认 → 立即进入分片；否则按重发间隔推进
@@ -1558,7 +1848,6 @@ private function fuotaStatusPhase(array $camp, int $now): void
     }
 }
 
-/** 向组播组（或全部在线网关）下发一条物理层帧，并递增组播 f_cnt。 */
 private function fuotaSendMulticast(array $group, string $phy): void
 {
     $region = Region::get($group['region'] ?: ELW_DEFAULT_REGION);
@@ -1632,8 +1921,7 @@ private function handleFuotaMacUplink(array $device, string $macBytes): string
     return $out;
 }
 
-/** FUOTA 应用层载荷上行（FPort 200/201，AppSKey 加密）。 */
-private function handleFuotaAppPayload(array $device, ?int $fport, string $decrypted): void
+private function handleFuotaAppPayload(array $device, ?int $fport, string $decrypted, string $rawJson = ''): void
 {
     if ($fport !== Fuota::FPORT_SETUP && $fport !== Fuota::FPORT_STATUS) {
         return;
@@ -1656,7 +1944,7 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
     ]);
     if ($res['log'] !== '') {
         $this->log("FUOTA: dev#{$device['id']} {$res['log']}");
-        $this->logEvent('fuota', 'info', "FUOTA 应用载荷 dev_eui=$devEui {$res['log']}", '', (int) $device['id'], (int) ($device['app_id'] ?? 0));
+        $this->logEvent('fuota', 'info', "FUOTA 应用载荷 dev_eui=$devEui {$res['log']}", '', (int) $device['id'], (int) ($device['app_id'] ?? 0), $rawJson);
     }
 }
 
@@ -1735,7 +2023,7 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
      * - 记录 RSSI 最强副本，用于决定下行频点/时隙（绕过 SX130x 镜像频率误调度）。
      * - 实际下发由 flushJoinBuffer() 在 ~80ms 防抖后统一执行（合并 6µs 内的镜像副本）。
      */
-    private function bufferJoinDownlink(string $micKey, Region $region, string $joinAccept, int $tmst, float $freq, string $datr, int $rssi, string $gwEui, string $peer): void
+    private function bufferJoinDownlink(string $micKey, Region $region, string $joinAccept, int $tmst, float $freq, string $datr, int $rssi, string $gwEui, string $peer, int $devId = 0, int $appId = 0): void
     {
         if (!isset($this->joinBuf[$micKey])) {
             $this->joinBuf[$micKey] = [
@@ -1749,11 +2037,16 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
                 'bestDatr'   => $datr,
                 'firstSeen'  => microtime(true),
                 'scheduled'  => false,
+                'flushedTmst' => 0, // 最近一次实际下发使用的 ul_tmst 锚点（用于晚副本重排）
+                'devId'      => $devId,
+                'appId'      => $appId,
             ];
         } else {
             $e = &$this->joinBuf[$micKey];
-            // 取 RSSI 更强（数值更大）的副本决定下行频点/时隙
-            if ($rssi > $e['bestRssi']) {
+            // 副本选择：优先【最新 tmst】——设备可能 NbTrans>1 在多个信道重复发射（如 868.3/868.5），
+            // RX1/RX2 窗口相对【最后一次发射】打开；若按 RSSI 选了先发的副本，下行会提前一个发射间隔，
+            // 设备窗口还没打开（错过）。同 tmst（镜像频率副本）时取 RSSI 更强（真实信道）的。
+            if ($tmst > $e['bestTmst'] || ($tmst === $e['bestTmst'] && $rssi > $e['bestRssi'])) {
                 $e['bestRssi'] = $rssi;
                 $e['bestTmst'] = $tmst;
                 $e['bestFreq'] = $freq;
@@ -1773,52 +2066,78 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
             if ($e['scheduled']) {
                 if ($now - $e['firstSeen'] > 10) {
                     unset($this->joinBuf[$micKey]); // 已下发，过期清理
+                    continue;
+                }
+                // 已下发后，若同一 Join 又来了 tmst 更晚的副本（网关分批上报，实测可晚达 ~1s），
+                // 且仍在 RX 窗口内（首见后 <4.5s）→ 按新锚点重新下发（原下行已发出，设备错过也无害）。
+                // 设备 RX1/RX2 相对其【最后一次发射】打开，晚副本 tmst 更接近真实 txDone。
+                if (($e['bestTmst'] - (int) ($e['flushedTmst'] ?? 0)) > 50000 && ($now - $e['firstSeen']) < 4.5) {
+                    $this->log(sprintf(
+                        "JOIN RESCHED: 收到更晚副本 gw=%s ul_tmst=%d（原锚点 %d，Δ=%dµs），按新锚点重新下发 RX1/RX2",
+                        $e['gwEui'], $e['bestTmst'], (int) ($e['flushedTmst'] ?? 0), $e['bestTmst'] - (int) ($e['flushedTmst'] ?? 0)
+                    ));
+                    $this->scheduleJoinRx1Rx2($e, 'resched');
+                    $this->joinBuf[$micKey]['flushedTmst'] = $e['bestTmst'];
                 }
                 continue;
             }
             if ($now - $e['firstSeen'] < 0.08) {
                 continue; // 仍在收集重复副本（镜像频率等），稍后再下发
             }
-            $region = $e['region'];
-            $joinAccept = $e['joinAccept'];
-            $gwEui = $e['gwEui'];
-            $peer = $e['peer'];
-            $tmst = $e['bestTmst'];
-            $freq = $e['bestFreq'];
-            $datr = $e['bestDatr'];
-
-            // RX1：设备在其上行频点监听（取 RSSI 最强副本的频点，避开镜像频率）
-            $dlTmstRx1 = $tmst + $region->getJoinAcceptDelay1() * 1000;
-            $this->log(sprintf(
-                "JOIN DOWNLINK RX1: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f RX1datr=%s (dedup rssi=%d)",
-                $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $freq, $datr, $e['bestRssi']
-            ));
-            $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx1, $freq, $datr, false);
-
-            // RX2 fallback：固定频点 869.525 / SF12BW125
-            // 关键：SX130x 仅单 TX 路径。若 RX1 下行空口时长 ≥ RX1→RX2 间隔(1s)，RX2(tmst+6s) 会与
-            // RX1 发射尾部(约 tmst+5s+airtime)重叠，网关虽把 RX2 判 COLLISION_PACKET 不发射，但重叠调度会
-            // 破坏 RX1 尾部（含 MIC 末 4 字节）→ 设备收到 RX1 但 MIC 校验失败 → JOIN FAILED。
-            // 因此下行空口 ≥ 间隔时只发 RX1（设备在主窗口即入网，RX2 为冗余兜底，跳过不影响）。
-            $dlGapUs = ($region->getJoinAcceptDelay2() - $region->getJoinAcceptDelay1()) * 1000; // RX1→RX2 间隔：延时为 ms，转 µs = (6000-5000)*1000 = 1,000,000 µs
-            $jaAirtimeUs = $this->uplinkAirtimeUs($joinAccept, $datr, $region);
-            if ($jaAirtimeUs > $dlGapUs - 20000) {
-                $this->log(sprintf(
-                    "JOIN DOWNLINK RX2: SKIPPED (airtime=%.0fus >= gap=%.0fus, 避免与 RX1 发射尾部冲突导致 MIC 损坏)",
-                    $jaAirtimeUs, $dlGapUs
-                ));
-            } else {
-                $dlTmstRx2 = $tmst + $region->getJoinAcceptDelay2() * 1000;
-                $rx2Freq = $region->getRx2Frequency() / 1e6;
-                $rx2Datr = $region->drToDatr($region->getRx2DataRate());
-                $this->log(sprintf(
-                    "JOIN DOWNLINK RX2: dl_tmst_rx2=%d RX2freq=%.3f RX2datr=%s",
-                    $dlTmstRx2, $rx2Freq, $rx2Datr
-                ));
-                $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx2, $rx2Freq, $rx2Datr, false);
-            }
-
+            $this->scheduleJoinRx1Rx2($e, 'first');
             $this->joinBuf[$micKey]['scheduled'] = true;
+            $this->joinBuf[$micKey]['flushedTmst'] = $e['bestTmst'];
+        }
+    }
+
+    /**
+     * 按当前最佳副本（最新 tmst）下发 Join-Accept 的 RX1 + 条件 RX2。
+     * $reason: 'first'（首次下发，记事件）| 'resched'（晚副本重排，不重复记事件）。
+     */
+    private function scheduleJoinRx1Rx2(array $e, string $reason): void
+    {
+        $region = $e['region'];
+        $joinAccept = $e['joinAccept'];
+        $gwEui = $e['gwEui'];
+        $peer = $e['peer'];
+        $tmst = $e['bestTmst'];
+        $freq = $e['bestFreq'];
+        $datr = $e['bestDatr'];
+        $tag = $reason === 'resched' ? ' [RESCHED]' : '';
+
+        // RX1：设备在其上行频点监听（取最佳副本的频点）
+        $dlTmstRx1 = $tmst + $region->getJoinAcceptDelay1() * 1000;
+        $this->log(sprintf(
+            "JOIN DOWNLINK RX1%s: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f RX1datr=%s (dedup rssi=%d)",
+            $tag, $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $freq, $datr, $e['bestRssi']
+        ));
+        if ($reason !== 'resched') {
+            // 记录 Join Accept 下行协议原文（txpk 结构，events.raw_json）
+            $this->logEvent('join', 'info', "Join Accept 下行下发 RX1 gw=$gwEui freq=" . sprintf('%.3f', $freq) . " datr=$datr", $gwEui, $e['devId'] ?? 0, $e['appId'] ?? 0, $this->buildJoinAcceptLog($joinAccept, $dlTmstRx1, $freq, $datr, $gwEui));
+        }
+        $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx1, $freq, $datr, false);
+
+        // RX2 fallback：固定频点 869.525 / SF12BW125
+        // 关键：SX130x 仅单 TX 路径。若 RX1 下行空口时长 ≥ RX1→RX2 间隔(1s)，RX2(tmst+6s) 会与
+        // RX1 发射尾部(约 tmst+5s+airtime)重叠，网关虽把 RX2 判 COLLISION_PACKET 不发射，但重叠调度会
+        // 破坏 RX1 尾部（含 MIC 末 4 字节）→ 设备收到 RX1 但 MIC 校验失败 → JOIN FAILED。
+        // 因此下行空口 ≥ 间隔时只发 RX1（设备在主窗口即入网，RX2 为冗余兜底，跳过不影响）。
+        $dlGapUs = ($region->getJoinAcceptDelay2() - $region->getJoinAcceptDelay1()) * 1000; // RX1→RX2 间隔：延时为 ms，转 µs = (6000-5000)*1000 = 1,000,000 µs
+        $jaAirtimeUs = $this->uplinkAirtimeUs($joinAccept, $datr, $region);
+        if ($jaAirtimeUs > $dlGapUs - 20000) {
+            $this->log(sprintf(
+                "JOIN DOWNLINK RX2%s: SKIPPED (airtime=%.0fus >= gap=%.0fus, 避免与 RX1 发射尾部冲突导致 MIC 损坏)",
+                $tag, $jaAirtimeUs, $dlGapUs
+            ));
+        } else {
+            $dlTmstRx2 = $tmst + $region->getJoinAcceptDelay2() * 1000;
+            $rx2Freq = $region->getRx2Frequency() / 1e6;
+            $rx2Datr = $region->drToDatr($region->getRx2DataRate());
+            $this->log(sprintf(
+                "JOIN DOWNLINK RX2%s: dl_tmst_rx2=%d RX2freq=%.3f RX2datr=%s",
+                $tag, $dlTmstRx2, $rx2Freq, $rx2Datr
+            ));
+            $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx2, $rx2Freq, $rx2Datr, false);
         }
     }
 
@@ -1843,6 +2162,32 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
         }
     }
 
+    /**
+     * Class A 下行：RX1 + 条件 RX2 双窗口入队（与 flushJoinBuffer 的 join 逻辑一致）。
+     * RX2 仅当 RX1 空口时长 < RX1→RX2 间隔（留 20ms 余量）时才调度：
+     * 长空口（如 SF12 ≈1.32s > 1s 间隔）下，RX2 会与 RX1 发射尾部重叠——网关虽判 COLLISION_PACKET
+     * 不发射，但重叠调度可能损坏 RX1 尾部（含 MIC 末 4 字节）→ 设备收 RX1 但 MIC 校验失败。
+     *
+     * @return int RX1 窗口 tmst（µs，供日志使用）
+     */
+    private function enqueueClassADownlink(string $gwEui, string $peer, string $phy, int $ulTmst, Region $region, float $rx1Freq, string $rx1Datr): int
+    {
+        $rx1Tmst = $ulTmst + $region->getReceiveDelay1() * 1000;
+        $this->enqueueDownlink($gwEui, $peer, $phy, $rx1Tmst, $rx1Freq, $rx1Datr, false);
+        $gapUs = ($region->getReceiveDelay2() - $region->getReceiveDelay1()) * 1000; // RX1→RX2 间隔（默认 1s）
+        $airtimeUs = $this->uplinkAirtimeUs($phy, $rx1Datr, $region);
+        if ($airtimeUs <= $gapUs - 20000) {
+            $rx2Tmst = $ulTmst + $region->getReceiveDelay2() * 1000;
+            $this->enqueueDownlink($gwEui, $peer, $phy, $rx2Tmst, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), false);
+        } else {
+            $this->log(sprintf(
+                "CLASS A DOWNLINK RX2 SKIPPED (airtime=%.0fus >= gap=%.0fus, 避免与 RX1 发射尾部冲突导致 MIC 损坏)",
+                $airtimeUs, $gapUs
+            ));
+        }
+        return $rx1Tmst;
+    }
+
     private function flushDownlink(string $gwEui, string $peer): void
     {
         if (!isset($this->gateways[$gwEui]) || empty($this->gateways[$gwEui]['pending'])) {
@@ -1861,7 +2206,8 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
                 'rfch' => 0,
                 // 下行功率：与 ChirpStack EU868 get_downlink_tx_power_eirp() 对齐
                 // RX1 频段(863~869.2MHz) = 16dBm；RX2 频段(869.4~869.65MHz) = 29dBm
-                'powe' => ($item['freq'] >= 869400000 && $item['freq'] <= 869650000) ? 29 : 16,
+                // 注意：$item['freq'] 是 MHz（enqueueDownlink 传入 getRx2Frequency()/1e6），用 MHz 比较
+                'powe' => ($item['freq'] >= 869.4 && $item['freq'] <= 869.65) ? 29 : 16,
                 'modu' => 'LORA',
                 'datr' => $item['datr'],
                 'codr' => '4/5',
@@ -1927,7 +2273,6 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
         }
     }
 
-    /** 记录一条事件到 events 表（同时写文本日志）。失败不影响主流程。 */
     private function logEvent(string $type, string $level, string $message, string $gwId = '', ?int $devId = 0, ?int $appId = 0, string $rawJson = ''): void
     {
         try {
@@ -1939,5 +2284,199 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
             // 事件落库失败不应中断接收链路
         }
         $this->log("[$type/$level] $message");
+    }
+
+    /**
+     * 构造网关协议原文日志（Join Request 上行，rxpk 解析结构）。
+     * 对齐 ChirpStack 网关 JSON 格式：phy_payload.mhdr.f_type / payload / mic + tx_info + rx_info。
+     * 用于 events.raw_json，让前端"JSON"看到的是原始报文而非系统摘要。
+     */
+    private function buildJoinRequestLog(string $phy, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, float $rxTime = 0): string
+    {
+        $jr = Frame::parseJoinRequest($phy);
+        $mic = substr($phy, 19, 4);
+        // datr 形如 "SF12BW125" / "SF10BW500"，解析出 SF / BW
+        $sf = 0; $bw = 125000;
+        if (preg_match('/SF(\d+)BW(\d+)/i', $datr, $m)) {
+            $sf = (int) $m[1];
+            $bw = (int) $m[2] * 1000;
+        }
+        // rx_info：网关侧接收元数据（Basic Station 有 gwTime/uplinkId/context；UDP 模式部分缺省）
+        $rxInfo = [
+            'gatewayId' => $gwEui,
+            'uplinkId'  => (int) ($tmst & 0xFFFF),
+            'gwTime'    => gmdate('Y-m-d\TH:i:s.u\Z', $rxTime ?: time()),
+            'nsTime'    => gmdate('Y-m-d\TH:i:s.u\Z', time()),
+            'rssi'      => $rssi,
+            'snr'       => $lsnr,
+            'channel'   => 0,
+            'rfChain'   => 1,
+            'location'  => (object) [],
+            'context'   => base64_encode(substr($phy, 0, 4)),
+            'crcStatus' => 'CRC_OK',
+        ];
+        return json_encode([
+            'phy_payload' => [
+                'mhdr' => [
+                    'f_type' => 'JoinRequest',
+                    'major'  => 'LoRaWANR1',
+                ],
+                'payload' => [
+                    'join_eui' => bin2hex($jr['app_eui']),
+                    'dev_eui'  => bin2hex($jr['dev_eui']),
+                    'dev_nonce'=> unpack('v', $jr['dev_nonce'])[1],
+                ],
+                'mic' => array_values(unpack('C4', $mic)),
+            ],
+            'tx_info' => [
+                'frequency' => (int) ($freq * 1e6),
+                'modulation' => [
+                    'lora' => [
+                        'bandwidth' => $bw,
+                        'spreadingFactor' => $sf ?: 12,
+                        'codeRate' => 'CR_4_5',
+                    ],
+                ],
+            ],
+            'rx_info' => [$rxInfo],
+        ], JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * 构造网关协议原文日志（Join Accept 下行，txpk 结构）。
+     * phy_payload.mhdr.f_type=JoinAccept + payload(hex) + mic + tx_info（含下行功率/时序/反转 IQ）。
+     */
+    private function buildJoinAcceptLog(string $phy, int $tmst, float $freq, string $datr, string $gwEui, float $rxTime = 0): string
+    {
+        $sf = 0; $bw = 125000;
+        if (preg_match('/SF(\d+)BW(\d+)/i', $datr, $m)) {
+            $sf = (int) $m[1];
+            $bw = (int) $m[2] * 1000;
+        }
+        $mic = substr($phy, -4);
+        return json_encode([
+            'phy_payload' => [
+                'mhdr' => [
+                    'f_type' => 'JoinAccept',
+                    'major'  => 'LoRaWANR1',
+                ],
+                'payload' => bin2hex($phy),
+                'mic' => array_values(unpack('C4', $mic)),
+            ],
+            'tx_info' => [
+                'frequency' => (int) ($freq * 1e6),
+                'power'     => ($freq >= 869.4 && $freq <= 869.65) ? 29 : 16, // freq 单位为 MHz
+                'modulation' => [
+                    'lora' => [
+                        'bandwidth' => $bw,
+                        'spreadingFactor' => $sf ?: 12,
+                        'codeRate' => 'CR_4_5',
+                        'polarizationInversion' => true,
+                    ],
+                ],
+                'timing' => [
+                    'delay' => ['delay' => '5s'],
+                ],
+                'context' => base64_encode(substr($phy, 0, 4)),
+            ],
+        ], JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * 构造上行数据帧（Unconfirmed/Confirmed Data Up）的网关协议原文日志。
+     * 结构对齐 ChirpStack 网关 JSON：phy_payload.mhdr.f_type / payload / mic + tx_info + rx_info。
+     * 用于 uplinks.raw_json 与 events.raw_json，让前端"JSON"看到原始报文。
+     */
+    private function buildDataUpLog(string $phy, int $tmst, float $freq, string $datr, int $rssi, float $lsnr, string $gwEui, float $rxTime = 0): string
+    {
+        $p = Frame::parseDataUp($phy);
+        $mtype = Frame::mtype($phy);
+        $fType = ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 'ConfirmedDataUp' : 'UnconfirmedDataUp';
+        $sf = 0; $bw = 125000;
+        if (preg_match('/SF(\d+)BW(\d+)/i', $datr, $m)) {
+            $sf = (int) $m[1];
+            $bw = (int) $m[2] * 1000;
+        }
+        return json_encode([
+            'phy_payload' => [
+                'mhdr' => ['f_type' => $fType, 'major' => 'LoRaWANR1'],
+                'payload' => [
+                    'dev_addr' => bin2hex($p['dev_addr']),
+                    'fcnt'      => $p['fcnt_lo'],
+                    'f_port'    => $p['fport'],
+                    'frm_payload' => bin2hex($p['frmpayload']),
+                    'confirmed' => ($mtype === Frame::MTYPE_CONFIRMED_UP) ? 1 : 0,
+                ],
+                'mic' => array_values(unpack('C4', $p['mic'])),
+            ],
+            'tx_info' => [
+                'frequency' => (int) ($freq * 1e6),
+                'modulation' => [
+                    'lora' => [
+                        'bandwidth' => $bw,
+                        'spreadingFactor' => $sf ?: 12,
+                        'codeRate' => 'CR_4_5',
+                    ],
+                ],
+            ],
+            'rx_info' => [[
+                'gatewayId' => $gwEui,
+                'uplinkId'  => (int) ($tmst & 0xFFFF),
+                'gwTime'    => gmdate('Y-m-d\TH:i:s.u\Z', $rxTime ?: time()),
+                'nsTime'    => gmdate('Y-m-d\TH:i:s.u\Z', time()),
+                'rssi'      => $rssi,
+                'snr'       => $lsnr,
+                'channel'   => 0,
+                'rfChain'   => 1,
+                'location'  => (object) [],
+                'context'   => base64_encode(substr($phy, 0, 4)),
+                'crcStatus' => 'CRC_OK',
+            ]],
+        ], JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * 构造下行数据帧（Unconfirmed/Confirmed Data Down）的 txpk 协议原文日志。
+     * 用于 downlinks.raw_json，让前端"JSON"看到原始下行报文。
+     */
+    private function buildDataDownLog(string $phy, int $tmst, float $freq, string $datr, string $gwEui): string
+    {
+        $p = Frame::parseDataUp($phy); // 下行帧结构同 FHDR 布局，可复用解析
+        $mtype = Frame::mtype($phy);
+        $fType = ($mtype === Frame::MTYPE_CONFIRMED_DOWN) ? 'ConfirmedDataDown' : 'UnconfirmedDataDown';
+        $sf = 0; $bw = 125000;
+        if (preg_match('/SF(\d+)BW(\d+)/i', $datr, $m)) {
+            $sf = (int) $m[1];
+            $bw = (int) $m[2] * 1000;
+        }
+        return json_encode([
+            'phy_payload' => [
+                'mhdr' => ['f_type' => $fType, 'major' => 'LoRaWANR1'],
+                'payload' => [
+                    'dev_addr' => bin2hex($p['dev_addr']),
+                    'fcnt'      => $p['fcnt_lo'],
+                    'f_port'    => $p['fport'],
+                    'frm_payload' => bin2hex($p['frmpayload']),
+                    'confirmed' => ($mtype === Frame::MTYPE_CONFIRMED_DOWN) ? 1 : 0,
+                ],
+                'mic' => array_values(unpack('C4', $p['mic'])),
+            ],
+            'tx_info' => [
+                'frequency' => (int) ($freq * 1e6),
+                'power'     => ($freq >= 869.4 && $freq <= 869.65) ? 29 : 16, // freq 单位为 MHz
+                'modulation' => [
+                    'lora' => [
+                        'bandwidth' => $bw,
+                        'spreadingFactor' => $sf ?: 12,
+                        'codeRate' => 'CR_4_5',
+                        'polarizationInversion' => true,
+                    ],
+                ],
+                'timing' => [
+                    'delay' => ['delay' => '5s'],
+                ],
+                'context' => base64_encode(substr($phy, 0, 4)),
+            ],
+        ], JSON_UNESCAPED_SLASHES);
     }
 }
