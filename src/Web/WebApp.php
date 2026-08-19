@@ -1003,6 +1003,7 @@ class WebApp
                 'gateways_online' => 2, 'gateways_offline' => 1,
                 'uplinks' => $ups, 'downlinks' => $dls,
                 'devices_online' => 3, 'devices_offline' => 1,
+                'device_profiles' => 3, 'multicast_groups' => 2,
                 'device_logs' => self::demoEvents(5),
                 'gateway_logs' => self::demoEvents(5),
             ];
@@ -1018,6 +1019,7 @@ class WebApp
                     'gateways_online' => 0, 'gateways_offline' => 0,
                     'uplinks' => 0, 'downlinks' => 0,
                     'devices_online' => 0, 'devices_offline' => 0,
+                    'device_profiles' => 0, 'multicast_groups' => 0,
                     'device_logs' => [], 'gateway_logs' => [],
                 ];
             }
@@ -1039,6 +1041,11 @@ class WebApp
             : Database::fetch("SELECT COUNT(*) c FROM gateways")['c'];
         $ups = $appFilter("SELECT COUNT(*) c FROM uplinks")['c'];
         $dls = $appFilter("SELECT COUNT(*) c FROM downlinks")['c'];
+        // 设备模板（租户级）/ 组播组（应用级）计数，供概览卡片展示
+        $dps = $tid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM device_profiles WHERE tenant_id=?", [$tid])['c']
+            : Database::fetch("SELECT COUNT(*) c FROM device_profiles")['c'];
+        $mcs = $appFilter("SELECT COUNT(*) c FROM multicast_groups")['c'];
         $gwsOnline = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE tenant_id=? AND last_seen >= ?", [$tid, time() - self::GW_OFFLINE_TIMEOUT])['c']
             : Database::fetch("SELECT COUNT(*) c FROM gateways WHERE last_seen >= ?", [time() - self::GW_OFFLINE_TIMEOUT])['c'];
@@ -1063,6 +1070,7 @@ class WebApp
             'gateways_online' => (int) $gwsOnline, 'gateways_offline' => $gwsOffline,
             'uplinks' => $ups, 'downlinks' => $dls,
             'devices_online' => (int)$devsOnline, 'devices_offline' => $devsOffline,
+            'device_profiles' => (int) $dps, 'multicast_groups' => (int) $mcs,
             'device_logs' => $deviceLogs, 'gateway_logs' => $gatewayLogs,
         ];
     }

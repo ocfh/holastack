@@ -297,7 +297,8 @@ HTML;
             $side .= $groupApis;
         }
 
-        return <<<HTML
+        $pageTitle = '<h2>' . $t('API 文档') . '</h2>';
+        return $pageTitle . <<<HTML
 <div class="apidocs">
   <div class="ad-side" id="adSide">
     $side

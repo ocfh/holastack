@@ -758,6 +758,9 @@ function renderPage(): string
   .ring-legend{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
   .hl-row{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-radius:9px;background:var(--bg-subtle)}
   .hl-row b{font-size:17px} .hl-row .pct{color:var(--mut);font-size:12px;font-weight:400}
+  /* 应用卡片附加行：设备模板 / 组播组（左右分栏） */
+  .hl-row.hl-split{margin-top:6px;padding:7px 14px;font-size:12px;color:var(--mut)}
+  .hl-row.hl-split b{font-size:13px;color:var(--txt);margin-left:3px}
   .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
   .hl-online .dot{background:var(--ok)} .hl-offline .dot{background:var(--err)}
   .msg-bar{display:flex;align-items:center;gap:26px;background:var(--bg-subtle);border:1px solid var(--line);border-radius:12px;padding:18px 26px;margin-bottom:16px}
@@ -1192,6 +1195,21 @@ function hideLoader(){ const l=document.getElementById('loader'); if(l) l.classL
 // 弹窗内保存/删除/发送：显示遮罩→执行异步操作→finally 隐藏，避免操作耗时无反馈、或接口卡住时页面无响应
 async function busy(label, fn){ showLoader(label); try { return await fn(); } finally { hideLoader(); } }
 
+/**
+ * 通用筛选重置（带加载动画）：
+ *   1. 清空租户过滤（所有列表页共用，旧的重置按钮普遍漏清它 → 列表仍被租户过滤，看起来"没重置"）；
+ *   2. 执行页面专属清空（clearPageState 内联清本页筛选/分页）；
+ *   3. 显示加载动画并重载视图。
+ * 用法（内联按钮）：
+ *   onclick="resetFilters(()=>{ state.xxx=''; state.xxxPage=1; state.xxxOffset=0; }, viewXxx)"
+ * 页面无额外筛选时传 null：onclick="resetFilters(null, viewXxx)"
+ */
+function resetFilters(clearPageState, viewFn){
+  state.tenantFilter='';
+  if (clearPageState) { try { clearPageState(); } catch (e) {} }
+  busy('重置中…', () => viewFn());
+}
+
 // ===== 通用可排序/可筛选表格 =====
 // 排序规则（极简版）：
 //   - 默认只有「时间」列才可排序（firstDir=desc），其它列通过 sortable:false 关闭
@@ -1534,6 +1552,7 @@ async function viewDashboard(){
   const devTotal = s.devices|0, devOn = s.devices_online|0, devOff = s.devices_offline|0;
   const gwTotal = s.gateways|0, gwOn = s.gateways_online|0, gwOff = s.gateways_offline|0;
   const appTotal = s.applications|0;
+  const dpsTotal = s.device_profiles|0, mcTotal = s.multicast_groups|0;
   const msgTotal = (s.uplinks|0) + (s.downlinks|0);
   const devLogs = s.device_logs||[], gwLogs = s.gateway_logs||[];
   document.getElementById('view').innerHTML = `
@@ -1541,7 +1560,7 @@ async function viewDashboard(){
     <div class="rings">
       ${dashRingCard('设备', devTotal, devOn, devOff, true)}
       ${dashRingCard('网关', gwTotal, gwOn, gwOff, true)}
-      ${dashRingCard('应用', appTotal, 0, 0, false)}
+      ${dashRingCard('应用', appTotal, 0, 0, false, `<div class="hl-row hl-split"><span>设备模板 <b>${dpsTotal}</b></span><span>组播组 <b>${mcTotal}</b></span></div>`)}
     </div>
 
     <div class="msg-bar">
@@ -1564,7 +1583,7 @@ async function viewDashboard(){
     </div>`;
 }
 /* 环形图卡片：split=true 时按 online(绿)/offline(红) 分段；否则整圈 accent 色显示总数。 */
-function dashRingCard(title, total, online, offline, split){
+function dashRingCard(title, total, online, offline, split, extra){
   const r=70, cx=90, cy=90, sw=18, C=2*Math.PI*r;
   // 从 CSS 变量取色，确保主题切换即时生效
   const cs = getComputedStyle(document.documentElement);
@@ -1593,6 +1612,8 @@ function dashRingCard(title, total, online, offline, split){
   } else {
     legend = `<div class="hl-row"><span>应用总数</span><b>${total}</b></div>`;
   }
+  // 应用卡片附加行（设备模板 / 组播组，左右分栏）
+  legend += extra || '';
   return `<div class="ring-card">
     <svg viewBox="0 0 180 180" class="ring">${arcs}
       <text x="${cx}" y="${cy-2}" text-anchor="middle" fill="${cTxt}" font-size="32" font-weight="700">${total}</text>
@@ -1650,7 +1671,7 @@ async function viewApplications(){
   window.viewApplications__page = p => _pagerGo({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',p);
   window.viewApplications__limit = l => _pagerSetLimit({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>应用</h2>${adminBtn('<button onclick="newApplication()">+ 新建应用</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -1749,7 +1770,7 @@ async function viewDevices(){
   window.viewDevices__limit = l => _pagerSetLimit({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备</h2>${adminBtn('<button onclick="newDevice()">+ 添加设备</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
-    <button class="btn ghost" onclick="state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};viewDevices()">重置</button></div>
+    <button class="btn ghost" onclick="resetFilters(()=>{state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};state.devsPage=1;state.devsOffset=0;state.devsLimit=50;}, viewDevices)">重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -1829,7 +1850,7 @@ async function viewGateways(){
   window.viewGateways__limit = l => _pagerSetLimit({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>网关</h2>${adminBtn('<button onclick="newGateway()">+ 新建网关</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
-      <button class="btn ghost" onclick="state.gwsFOnline='';state.gwsSort={col:'time',dir:'desc'};viewGateways()">重置</button></div>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline='';state.gwsSort={col:'time',dir:'desc'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -1905,7 +1926,7 @@ async function viewUplinks(){
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsFFcnt='';state.upsFPort='';state.upsPage=1;state.upsOffset=0;state.upsLimit=50;state.tenantFilter='';viewUplinks()">重置</button>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsFFcnt='';state.upsFPort='';state.upsPage=1;state.upsOffset=0;state.upsLimit=50;}, viewUplinks)">重置</button>
     </div>
     ${table}
     ${pager}`;
@@ -2005,7 +2026,7 @@ async function viewDownlinks(){
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';state.tenantFilter='';viewDownlinks()">重置</button>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';}, viewDownlinks)">重置</button>
     </div>
     ${table}
     ${pager}`;
@@ -2138,7 +2159,7 @@ async function viewEvents(){
       ${tf}
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${devOpts}</select></div>
       <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${gwOpts}</select></div>
-      <button class="btn ghost" onclick="state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50; state.tenantFilter=''; viewEvents()">重置</button>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50;}, viewEvents)">重置</button>
     </div>
     ${table}
     ${pager}`;
@@ -2317,7 +2338,7 @@ function resetApiLogFilter(){
   state.apiLogPage = 1;
   state.apiLogOffset = 0;
   state.apiLogLimit = 50;
-  viewApiLogs();
+  busy('重置中…', viewApiLogs);
 }
 
 // ================= 站点设置（仅 admin） =================
@@ -2325,22 +2346,54 @@ async function viewSettings(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/settings'); const s = r.data||{};
   const val = (k) => esc(s[k] || '');
-  document.getElementById('view').innerHTML = `<h2>站点设置</h2>
-   <div class="card" style="max-width:680px">
-     <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="HolaStack">
-     <label>顶部图标 URL（可选，留空则显示文字名称）</label><input id="st_logo" value="${val('site_logo_url')}" placeholder="https://example.com/logo.png">
-     <label>站点 Favicon URL（可选，浏览器标签页小图标，推荐 .ico/.png/.svg）</label><input id="st_favicon" value="${val('favicon_url')}" placeholder="https://example.com/favicon.ico">
-     <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
-     <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="HolaStack">
-     <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
-     <label>页面底部 Footer（支持 HTML，留空使用默认"© 年份 网站名称"，可用占位符 {Y}/{YEAR}/{SITE}）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
-     <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
-     <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
-     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
-       <button class="ghost" onclick="nav('dashboard')">取消</button>
-       <button onclick="busy('保存中…', saveSettings)">保存</button>
-     </div>
-   </div>`;
+  document.getElementById('view').innerHTML = `<style>
+  .st-wrap{display:flex;gap:18px;align-items:flex-start;margin-top:8px}
+  .st-side{width:200px;flex:0 0 200px;position:sticky;top:14px;display:flex;flex-direction:column;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 6px}
+  .st-item{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--txt);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+  .st-item:hover{background:var(--bg-chip)}
+  .st-item.active{background:var(--bg-chip);color:var(--txt);font-weight:600}
+  .st-main{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px}
+  .st-cat h3{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .st-cat.hidden{display:none}
+  @media(max-width:860px){.st-wrap{flex-direction:column}.st-side{width:100%;flex:none;position:static;flex-direction:row;overflow-x:auto}.st-main{padding:16px}}
+  </style>
+  <h2>站点设置</h2>
+  <div class="st-wrap">
+    <div class="st-side">
+      <button class="st-item active" onclick="stCat('basic',this)">基础信息</button>
+      <button class="st-item" onclick="stCat('login',this)">登录页</button>
+      <button class="st-item" onclick="stCat('footer',this)">页脚与集成</button>
+    </div>
+    <div class="st-main">
+      <div class="st-cat" id="stcat-basic">
+        <h3>基础信息</h3>
+        <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="HolaStack">
+        <label>顶部图标 URL（可选，留空则显示文字名称）</label><input id="st_logo" value="${val('site_logo_url')}" placeholder="https://example.com/logo.png">
+        <label>站点 Favicon URL（可选，浏览器标签页小图标，推荐 .ico/.png/.svg）</label><input id="st_favicon" value="${val('favicon_url')}" placeholder="https://example.com/favicon.ico">
+        <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
+      </div>
+      <div class="st-cat hidden" id="stcat-login">
+        <h3>登录页</h3>
+        <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
+        <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="HolaStack">
+        <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
+      </div>
+      <div class="st-cat hidden" id="stcat-footer">
+        <h3>页脚与集成</h3>
+        <label>页面底部 Footer（支持 HTML，留空使用默认"© 年份 网站名称"，可用占位符 {Y}/{YEAR}/{SITE}）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
+        <label>API 基础地址（用于 API 文档页的 curl 示例链接，留空则用当前站点地址）</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+        <button class="ghost" onclick="nav('dashboard')">取消</button>
+        <button onclick="busy('保存中…', saveSettings)">保存</button>
+      </div>
+    </div>
+  </div>`;
+}
+/* 站点设置分类切换（仿 apidocs 左栏）：仅显示当前分类；输入框全部保留在 DOM，saveSettings 一次提交不变 */
+function stCat(id, btn){
+  document.querySelectorAll('.st-cat').forEach(c => c.classList.toggle('hidden', c.id !== 'stcat-'+id));
+  document.querySelectorAll('.st-item').forEach(b => b.classList.toggle('active', b === btn));
 }
 async function saveSettings(){
   const langSel = document.getElementById('st_lang');
@@ -2604,7 +2657,7 @@ async function viewDeviceProfiles(){
   window.viewDeviceProfiles__limit = l => _pagerSetLimit({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',l);
   document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
-      <button class="btn ghost" onclick="state.dpsFRegion='';state.dpsFCls='';state.dpsSort={col:null,dir:'desc'};viewDeviceProfiles()">重置</button></div>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion='';state.dpsFCls='';state.dpsSort={col:null,dir:'desc'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -2884,7 +2937,7 @@ async function viewMulticastGroups(){
      <td class="muted"><code>${esc(m.mc_addr)}</code></td><td class="muted">DR${m.dr}</td><td class="muted">${m.f_cnt}</td>
      <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delMulticast(${m.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
   document.getElementById('view').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2>组播组</h2>${adminBtn('<button onclick="newMulticast()">+ 新建组播组</button>')}</div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div></div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';}, viewMulticastGroups)">重置</button></div>
    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>区域</th><th>类型</th><th>MC Addr</th><th>DR</th><th>FCnt</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function multicastForm(m){
