@@ -56,9 +56,17 @@ async function editGateway(gwId){ const r = await api('GET','/api/gateways'); co
 async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
-function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><label class="check"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label>
+function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><label class="check"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label><label class="check"><input type="checkbox" id="m_mac" onchange="macToggle()"> MAC 命令（FPort=0，NwkSKey 加密）</label>
+  <div class="muted" style="font-size:12px;margin-top:6px" id="macHint">MAC 命令不走应用层，用于修改设备参数（RX2 频率、DR 等）</div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('发送中…', ()=>sendDown(${devId}))">发送</button></div>`); }
-async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked}); if(r.error){alert(t(r.error));return;} closeModal(); alert('已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。'); }
+function macToggle(){
+  const mac = document.getElementById('m_mac').checked;
+  const port = document.getElementById('m_port');
+  port.disabled = mac;
+  port.value = mac ? '0' : '10';
+  port.style.opacity = mac ? '0.45' : '';
+}
+async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked, mac:document.getElementById('m_mac').checked}); if(r.error){alert(t(r.error));return;} closeModal(); alert('已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。'); }
 
 async function newUser(){
   let tenants = '';

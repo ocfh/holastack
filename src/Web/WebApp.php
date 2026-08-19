@@ -677,7 +677,7 @@ class WebApp
         return (int) Database::fetch($sql, $params)['c'];
     }
 
-    public static function enqueueDownlink(int $devId, int $port, string $payloadHex, bool $confirmed): array
+    public static function enqueueDownlink(int $devId, int $port, string $payloadHex, bool $confirmed, bool $mac = false): array
     {
         $device = Database::fetch("SELECT * FROM devices WHERE id=?", [$devId]);
         if (!$device) {
@@ -692,13 +692,15 @@ class WebApp
         if (strlen($payloadHex) % 2 !== 0) {
             return ['error' => 'payload hex length must be even'];
         }
-        if ($port < 1 || $port > 223) {
+        if ($mac) {
+            $port = 0;
+        } elseif ($port < 1 || $port > 223) {
             return ['error' => 'port must be 1..223'];
         }
         Database::execute(
-            "INSERT INTO downlinks (dev_id, app_id, port, payload_hex, confirmed, status, created_at)
-             VALUES (?,?,?,?,?,?,?)",
-            [$devId, $device['app_id'], $port, strtolower($payloadHex), $confirmed ? 1 : 0, 'pending', time()]
+            "INSERT INTO downlinks (dev_id, app_id, port, payload_hex, confirmed, mac, status, created_at)
+             VALUES (?,?,?,?,?,?,?,?)",
+            [$devId, $device['app_id'], $port, strtolower($payloadHex), $confirmed ? 1 : 0, $mac ? 1 : 0, 'pending', time()]
         );
         return ['id' => Database::lastInsertId(), 'status' => 'pending'];
     }

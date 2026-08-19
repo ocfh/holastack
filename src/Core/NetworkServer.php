@@ -918,7 +918,8 @@ class NetworkServer
 
             $macCarried = (!$macConsumed) && (($mac['fopts'] ?? '') !== '');
             $fopts = $macCarried ? $mac['fopts'] : '';
-            $downPhy = $this->buildDownFrame($ks, $devAddrBin, $fcntDown, $confirmed, false, (int) $dl['port'], $payload, (bool) $device['adr'], $fopts, '');
+            $isMac = (int) ($dl['mac'] ?? 0) === 1;
+            $downPhy = $this->buildDownFrame($ks, $devAddrBin, $fcntDown, $confirmed, false, $isMac ? 0 : (int) $dl['port'], $isMac ? '' : $payload, (bool) $device['adr'], $fopts, $isMac ? $payload : '');
             $this->bumpDownFCnt($device['id']);
             
 
@@ -935,13 +936,15 @@ class NetworkServer
                 [$dlFreq, $dlDatr, $mode] = $this->enqueueClassCDownlink($device, $region, $downPhy, $tmst, $freq, $datr, $gwEui, $peer);
                 $dlRawJson = $this->buildDataDownLog($downPhy, $tmst, $dlFreq, $dlDatr, $gwEui);
                 $modeDesc = ($mode === 'a-windows') ? 'RX1/2' : 'imme';
-                $this->log("APP DOWNLINK -> dev_id={$device['id']} port={$dl['port']} (Class C $modeDesc)");
+                $kind = $isMac ? 'MAC CMD' : 'APP';
+                $this->log("$kind DOWNLINK -> dev_id={$device['id']} port={$dl['port']} (Class C $modeDesc)");
                 $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class C $modeDesc)", $gwEui, $device['id'], $device['app_id'], $dlRawJson);
             } else {
                 
 
                 $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
-                $this->log("APP DOWNLINK -> dev_id={$device['id']} port={$dl['port']}");
+                $kind = $isMac ? 'MAC CMD' : 'APP';
+                $this->log("$kind DOWNLINK -> dev_id={$device['id']} port={$dl['port']}");
                 $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $dlRawJson);
             }
             Database::execute("UPDATE downlinks SET status='sent', fcnt=?, sent_at=?, raw_json=? WHERE id=?", [$fcntDown, time(), $dlRawJson, $dl['id']]);

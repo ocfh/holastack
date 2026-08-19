@@ -522,10 +522,11 @@ async function viewDownlinks(){
       const sent = d.sent_at ? new Date(d.sent_at*1000).toLocaleString() : '—';
       const ack = d.acknowledged_at ? new Date(d.acknowledged_at*1000).toLocaleString() : '—';
       const textDisp = hexToText(d.payload_hex);
+      const isMac = (d.mac == 1);
       return `<tr><td>${d.id}</td>
         <td class="muted"><span class="pill" style="margin:0">${esc(appName(d.app_id))}</span></td>
         <td class="muted">${esc(devName(d.dev_id))}</td>
-        <td>${d.port}</td><td>${d.confirmed?'✓':'-'}</td>
+        <td>${d.port}${isMac ? ' <span class="tag" style="margin-left:4px">MAC</span>' : ''}</td><td>${d.confirmed?'✓':'-'}</td>
         <td class="cell-scroll"><code>${hex(d.payload_hex)}</code></td>
         <td class="muted cell-scroll" style="font-family:monospace">${esc(textDisp)}</td>
         <td><span class="tag ${st.cls}">${st.label}</span></td>

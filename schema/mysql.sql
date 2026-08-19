@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS downlinks (
     port INT NOT NULL,
     payload_hex TEXT NOT NULL,
     confirmed TINYINT NOT NULL DEFAULT 0,
+    mac TINYINT NOT NULL DEFAULT 0,
     fcnt INT NOT NULL DEFAULT 0,
     status VARCHAR(16) NOT NULL DEFAULT 'pending',
     created_at INT NOT NULL,

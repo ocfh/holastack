@@ -274,7 +274,7 @@ function handleApi(string $method, string $path): array
             return ['data' => WebApp::listApplications($tid)];
         case 'devices':
             if (isset($segs[1]) && ($segs[2] ?? '') === 'downlink' && $method === 'POST') {
-                return WebApp::enqueueDownlink((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '', !empty($body['confirmed']));
+                return WebApp::enqueueDownlink((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '', !empty($body['confirmed']), !empty($body['mac']));
             }
             if (isset($segs[1]) && $method === 'PUT') {
                 return WebApp::updateDevice((int) $segs[1], $body);
@@ -594,7 +594,8 @@ function handleAppApi(string $method, string $path): array
                     $port = (int) ($body['port'] ?? 0);
                     $payload = (string) ($body['payload'] ?? '');
                     $confirmed = !empty($body['confirmed']);
-                    $r = WebApp::enqueueDownlink($dev['id'], $port, $payload, $confirmed);
+                    $mac = !empty($body['mac']);
+                    $r = WebApp::enqueueDownlink($dev['id'], $port, $payload, $confirmed, $mac);
                     if (isset($r['error'])) {
                         http_response_code(400);
                         return $r;
