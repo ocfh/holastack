@@ -969,12 +969,12 @@ class WebApp
 
         if ($cur['role'] === Auth::ROLE_ADMIN) {
             return Database::fetchAll(
-                "SELECT u.id, u.username, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name, u.created_at
+                "SELECT u.id, u.username, u.email, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name, u.created_at
                  FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id ORDER BY u.id DESC"
             );
         }
         return [[
-            'id' => $cur['id'], 'username' => $cur['username'], 'role' => $cur['role'],
+            'id' => $cur['id'], 'username' => $cur['username'], 'email' => $cur['email'] ?? '', 'role' => $cur['role'],
             'tenant_id' => (int) ($cur['tenant_id'] ?? 0), 'tenant_name' => '', 'created_at' => 0,
         ]];
     }
@@ -1067,8 +1067,21 @@ class WebApp
         } else {
             $tid = 0;
         }
-        Database::execute("UPDATE users SET role=?, tenant_id=? WHERE id=?", [$role, $tid, $id]);
+        $email = strtolower(trim((string) ($p['email'] ?? $u['email'] ?? '')));
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ['error' => 'invalid email'];
+        }
+        Database::execute("UPDATE users SET role=?, tenant_id=?, email=? WHERE id=?", [$role, $tid, $email, $id]);
         return ['ok' => true];
+    }
+
+    public static function avatarUrl(?string $email): string
+    {
+        $email = strtolower(trim((string) ($email ?? '')));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return 'https://gravatar.webp.se/avatar/00000000000000000000000000000000?s=40&d=mp';
+        }
+        return 'https://gravatar.webp.se/avatar/' . md5($email) . '?s=40&d=retro';
     }
 
     public static function getStats(): array

@@ -7,12 +7,26 @@ function toggleTheme(){
   
   rerenderForTheme();
 }
-function rerenderForTheme(){
+async function rerenderForTheme(){
   var v = state.view;
-  if (v === 'dashboard' && typeof viewDashboard === 'function') return viewDashboard();
-  if (v === 'loracalc' && typeof viewLoraCalc === 'function') return viewLoraCalc();
-  if (v === 'apidocs' && typeof viewApiDocs === 'function') return viewApiDocs();
-  
+  if (v === 'dashboard' && typeof viewDashboard === 'function') await viewDashboard();
+  else if (v === 'loracalc' && typeof viewLoraCalc === 'function') await viewLoraCalc();
+  else if (v === 'apidocs' && typeof viewApiDocs === 'function') await viewApiDocs();
+  applyMobileH2();
+}
+function applyMobileH2(){
+  const ph = document.querySelector('#view h2');
+  if (!ph) return;
+  const mobile = window.innerWidth <= 760;
+  ph.style.display = mobile ? 'none' : '';
+  const p = ph.parentElement;
+  if (!p) return;
+  if (mobile) {
+    const others = Array.from(p.children).filter(c => c !== ph && c.offsetParent !== null);
+    p.style.justifyContent = others.length ? 'flex-end' : 'space-between';
+  } else {
+    p.style.justifyContent = 'space-between';
+  }
 }
 
 
@@ -133,6 +147,8 @@ function renderShell(){
   document.getElementById('topbar').classList.remove('hidden');
   document.getElementById('view').classList.remove('hidden');
   document.getElementById('who').textContent = state.user.username;
+  const av = document.getElementById('avatar');
+  if (av) av.src = state.user.avatar_url || 'https://gravatar.webp.se/avatar/00000000000000000000000000000000?s=40&d=mp';
   renderNav();
   
   applyPublicSettings();
@@ -199,7 +215,13 @@ function renderNav(){
     return `<div class="mp-group"><div class="mp-glabel">${g.label}</div><div class="mp-grid">${grid}</div></div>`;
   }).join('') + `<div class="mp-group"><div class="mp-glabel">账户</div><div class="mp-grid">${accountGrid}</div></div>`;
   bindNavLinks();
+  updateNavActive();
+}
+function updateNavActive(){
   document.querySelectorAll('.nav').forEach(a => a.classList.toggle('active', a.dataset.v === state.view));
+  document.querySelectorAll('.navgrp').forEach(g => {
+    g.classList.toggle('active', !!g.querySelector('.nav.active'));
+  });
 }
 function bindNavLinks(){
   document.querySelectorAll('.nav').forEach(a => a.onclick = () => { nav(a.dataset.v); closeNav(); closeGrps(); });
@@ -379,7 +401,7 @@ async function nav(v, silent=false){
   const openSelId = silent ? captureOpenSelId() : null;
   if (openSelId) closeAllSelMenus(true); else closeAllSelMenus();
   if(!silent){ closeNav(); closeGrps(); }
-  document.querySelectorAll('.nav').forEach(a=>a.classList.toggle('active', a.dataset.v===v));
+  updateNavActive();
   const pt = document.getElementById('pageTitle');
   if (pt) pt.textContent = VIEW_TITLES[v] || '';
   const savedScroll = silent ? captureScrollState() : null;
@@ -408,18 +430,7 @@ async function nav(v, silent=false){
     else if (v==='settings') await viewSettings();
     else document.getElementById('view').innerHTML = '<div class="muted">未知页面</div>';
     
-    const ph = document.querySelector('#view h2');
-    if (ph) {
-      const mobile = window.innerWidth <= 760;
-      ph.style.display = mobile ? 'none' : '';
-      if (mobile) {
-        const p = ph.parentElement;
-        if (p) {
-          const others = Array.from(p.children).filter(c => c !== ph && c.offsetParent !== null);
-          if (others.length) p.style.justifyContent = 'flex-end';
-        }
-      }
-    }
+    applyMobileH2();
     if (isDemo()) disableDemoWriteButtons();
   } catch(e){
     if(!silent) document.getElementById('view').innerHTML = `<div class="err-box">加载失败：${esc(e && e.message ? e.message : e)}</div>`;
@@ -428,7 +439,7 @@ async function nav(v, silent=false){
     if (savedScroll) restoreScrollState(savedScroll);
     if (openSelId) {
       enhanceSelects(document);
-      openSelById(openSelId);
+      openSelById(openSelId, true);
     }
   }
 }
@@ -455,8 +466,13 @@ window.addEventListener('hashchange', ()=>{
 
 
 const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','downlinks','events'];
+function isSelMenuOpen(){
+  const list = window.__selMenus || [];
+  return list.some(m => m.wrap && m.wrap.classList.contains('open'));
+}
 setInterval(()=>{
   if (document.getElementById('modal').classList.contains('show')) return; 
+  if (isSelMenuOpen()) return; 
   if (AUTO_REFRESH_VIEWS.includes(state.view)) nav(state.view, true);
 }, 5000);
 
@@ -528,6 +544,7 @@ function v(id){ return document.getElementById(id).value.trim(); }
 
 function enhanceSelects(root){
   root = root || document;
+  window.__selMenus = (window.__selMenus || []).filter(m => m.wrap && m.wrap.isConnected);
   root.querySelectorAll('select:not([data-enhanced])').forEach(enhanceSelect);
 }
 function enhanceSelect(sel){
@@ -540,7 +557,7 @@ function enhanceSelect(sel){
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'sel-btn';
-  btn.innerHTML = '<span class="sel-label"></span><span class="sel-caret"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span>';
+  btn.innerHTML = '<span class="sel-label"></span><span class="sel-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span>';
   const menu = document.createElement('div');
   menu.className = 'sel-menu';
 
@@ -579,7 +596,7 @@ function enhanceSelect(sel){
     menu.style.minWidth = Math.max(r.width, 120) + 'px';
   };
   let closing = false;
-  const open = () => {
+  const open = (instant) => {
     closing = false;
     closeAllSelMenus(false);
     render();
@@ -587,9 +604,11 @@ function enhanceSelect(sel){
     menu.classList.remove('open');
     document.body.appendChild(menu);
     menu.style.display = 'block';
+    if (instant) menu.style.transition = 'none';
     void menu.offsetWidth;
     menu.classList.add('open');
     wrap.classList.add('open');
+    if (instant) requestAnimationFrame(() => { menu.style.transition = ''; });
   };
   const close = (immediate) => {
     closing = true;
@@ -637,22 +656,33 @@ function captureOpenSelId(){
   const list = window.__selMenus || [];
   const entry = list.find(m => m.wrap && m.wrap.classList.contains('open') && m.sel);
   if (!entry || !entry.sel) return null;
-  return entry.sel.id || entry.sel.name || null;
+  if (entry.sel.id) return 'id:' + entry.sel.id;
+  if (entry.sel.name) return 'name:' + entry.sel.name;
+  return 'idx:' + Array.from(document.querySelectorAll('select')).indexOf(entry.sel);
 }
-function openSelById(id){
+function openSelById(id, instant){
   if (!id) return;
   const list = window.__selMenus || [];
-  const entry = list.find(m => m.sel && (m.sel.id === id || m.sel.name === id));
-  if (entry) entry.open();
+  let entry = null;
+  if (id.indexOf('idx:') === 0) {
+    const sel = Array.from(document.querySelectorAll('select'))[+id.slice(4)];
+    if (sel) entry = list.find(m => m.sel === sel);
+  } else if (id.indexOf('id:') === 0) {
+    entry = list.find(m => m.wrap && m.wrap.isConnected && m.sel && m.sel.id === id.slice(3));
+  } else if (id.indexOf('name:') === 0) {
+    entry = list.find(m => m.wrap && m.wrap.isConnected && m.sel && m.sel.name === id.slice(5));
+  }
+  if (entry) entry.open(instant);
 }
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.selwrap')) closeAllSelMenus();
 });
 window.addEventListener('scroll', (e) => {
+  if (!e.isTrusted) return; // 程序化滚动（刷新后恢复滚动位置）不关闭下拉菜单
   if (e.target && e.target.closest && e.target.closest('.sel-menu')) return;
   closeAllSelMenus();
 }, true);
-window.addEventListener('resize', () => closeAllSelMenus());
+window.addEventListener('resize', () => { closeAllSelMenus(); applyMobileH2(); });
 const _selObserver = new MutationObserver(muts => {
   muts.forEach(m => {
     if (!m.addedNodes) return;

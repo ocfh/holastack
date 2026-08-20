@@ -31,7 +31,7 @@ async function viewDashboard(){
       <div class="log-col ${devOpen?'':'collapsed'}" data-kind="dev">
         <div class="log-head" onclick="toggleLogCol(this)">
           <h3>最近设备日志</h3>
-          <span class="log-fold"><span class="log-chev"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span><span class="log-fold-txt">${devOpen?t('折叠'):t('展开')}</span></span>
+          <span class="log-fold"><span class="log-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span><span class="log-fold-txt">${devOpen?t('折叠'):t('展开')}</span></span>
           <button class="log-more" onclick="event.stopPropagation();nav('events')">查看全部</button>
         </div>
         <div class="log-body"><div class="log-inner">${devLogs.length? devLogs.map(e=>dashLogRow(e,'dev #'+(e.dev_id||''))).join('') : '<div class="log-empty">暂无设备日志</div>'}</div></div>
@@ -39,7 +39,7 @@ async function viewDashboard(){
       <div class="log-col ${gwOpen?'':'collapsed'}" data-kind="gw">
         <div class="log-head" onclick="toggleLogCol(this)">
           <h3>最近网关日志</h3>
-          <span class="log-fold"><span class="log-chev"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span><span class="log-fold-txt">${gwOpen?t('折叠'):t('展开')}</span></span>
+          <span class="log-fold"><span class="log-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span><span class="log-fold-txt">${gwOpen?t('折叠'):t('展开')}</span></span>
           <button class="log-more" onclick="event.stopPropagation();nav('events')">查看全部</button>
         </div>
         <div class="log-body"><div class="log-inner">${gwLogs.length? gwLogs.map(e=>dashLogRow(e,'网关 '+esc(e.gateway_id||''))).join('') : '<div class="log-empty">暂无网关日志</div>'}</div></div>
@@ -443,15 +443,6 @@ function copyModalPre(){
   const pre = document.querySelector('#modalBox pre');
   copyText(pre ? pre.textContent : '');
 }
-function selectModalPre(){
-  const pre = document.querySelector('#modalBox pre');
-  if (!pre) return;
-  const range = document.createRange();
-  range.selectNodeContents(pre);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
 async function showRaw(id){
   const u=(state.ups||[]).find(x=>x.id===id); if(!u)return;
   let j={}; try { j = u.raw_json ? JSON.parse(u.raw_json) : {}; } catch(e){}
@@ -459,8 +450,7 @@ async function showRaw(id){
     openModal(`<h3>${t('原始 JSON')} #${id}</h3><p class="muted">该上行无原始协议报文。</p><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
     return;
   }
-  openModal(`<h3>${t('原始 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="copyModalPre()">复制</button><button class="ghost" onclick="closeModal()">关闭</button></div>`);
-  selectModalPre();
+  openModal(`<h3>${t('原始 JSON')} #${id}</h3><div style="position:relative"><button class="ad-copy" onclick="copyModalPre()">复制</button><pre>${esc(JSON.stringify(j,null,2))}</pre></div><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
 
@@ -559,9 +549,8 @@ async function showDownlinkRaw(id){
     try { proto = JSON.parse(d.raw_json); } catch(e) {}
     openModal(`<h3>${t('下行 JSON')} #${id}</h3>
       <p class="muted" style="margin:4px 0 10px">网关协议原文（txpk / phy_payload）</p>
-      <pre>${esc(JSON.stringify(proto, null, 2))}</pre>
-      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="copyModalPre()">复制</button><button class="ghost" onclick="closeModal()">关闭</button></div>`);
-    selectModalPre();
+      <div style="position:relative"><button class="ad-copy" onclick="copyModalPre()">复制</button><pre>${esc(JSON.stringify(proto, null, 2))}</pre></div>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
     return;
   }
   
@@ -583,13 +572,12 @@ async function showDownlinkRaw(id){
   const hexRows = bytes.length ? bytes.map((b,i)=>`<span class="mono">${hexStr.substr(i*2,2).toUpperCase()}</span>`).join(' ') : '(空)';
   openModal(`<h3>${t('下行 JSON')} #${id}</h3>
     <p class="muted" style="margin:4px 0 10px">格式化结构（payload 已解析为字节数组与 ASCII）</p>
-    <pre>${pretty}</pre>
+    <div style="position:relative"><button class="ad-copy" onclick="copyModalPre()">复制</button><pre>${pretty}</pre></div>
     <h4 style="margin:16px 0 6px">Payload 十六进制字节</h4>
     <div class="mono" style="line-height:1.9">${hexRows}</div>
     <h4 style="margin:14px 0 6px">ASCII</h4>
     <div class="mono">${esc(ascii)||'(不可打印)'}</div>
-    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="copyModalPre()">复制</button><button class="ghost" onclick="closeModal()">关闭</button></div>`);
-  selectModalPre();
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
 async function viewEvents(){
@@ -694,8 +682,7 @@ async function showEventRaw(id){
     openModal(`<h3>${t('事件 JSON')} #${id}</h3><p class="muted">该事件无原始协议报文（网关系统事件 / 流程事件）。</p><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
     return;
   }
-  openModal(`<h3>${t('事件 JSON')} #${id}</h3><pre>${esc(JSON.stringify(j,null,2))}</pre><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="copyModalPre()">复制</button><button class="ghost" onclick="closeModal()">关闭</button></div>`);
-  selectModalPre();
+  openModal(`<h3>${t('事件 JSON')} #${id}</h3><div style="position:relative"><button class="ad-copy" onclick="copyModalPre()">复制</button><pre>${esc(JSON.stringify(j,null,2))}</pre></div><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 async function viewUsers(){
   if (!isAdmin()) { nav('dashboard'); return; }
@@ -703,17 +690,18 @@ async function viewUsers(){
   const userCfg = {
     state, stateKey:'usersSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (u, k) => ({id:u.id, username:u.username, role:u.role, tenant:u.tenant_id||0, time:u.created_at}[k]),
+    cellValue: (u, k) => ({id:u.id, username:u.username, email:u.email||'', role:u.role, tenant:u.tenant_id||0, time:u.created_at}[k]),
     cols:[
       {key:'id',       label:'ID',       type:'num', firstDir:'asc', sortable:false},
       {key:'username', label:'用户名',    type:'str', firstDir:'asc', sortable:false},
+      {key:'email',    label:'邮箱',      type:'str', firstDir:'asc', sortable:false},
       {key:'role',     label:'角色',      type:'str', firstDir:'asc', sortable:false},
       {key:'tenant',   label:'用户配置',  type:'num', firstDir:'asc', sortable:false},
       {key:'time',     label:'创建时间',  type:'time', firstDir:'desc'},
       {key:'_raw',     label:'',         type:'raw'},
     ],
     rows: state.users,
-    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td><span class="tag">${u.role}</span></td>
+    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span></td>
      <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
      <td><button class="btn ghost" onclick="editUser(${u.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`,

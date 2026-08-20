@@ -397,6 +397,27 @@ class Region
     public function getMaxUlDr(): int { return (int) $this->cfg['max_ul_dr']; }
     public function getCfList() { return $this->cfg['cf_list']; }
 
+    public function getDefaultUplinkChannels(): array
+    {
+        switch ($this->name) {
+            case 'US915':
+            case 'AU915':
+                return range(0, 63);
+            case 'CN470':
+                return range(0, 95);
+            case 'AS923':
+            case 'IN865':
+            case 'KR920':
+                return [0, 1];
+            case 'EU868':
+            case 'EU433':
+            case 'CN779':
+            case 'RU864':
+            default:
+                return [0, 1, 2];
+        }
+    }
+
     
 
 

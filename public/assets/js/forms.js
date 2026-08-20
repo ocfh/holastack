@@ -56,7 +56,7 @@ async function editGateway(gwId){ const r = await api('GET','/api/gateways'); co
 async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
-function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><label class="check"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label><label class="check"><input type="checkbox" id="m_mac" onchange="macToggle()"> MAC 命令（FPort=0，NwkSKey 加密）</label>
+function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_mac" onchange="macToggle()"> MAC 命令（FPort=0，NwkSKey 加密）</label></div>
   <div class="muted" style="font-size:12px;margin-top:6px" id="macHint">MAC 命令不走应用层，用于修改设备参数（RX2 频率、DR 等）</div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('发送中…', ()=>sendDown(${devId}))">发送</button></div>`); }
 function macToggle(){
@@ -72,13 +72,14 @@ async function newUser(){
   let tenants = '';
   try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join(''); } catch(e){}
   openModal(`<h3>新建用户</h3><label>用户名</label><input id="m_user"><label>密码（≥6 位）</label><input id="m_pass" type="password">
+    <label>邮箱（可选，用于头像）</label><input id="m_email" type="email" placeholder="user@example.com">
     <label>角色</label><select id="m_role" onchange="roleTenantToggle()">
       <option value="operator">operator（演示：只读 + 模拟数据）</option>
       <option value="tenant">用户配置（仅本用户配置数据，可写）</option>
       <option value="admin">admin（全部权限）</option>
     </select>
-    <div id="m_tenant_box" class="hidden"><label>绑定用户配置（用户配置角色；留空则自动新建同名用户配置）</label>
-      <select id="m_tenant"><option value="">— 自动新建同名用户配置 —</option>${tenants}</select>
+    <div id="m_tenant_box" class="hidden"><label>绑定用户配置</label>
+      <select id="m_tenant"><option value="" disabled selected>— 选择用户配置 —</option>${tenants}</select>
     </div>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveUser)">保存</button></div>`);
   roleTenantToggle();
@@ -89,11 +90,11 @@ function roleTenantToggle(){
 }
 async function saveUser(){
   const role = v('m_role');
-  const body = {username:v('m_user'), password:v('m_pass'), role};
+  const body = {username:v('m_user'), password:v('m_pass'), role, email:v('m_email')};
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;
-    else body.new_tenant_name = v('m_user'); 
+    else { alert(t('请选择用户配置')); return; }
   }
   const r = await api('POST','/api/users',body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
@@ -107,24 +108,24 @@ async function editUser(id){
   const isSelf = state.user && state.user.id === id;
   openModal(`<h3>编辑用户 #${id}（${esc(u.username)}）</h3>
     <label>用户名</label><input id="m_user" value="${esc(u.username)}" disabled>
+    <label>邮箱（可选，用于头像）</label><input id="m_email" type="email" value="${esc(u.email||'')}" placeholder="user@example.com">
     <label>角色</label><select id="m_role" onchange="roleTenantToggle()" ${isSelf?'disabled':''}>
       <option value="operator" ${u.role==='operator'?'selected':''}>operator（演示：只读 + 模拟数据）</option>
       <option value="tenant" ${u.role==='tenant'?'selected':''}>用户配置（仅本用户配置数据，可写）</option>
       <option value="admin" ${u.role==='admin'?'selected':''}>admin（全部权限）</option>
     </select>
-    <div id="m_tenant_box" class="${u.role==='tenant'?'':'hidden'}"><label>绑定用户配置（留空则自动新建同名用户配置）</label>
-      <select id="m_tenant"><option value="">— 自动新建同名用户配置 —</option>${tenants}</select>
+    <div id="m_tenant_box" class="${u.role==='tenant'?'':'hidden'}"><label>绑定用户配置</label>
+      <select id="m_tenant">${u.tenant_id ? '' : '<option value="" disabled selected>— 选择用户配置 —</option>'}${tenants}</select>
     </div>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">保存</button></div>`);
   roleTenantToggle();
 }
 async function saveUserEdit(id){
   const role = v('m_role');
-  const body = {role};
+  const body = {role, email:v('m_email')};
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;
-    else body.new_tenant_name = v('m_user');
   }
   const r = await api('PUT',`/api/users/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
@@ -143,15 +144,21 @@ function tenantForm(d){
   return `<label>${t('名称')}</label><input id="t_name" value="${esc(d.name||'')}">
   <label>${t('描述')}</label><input id="t_desc" value="${esc(d.description||'')}">
   <div class="row" style="align-items:flex-end">
-    <div><label>${t('启用私有网关上限')}</label>
+    <div><label>${t('私有网关限额')}</label>
       <label class="check" style="margin:6px 0 0">
-        <input type="checkbox" id="t_unlimited" ${unlimited?'':'checked'} onchange="document.getElementById('t_limit_div').style.display=this.checked?'':'none'">
-        <span>${unlimited?t('已关闭（无限额）'):t('已启用（受上限约束）')}</span>
+        <input type="checkbox" id="t_unlimited" ${unlimited?'checked':''} onchange="tenantLimitToggle()">
+        <span>${t('无限制（可创建任意数量网关）')}</span>
       </label>
-      <div class="muted" style="font-size:11px;margin-top:4px">${t('取消勾选后该用户配置可创建任意数量的网关；勾选时按下方上限约束。')}</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">${t('勾选后该用户配置可创建任意数量的网关；取消勾选时按下方上限约束。')}</div>
     </div>
     <div id="t_limit_div" style="${unlimited?'display:none':''}"><label>${t('私有网关上限')}</label><input id="t_limit" type="number" min="0" value="${limit}"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不允许创建网关；正值 = 允许的最大私有网关数。')}</div></div>
   </div>`;
+}
+function tenantLimitToggle(){
+  const cb = document.getElementById('t_unlimited');
+  if (!cb) return;
+  const div = document.getElementById('t_limit_div');
+  if (div) div.style.display = cb.checked ? 'none' : '';
 }
 function newTenant(){
   
@@ -159,12 +166,12 @@ function newTenant(){
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(0))">${t('保存')}</button></div>`);
 }
 async function saveTenant(id){
-  const unlimited = !document.getElementById('t_unlimited').checked; 
+  const unlimited = document.getElementById('t_unlimited').checked;
   const body = {
     name: v('t_name'),
     description: v('t_desc'),
     private_gateways_unlimited: unlimited ? 1 : 0,
-    private_gateways_limit: +v('t_limit') || 0,
+    private_gateways_limit: unlimited ? 0 : (+v('t_limit') || 0),
   };
   const r = id ? await api('PUT',`/api/tenants/${id}`,body) : await api('POST','/api/tenants',body);
   if(r.error){alert(t(r.error));return;} closeModal(); viewTenants();

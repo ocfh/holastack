@@ -306,18 +306,18 @@ HTML;
         }
 
         $pageTitle = '<h2>' . $t('API 文档') . '</h2>';
-        return $pageTitle . <<<HTML
+        $intro = '<h2>' . $t('应用开放 API（v1）') . '</h2>'
+            . '<p class="ad-note" style="margin-top:2px">'
+            . $t('使用「应用 API Key」调用，作用域限定到该 Key 所属应用。所有请求需在头部携带')
+            . '<code>Authorization: Bearer &lt;API_KEY&gt;</code>（' . $t('或 URL 参数') . ' <code>?api_key=&lt;API_KEY&gt;</code>）。'
+            . $t('API Key 在后台「应用 → API Key」中创建，') . '<b>' . $t('明文仅显示一次') . '</b>' . $t('，请妥善保存。')
+            . '</p>';
+        return $pageTitle . $intro . <<<HTML
 <div class="apidocs">
   <div class="ad-side" id="adSide">
     $side
   </div>
   <div class="ad-main">
-    <h2>{$t('应用开放 API（v1）')}</h2>
-    <p class="ad-note" style="margin-top:2px">
-      {$t('使用「应用 API Key」调用，作用域限定到该 Key 所属应用。所有请求需在头部携带')}
-      <code>Authorization: Bearer &lt;API_KEY&gt;</code>（{$t('或 URL 参数')} <code>?api_key=&lt;API_KEY&gt;</code>）。
-      {$t('API Key 在后台「应用 → API Key」中创建，')}<b>{$t('明文仅显示一次')}</b>{$t('，请妥善保存。')}
-    </p>
     $main
   </div>
 </div>
@@ -338,15 +338,15 @@ HTML;
         $t = 'elw_t';
         
 
-        $paramsRows = '';
+        $paramsSec = '';
         if (!empty($a['params'])) {
+            $paramsRows = '';
             foreach ($a['params'] as $p) {
                 $paramsRows .= '<tr><td><code>' . htmlspecialchars($p['name'], ENT_QUOTES) . '</code></td><td>' . $t($p['in']) . '</td><td>' . $p['type'] . '</td><td>'
                     . ($p['required'] ? '<span class="tag err">' . $t('必填') . '</span>' : '<span class="tag off">' . $t('可选') . '</span>')
                     . '</td><td class="ad-note">' . $t($p['desc']) . '</td></tr>';
             }
-        } else {
-            $paramsRows = '<tr><td colspan="5" class="ad-note">' . $t('无参数') . '</td></tr>';
+            $paramsSec = '<div class="ad-sec"><h3>' . $t('请求参数') . '</h3><table class="ad-tbl"><thead><tr><th>' . $t('参数') . '</th><th>' . $t('位置') . '</th><th>' . $t('类型') . '</th><th>' . $t('必填') . '</th><th>' . $t('说明') . '</th></tr></thead><tbody>' . $paramsRows . '</tbody></table></div>';
         }
         
 
@@ -372,9 +372,11 @@ HTML;
 
         $curl = self::adCurl($a);
         $body = self::adCode($curl);
+        $copyBtn = self::adCopyBtn();
         
 
         $respJson = json_encode($a['respExample'] ?? new \stdClass(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $respExample = self::adCode($respJson);
         $bodyBlock = ($a['method'] === 'POST' && !empty($a['sample']))
             ? '<div class="ad-sec"><h3>' . $t('请求体 (JSON)') . '</h3>' . self::adCode(json_encode($a['sample'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</div>'
             : '';
@@ -387,12 +389,12 @@ HTML;
     <h2 style="margin:0">{$t($a['title'])}</h2>
   </div>
   <p class="ad-note" style="margin-top:6px">{$t($a['desc'])}</p>
-  <div class="ad-path"><code>{$a['method']} {$a['path']}</code>{self::adCopyBtn()}</div>
-  <div class="ad-sec"><h3>{$t('请求参数')}</h3><table class="ad-tbl"><thead><tr><th>{$t('参数')}</th><th>{$t('位置')}</th><th>{$t('类型')}</th><th>{$t('必填')}</th><th>{$t('说明')}</th></tr></thead><tbody>$paramsRows</tbody></table></div>
+  <div class="ad-path"><code>{$a['method']} {$a['path']}</code>$copyBtn</div>
+  $paramsSec
   $bodyBlock
   <div class="ad-sec"><h3>{$t('请求示例')}</h3>$body</div>
   <div class="ad-sec"><h3>{$t('响应字段')}</h3><table class="ad-tbl"><thead><tr><th>{$t('字段')}</th><th>{$t('类型')}</th><th>{$t('说明')}</th></tr></thead><tbody>$respRows</tbody></table></div>
-  <div class="ad-sec"><h3>{$t('响应示例')}</h3>{self::adCode($respJson)}</div>
+  <div class="ad-sec"><h3>{$t('响应示例')}</h3>$respExample</div>
   <div class="ad-sec"><h3>{$t('错误码')}</h3><table class="ad-tbl"><thead><tr><th>{$t('HTTP / 错误')}</th><th>{$t('说明')}</th></tr></thead><tbody>$errRows</tbody></table></div>
 </div>
 HTML;

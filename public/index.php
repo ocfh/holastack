@@ -185,7 +185,7 @@ function handleApi(string $method, string $path): array
             return ['error' => 'invalid credentials'];
         }
         $token = Auth::issueToken($u);
-        return ['ok' => true, 'user' => ['id' => $u['id'], 'username' => $u['username'], 'role' => $u['role']], 'token' => $token];
+        return ['ok' => true, 'user' => ['id' => $u['id'], 'username' => $u['username'], 'email' => $u['email'] ?? '', 'avatar_url' => WebApp::avatarUrl($u['email'] ?? ''), 'role' => $u['role']], 'token' => $token];
     }
     if ($resource === 'logout') {
         Auth::logout(Auth::tokenFromRequest());
@@ -197,6 +197,7 @@ function handleApi(string $method, string $path): array
             http_response_code(401);
             return ['error' => 'unauthorized'];
         }
+        $u['avatar_url'] = WebApp::avatarUrl($u['email'] ?? '');
         return ['user' => $u];
     }
     
@@ -338,13 +339,18 @@ function handleApi(string $method, string $path): array
                 if (!in_array($body['role'] ?? 'operator', Auth::ROLES, true)) {
                     return ['error' => 'invalid role'];
                 }
-                $id = Auth::createUser(
-                    $body['username'],
-                    $body['password'],
-                    $body['role'] ?? Auth::ROLE_OPERATOR,
-                    (int) ($body['tenant_id'] ?? 0),
-                    $body['new_tenant_name'] ?? null
-                );
+                try {
+                    $id = Auth::createUser(
+                        $body['username'],
+                        $body['password'],
+                        $body['role'] ?? Auth::ROLE_OPERATOR,
+                        (int) ($body['tenant_id'] ?? 0),
+                        $body['new_tenant_name'] ?? null,
+                        $body['email'] ?? null
+                    );
+                } catch (\InvalidArgumentException $e) {
+                    return ['error' => 'invalid email'];
+                }
                 return ['id' => $id];
             }
             return ['data' => WebApp::listUsers()];
@@ -699,10 +705,13 @@ function renderPage(): string
 </head>
 <body>
 <header class="hidden" id="topbar">
-  <h1 id="brand"><a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">HolaStack</a></h1>
-  <span id="pageTitle" class="brand-sub"></span>
+  <div class="brand-block">
+    <h1 id="brand"><a href="#dashboard" onclick="nav('dashboard');return false" style="text-decoration:none;color:inherit">HolaStack</a></h1>
+    <span id="pageTitle" class="brand-sub"></span>
+  </div>
   <nav id="deskNav" class="desk-nav"></nav>
   <div class="spacer"></div>
+  <img id="avatar" class="avatar" alt="avatar" src="https://gravatar.webp.se/avatar/00000000000000000000000000000000?s=40&d=mp">
   <span class="who" id="who"></span>
   <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 9px;line-height:1;display:inline-flex;align-items:center;justify-content:center"></button>
   <button class="ghost tb-account" onclick="changePw()">修改密码</button>

@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'admin',
     tenant_id INTEGER NOT NULL DEFAULT 0,
+    email TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
 

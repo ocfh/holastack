@@ -20,7 +20,7 @@
       '.ad-item.active{background:var(--bg-chip);color:var(--txt)}',
       '.ad-method{font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;flex:0 0 auto;min-width:44px;text-align:center}',
       '.m-get{background:var(--tag-a-bg);color:var(--acc)} .m-post{background:var(--tag-c-bg);color:var(--ok)} .m-put{background:var(--tag-pending-bg);color:var(--warn)} .m-del{background:var(--tag-err-bg);color:var(--err)}',
-      '.ad-main{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px}',
+      '.ad-main{flex:1;min-width:0;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px}',
       '.ad-main h2{font-size:18px}',
       '.ad-detail{display:block}',
       '.ad-detail.hidden{display:none}',
@@ -37,7 +37,7 @@
       '.ad-copy{position:absolute;top:8px;right:8px;background:var(--bg-chip);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px}',
       '.ad-copy:hover{background:var(--bg-hover)}',
       '.ad-note{color:var(--mut);line-height:1.6}',
-      '@media(max-width:860px){.apidocs{flex-direction:column}.ad-side{width:100%;flex:none;position:static;max-height:none}.ad-main{padding:16px}}'
+      '@media(max-width:860px){.apidocs{flex-direction:column}.ad-side{width:100%;flex:none;position:static;max-height:none}.ad-main{padding:16px;overflow-x:auto;-webkit-overflow-scrolling:touch}}'
     ].join('\n');
     var st = document.createElement('style');
     st.id = 'ad-css';

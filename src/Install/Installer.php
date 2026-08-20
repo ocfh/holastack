@@ -160,10 +160,14 @@ class Installer
         
 
         $adminUser = trim($p['admin_user'] ?? '');
+        $adminEmail = trim($p['admin_email'] ?? '');
         $adminPass = (string) ($p['admin_pass'] ?? '');
         $adminPass2 = (string) ($p['admin_pass2'] ?? '');
         if ($adminUser === '') {
             $errors[] = self::msg('管理员用户名不能为空', 'Admin username is required');
+        }
+        if ($adminEmail !== '' && !filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) {
+            $errors[] = self::msg('管理员邮箱格式不正确', 'Admin email is invalid');
         }
         if (strlen($adminPass) < 6) {
             $errors[] = self::msg('管理员密码至少 6 位', 'Admin password must be at least 6 characters');
@@ -202,8 +206,8 @@ class Installer
         $exists = $pdo->prepare('SELECT id FROM users WHERE username=?');
         $exists->execute([$adminUser]);
         if ($exists->fetch() === false) {
-            $pdo->prepare('INSERT INTO users (username, password_hash, role, created_at) VALUES (?,?,?,?)')
-                ->execute([$adminUser, $hash, 'admin', time()]);
+            $pdo->prepare('INSERT INTO users (username, password_hash, role, email, created_at) VALUES (?,?,?,?,?)')
+                ->execute([$adminUser, $hash, 'admin', $adminEmail, time()]);
         }
 
         
@@ -268,6 +272,8 @@ class Installer
             'step3' => self::tl('第 3 步 / 3 · 配置管理员账号'),
             'step3_desc' => self::tl('设置后台管理员登录账号（用户名、密码、确认密码）。'),
             'admin_user' => self::tl('管理员用户名'),
+            'admin_email' => self::tl('管理员邮箱（可选）'),
+            'admin_email_ph' => self::tl('用于头像展示，可留空'),
             'admin_pass' => self::tl('管理员密码'),
             'admin_pass2' => self::tl('确认密码'),
             'install_btn' => self::tl('开始安装'),
@@ -482,6 +488,7 @@ $errHtml
   <fieldset>
     <legend>{$T['step3']}</legend>
     <div class="field sep-field"><label>{$T['admin_user']}</label><input name="admin_user" value="{$v('admin_user')}" autocomplete="off"/></div>
+    <div class="field sep-field"><label>{$T['admin_email']}</label><input type="email" name="admin_email" value="{$v('admin_email')}" autocomplete="off" placeholder="{$T['admin_email_ph']}"/></div>
     <div class="field sep-field"><label>{$T['admin_pass']}</label><input type="password" name="admin_pass" autocomplete="new-password"/></div>
     <div class="field sep-field"><label>{$T['admin_pass2']}</label><input type="password" name="admin_pass2" autocomplete="new-password"/></div>
     <button type="submit" class="btn" style="margin-top:18px">{$T['install_btn']}</button>

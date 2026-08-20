@@ -919,6 +919,11 @@ class NetworkServer
             $macCarried = (!$macConsumed) && (($mac['fopts'] ?? '') !== '');
             $fopts = $macCarried ? $mac['fopts'] : '';
             $isMac = (int) ($dl['mac'] ?? 0) === 1;
+            if ($isMac && $payload !== '') {
+                // 登记手动 MAC 命令为 pending，使设备回 LinkADRAns/RXParamSetupAns 能正确匹配并更新 DB
+                MacCommands::setPending($device, ord($payload[0]), $payload);
+                $this->persistDeviceMacState($device);
+            }
             $downPhy = $this->buildDownFrame($ks, $devAddrBin, $fcntDown, $confirmed, false, $isMac ? 0 : (int) $dl['port'], $isMac ? '' : $payload, (bool) $device['adr'], $fopts, $isMac ? $payload : '');
             $this->bumpDownFCnt($device['id']);
             
@@ -1073,36 +1078,43 @@ class NetworkServer
         
 
         if (!empty($device['adr'])) {
-            $maxTx = (int) ($device['max_supported_tx_power_index'] ?? 0);
-            if ($maxTx <= 0) {
-                $maxTx = 7; 
+            // 有手动 MAC 下行待发时跳过自动 ADR，避免自动 LinkADRReq 抢占设备只处理的首个 LinkADRReq 块
+            $pendingManualMac = Database::fetch(
+                "SELECT id FROM downlinks WHERE dev_id=? AND status='pending' AND mac=1 LIMIT 1",
+                [$device['id']]
+            );
+            if (!$pendingManualMac) {
+                $maxTx = (int) ($device['max_supported_tx_power_index'] ?? 0);
+                if ($maxTx <= 0) {
+                    $maxTx = 7; 
 
-            }
-            $req = [
-                'adr'                    => true,
-                'dr'                     => (int) $device['dr'],
-                'tx_power_index'         => (int) $device['tx_power_index'],
-                'nb_trans'               => (int) $device['nb_trans'],
-                'max_tx_power_index'     => $maxTx,
-                'required_snr_for_dr'    => $region->requiredSnrForDr((int) $device['dr']),
-                'installation_margin'    => 5.0,
-                'min_dr'                 => 0,
-                'max_dr'                 => $region->getMaxLoraDr(),
-                'uplink_history'         => $history,
-                'region'                 => $region,
-            ];
-            $resp = Adr::compute($req);
-            if ($resp['dr'] != (int) $device['dr']
-                || $resp['tx_power_index'] != (int) $device['tx_power_index']
-                || $resp['nb_trans'] != (int) $device['nb_trans']) {
-                $chMask = $this->channelMask($device, $region);
-                $adrReq = MacCommands::buildLinkADRReq($resp['dr'], $resp['tx_power_index'], $chMask, 0, $resp['nb_trans']);
-                $fopts .= $adrReq;
-                MacCommands::setPending($device, MacCommands::CID_LINK_ADR_REQ, $adrReq);
-                $this->log(sprintf(
-                    "ADR: dev#%d schedule LinkADRReq dr=%d txPower=%d nbTrans=%d",
-                    $device['id'], $resp['dr'], $resp['tx_power_index'], $resp['nb_trans']
-                ));
+                }
+                $req = [
+                    'adr'                    => true,
+                    'dr'                     => (int) $device['dr'],
+                    'tx_power_index'         => (int) $device['tx_power_index'],
+                    'nb_trans'               => (int) $device['nb_trans'],
+                    'max_tx_power_index'     => $maxTx,
+                    'required_snr_for_dr'    => $region->requiredSnrForDr((int) $device['dr']),
+                    'installation_margin'    => 5.0,
+                    'min_dr'                 => 0,
+                    'max_dr'                 => $region->getMaxLoraDr(),
+                    'uplink_history'         => $history,
+                    'region'                 => $region,
+                ];
+                $resp = Adr::compute($req);
+                if ($resp['dr'] != (int) $device['dr']
+                    || $resp['tx_power_index'] != (int) $device['tx_power_index']
+                    || $resp['nb_trans'] != (int) $device['nb_trans']) {
+                    $chMask = $this->channelMask($device, $region);
+                    $adrReq = MacCommands::buildLinkADRReq($resp['dr'], $resp['tx_power_index'], $chMask, 0, $resp['nb_trans']);
+                    $fopts .= $adrReq;
+                    MacCommands::setPending($device, MacCommands::CID_LINK_ADR_REQ, $adrReq);
+                    $this->log(sprintf(
+                        "ADR: dev#%d schedule LinkADRReq dr=%d txPower=%d nbTrans=%d",
+                        $device['id'], $resp['dr'], $resp['tx_power_index'], $resp['nb_trans']
+                    ));
+                }
             }
         }
 
@@ -1205,8 +1217,8 @@ class NetworkServer
     {
         $ch = json_decode($device['enabled_uplink_channel_indices'] ?? '[]', true);
         if (!is_array($ch) || count($ch) === 0) {
-            $ch = range(0, 15); 
-
+            // 未配置时用 region 默认信道（EU868=0-2），避免 ChMask 含未定义信道被设备拒绝
+            $ch = $region->getDefaultUplinkChannels();
         }
         $mask = 0;
         foreach ($ch as $i) {
@@ -1221,9 +1233,10 @@ class NetworkServer
     private function buildDownFrame(array $ks, string $devAddrBin, int $fcnt, bool $confirmed, bool $ack, $fport, string $payload, bool $adr, string $macFopts, string $macPort0, int $confFCnt = 0): string
     {
         if ($macPort0 !== '') {
-            
-
-            return $this->buildDownPhy($ks, $devAddrBin, $fcnt, $confirmed, $ack, 0, $macPort0, $adr ? 1 : 0, $macFopts, $confFCnt);
+            // LoRaWAN: FOpts 与 FPort 不能并存；STM32WL 对 FOptsLen>0 且 FPort=0 的帧整帧丢弃
+            // 因此把 fopts 中的 MAC 命令合并进 Port0（FPort=0，NwkSKey 加密）统一承载
+            $macPort0 = $macFopts . $macPort0;
+            return $this->buildDownPhy($ks, $devAddrBin, $fcnt, $confirmed, $ack, 0, $macPort0, $adr ? 1 : 0, '', $confFCnt);
         }
         return $this->buildDownPhy($ks, $devAddrBin, $fcnt, $confirmed, $ack, $fport, $payload, $adr ? 1 : 0, $macFopts, $confFCnt);
     }

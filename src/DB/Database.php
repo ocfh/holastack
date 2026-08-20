@@ -139,6 +139,7 @@ class Database
                 ['applications', 'callback_url', 'TEXT DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
+                ['users', 'email', 'TEXT DEFAULT \'\''],
                 ['applications', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['devices', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INTEGER DEFAULT 0'],
@@ -222,16 +223,6 @@ class Database
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at)');
-            
-
-            try {
-                $cols = $pdo->query("PRAGMA table_info(tenants)")->fetchAll(\PDO::FETCH_COLUMN, 1);
-                if (in_array('can_have_gateways', $cols, true) && in_array('private_gateways_unlimited', $cols, true)) {
-                    $pdo->exec("UPDATE tenants SET private_gateways_unlimited=1 WHERE can_have_gateways=1");
-                }
-            } catch (\Throwable $e) {
-                error_log('migrate tenants (sqlite) data copy: ' . $e->getMessage());
-            }
         } else {
             
 
@@ -312,6 +303,7 @@ class Database
                 ['applications', 'callback_url', 'VARCHAR(512) DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT'],
                 ['users', 'tenant_id', 'INT DEFAULT 0'],
+                ['users', 'email', 'VARCHAR(255) DEFAULT \'\''],
                 ['applications', 'tenant_id', 'INT DEFAULT 0'],
                 ['devices', 'tenant_id', 'INT DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INT DEFAULT 0'],
@@ -371,15 +363,6 @@ class Database
             }
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INT AUTO_INCREMENT PRIMARY KEY, label VARCHAR(32) NOT NULL UNIQUE, kek VARCHAR(64) DEFAULT \'\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INT AUTO_INCREMENT PRIMARY KEY, kind VARCHAR(16) NOT NULL, dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', gw_id VARCHAR(32) NOT NULL DEFAULT \'\', peer TEXT, ul_tmst INT NOT NULL DEFAULT 0, region VARCHAR(16) NOT NULL DEFAULT \'\', freq DOUBLE NOT NULL DEFAULT 0, datr VARCHAR(16) DEFAULT \'\', dl_delay INT NOT NULL DEFAULT 0, created_at INT NOT NULL, expires_at INT NOT NULL DEFAULT 0, INDEX idx_rp_dev (dev_eui), INDEX idx_rp_addr (dev_addr))');
-            
-
-            if (self::mysqlColumnExists('tenants', 'can_have_gateways') && self::mysqlColumnExists('tenants', 'private_gateways_unlimited')) {
-                try {
-                    $pdo->exec("UPDATE tenants SET private_gateways_unlimited=1 WHERE can_have_gateways=1");
-                } catch (\Throwable $e) {
-                    error_log('migrate tenants (mysql) data copy: ' . $e->getMessage());
-                }
-            }
         }
         
 

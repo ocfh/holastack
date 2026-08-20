@@ -132,9 +132,13 @@ class Auth
 
 
 
-    public static function createUser(string $username, string $password, string $role = self::ROLE_ADMIN, int $tenantId = 0, ?string $newTenantName = null): int
+    public static function createUser(string $username, string $password, string $role = self::ROLE_ADMIN, int $tenantId = 0, ?string $newTenantName = null, ?string $email = null): int
     {
         $username = strtolower(trim($username));
+        $email = strtolower(trim((string) ($email ?? '')));
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new \InvalidArgumentException('invalid email');
+        }
         $hash = password_hash($password, PASSWORD_DEFAULT);
         $role = in_array($role, self::ROLES, true) ? $role : self::ROLE_OPERATOR;
         $tid = (int) $tenantId;
@@ -155,8 +159,8 @@ class Auth
             $tid = 0;
         }
         Database::execute(
-            "INSERT INTO users (username, password_hash, role, tenant_id, created_at) VALUES (?,?,?,?,?)",
-            [$username, $hash, $role, $tid, time()]
+            "INSERT INTO users (username, password_hash, role, tenant_id, email, created_at) VALUES (?,?,?,?,?,?)",
+            [$username, $hash, $role, $tid, $email, time()]
         );
         return Database::lastInsertId();
     }

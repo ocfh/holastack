@@ -172,11 +172,10 @@ class MacCommands
 
     public static function buildLinkADRReq(int $dr, int $txPower, int $chMask, int $chMaskCntl, int $nbRep): string
     {
-        $drByte = ($dr & 0x0F);
-        $txByte = ($txPower & 0x0F);
+        $drTx = (($dr & 0x0F) << 4) | ($txPower & 0x0F);
         $redundancy = (($chMaskCntl & 0x07) << 4) | ($nbRep & 0x0F);
         return chr(self::CID_LINK_ADR_REQ)
-            . chr($drByte) . chr($txByte)
+            . chr($drTx)
             . pack('v', $chMask & 0xFFFF)
             . chr($redundancy);
     }
@@ -618,11 +617,11 @@ class MacCommands
         }
         
 
-        $reqDr = ord($pending[1]) & 0x0F;
-        $reqTxPower = ord($pending[2]) & 0x0F;
-        $chMask = unpack('v', substr($pending, 3, 2))[1];
-        $chMaskCntl = (ord($pending[5]) >> 4) & 0x07;
-        $nbRep = ord($pending[5]) & 0x0F;
+        $reqDr = (ord($pending[1]) >> 4) & 0x0F;
+        $reqTxPower = ord($pending[1]) & 0x0F;
+        $chMask = unpack('v', substr($pending, 2, 2))[1];
+        $chMaskCntl = (ord($pending[4]) >> 4) & 0x07;
+        $nbRep = ord($pending[4]) & 0x0F;
 
         if ($chMaskAck && $drAck && $txPowerAck) {
             self::clearError($device, self::CID_LINK_ADR_REQ);

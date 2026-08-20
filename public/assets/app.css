@@ -33,15 +33,17 @@
     transition: background-color .25s ease, color .25s ease, border-color .25s ease;
   }
   header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:100}
+  .brand-block{display:inline-flex;flex-direction:column;align-items:flex-end;line-height:1.15;flex:0 0 auto}
   header h1{font-size:22px;margin:0;color:var(--acc);flex:0 0 auto;font-weight:700}
   .brand-sub{display:none;align-items:center;color:var(--txt);font-size:13px;font-weight:400}
-  .brand-sub::before{content:"-";margin-right:6px;color:var(--mut)}
+  .brand-sub::before{content:"•";margin-right:6px;color:var(--mut)}
   #brand img{height:22px;vertical-align:middle}
   
   .desk-nav{display:flex;gap:2px;align-items:center}
   .navgrp{position:relative}
   .navgrp-btn{background:none;border:none;color:var(--mut);padding:7px 11px;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;display:flex;align-items:center;gap:4px}
   .navgrp-btn:hover,.navgrp.open .navgrp-btn{color:var(--txt);background:var(--bg-chip)}
+  .navgrp.active .navgrp-btn{color:var(--acc);font-weight:600}
   .navgrp .caret{font-size:10px;opacity:.7}
   .navsub{display:flex;position:absolute;top:calc(100% + 6px);left:0;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 20px rgba(var(--shadow-rgba),.12);padding:6px;z-index:60;flex-direction:column;gap:6px;opacity:0;visibility:hidden;transform:translateY(6px);pointer-events:none;transition:opacity .18s ease,transform .18s ease,visibility 0s .18s}
   .navgrp.open .navsub{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto;transition:opacity .18s ease,transform .18s ease}
@@ -65,6 +67,7 @@
   .login-logo img{height:56px}
   .hamburger{display:none;border:1px solid var(--line);background:var(--bg-deep);color:var(--txt);font-size:18px;line-height:1;padding:6px 10px;border-radius:8px;cursor:pointer;flex:0 0 auto}
   .spacer{flex:1}
+  .avatar{width:28px;height:28px;border-radius:50%;object-fit:cover;border:1px solid var(--line);flex:0 0 auto}
   .who{color:var(--txt);font-weight:700;font-size:13px}
   #themeToggle{background:transparent;border:none;color:var(--txt);opacity:.9}
   #themeToggle:hover{background:var(--bg-chip);opacity:1}
@@ -104,6 +107,8 @@
   .toast.copy{border-left-color:var(--ok)}
   button,.btn{background:var(--acc);color:var(--txt-on-acc);border:0;padding:8px 14px;border-radius:7px;cursor:pointer;font-weight:600}
   button.ghost{background:var(--bg-chip);color:var(--txt)} button.danger{background:var(--tag-err-bg);color:var(--err)}
+  .ad-copy{position:absolute;top:8px;right:8px;background:var(--bg-chip);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-family:inherit;font-weight:400}
+  .ad-copy:hover{background:var(--bg-hover)}
   input,select,textarea{background:var(--bg-deep);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%;font-family:inherit}
   
   input[type="checkbox"], input[type="radio"]{
@@ -207,7 +212,8 @@
     .log-fold{display:inline-flex}
     header{gap:12px;position:sticky;top:0}
     .who{display:none}
-    .brand-sub{display:inline-flex;margin-left:-6px;max-width:38vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .brand-block{flex-direction:row;align-items:flex-end;gap:8px}
+    .brand-sub{display:inline-flex;margin-left:0;max-width:38vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     
     .row{align-items:stretch}
     .row>div, .row>div[style*="flex:0 0"]{flex:1 1 100%!important;max-width:100%}
