@@ -47,13 +47,90 @@ async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class
   const r = await api('PUT',`/api/devices/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewDevices(); }
 async function delDevice(id){ confirmDlg('确认删除该设备及其上下行记录？', async ()=>{ const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(t(r.error));return;} viewDevices(); }); }
 
+// ---- 网关射频信道配置（仿 ChirpStack Gateway 配置）----
+function rfDefault(band){
+  const b = band || 'CN470';
+  const cn = b === 'CN470';
+  const r0 = cn ? 486.7 : 868.1, r1 = cn ? 487.3 : 868.5;
+  const base = cn ? 486.3 : 868.1;
+  return {
+    version: 'RP001-1.0.3', band: b,
+    radios: [ {name:'Radio 0', freq:r0}, {name:'Radio 1', freq:r1} ],
+    multi: [0,1,2,3,4,5,6,7].map(i=>({ enabled:1, index:i, radio: i<4?'Radio 0':'Radio 1', freq: Math.round((base + i*0.2)*10)/10 })),
+    lora: { enabled:1, radio:'Radio 0', freq:r0, bw:125, dr:'SF12' },
+    fsk: { enabled:0, radio:'Radio 0', freq:r0, bw:125, dr:50000 },
+  };
+}
+function rfHtml(c){
+  c = c && typeof c === 'object' ? c : rfDefault('CN470');
+  const d = rfDefault(c.band || 'CN470');
+  const radios = (c.radios && c.radios.length===2) ? c.radios : d.radios;
+  const multi = (c.multi && c.multi.length===8) ? c.multi : d.multi;
+  const lora = c.lora || {enabled:1, radio:'Radio 0', freq:radios[0].freq, bw:125, dr:'SF12'};
+  const fsk = c.fsk || {enabled:0, radio:'Radio 0', freq:radios[0].freq, bw:125, dr:50000};
+  const radioSel = sel => `<option${sel==='Radio 0'?' selected':''}>Radio 0</option><option${sel==='Radio 1'?' selected':''}>Radio 1</option>`;
+  const verSel = w => ['RP001-1.0.2','RP001-1.0.3','RP001-1.0.4','RP002-1.0.1','RP002-1.0.4'].map(x=>`<option${x===w?' selected':''}>${x}</option>`).join('');
+  const sfSel = s => [12,11,10,9,8,7,6,5].map(x=>`<option${('SF'+x)===s?' selected':''}>SF${x}</option>`).join('');
+  const bwSel = b => [125,250,500].map(x=>`<option value="${x}"${x==b?' selected':''}>${x}KHZ</option>`).join('');
+  const multiRows = multi.map((m,i)=>`
+    <div class="row" style="align-items:center;margin:4px 0">
+      <div style="flex:0 0 22px"><input type="checkbox" id="g_rf_mc${i}" style="width:auto" ${m.enabled?'checked':''}></div>
+      <div style="flex:0 0 20px" class="muted">${i}</div>
+      <div style="flex:1"><select id="g_rf_mr${i}" style="width:100%">${radioSel(m.radio)}</select></div>
+      <div style="flex:1"><input id="g_rf_mf${i}" type="number" step="0.1" value="${m.freq}"></div>
+    </div>`).join('');
+  return `<div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px 14px">
+    <div style="font-weight:700;color:var(--acc);font-size:13px;margin-bottom:6px">射频信道设置</div>
+    <div class="row">
+      <div><label>区域参数版本</label><select id="g_rf_ver">${verSel(c.version || 'RP001-1.0.3')}</select></div>
+      <div><label>频段</label><select id="g_rf_band">${regionOptions(c.band || 'CN470')}</select></div>
+    </div>
+    <div style="font-weight:700;color:var(--mut);font-size:12px;margin:10px 0 4px">名称中心频率 / MHz</div>
+    <div class="row">
+      <div><label>Radio 0</label><input id="g_rf_r0" type="number" step="0.1" value="${radios[0].freq}"></div>
+      <div><label>Radio 1</label><input id="g_rf_r1" type="number" step="0.1" value="${radios[1].freq}"></div>
+    </div>
+    <div style="font-weight:700;color:var(--mut);font-size:12px;margin:10px 0 4px">多信道设置（启用 / 序号 / 射频链路 / 频率 MHz）</div>
+    ${multiRows}
+    <div style="font-weight:700;color:var(--mut);font-size:12px;margin:10px 0 4px">LoRa 信道设置</div>
+    <div class="row">
+      <div style="flex:0 0 60px"><label>启用</label><select id="g_rf_le"><option value="1"${lora.enabled?' selected':''}>是</option><option value="0"${!lora.enabled?' selected':''}>否</option></select></div>
+      <div style="flex:1"><label>射频链路</label><select id="g_rf_lr">${radioSel(lora.radio)}</select></div>
+      <div style="flex:1"><label>频率 / MHz</label><input id="g_rf_lf" type="number" step="0.1" value="${lora.freq}"></div>
+      <div style="flex:0 0 100px"><label>带宽 / kHz</label><select id="g_rf_lb">${bwSel(lora.bw)}</select></div>
+      <div style="flex:0 0 80px"><label>数据速率</label><select id="g_rf_ldr">${sfSel(lora.dr)}</select></div>
+    </div>
+    <div style="font-weight:700;color:var(--mut);font-size:12px;margin:10px 0 4px">FSK 信道</div>
+    <div class="row">
+      <div style="flex:0 0 60px"><label>启用</label><select id="g_rf_fe"><option value="1"${fsk.enabled?' selected':''}>是</option><option value="0"${!fsk.enabled?' selected':''}>否</option></select></div>
+      <div style="flex:1"><label>射频链路</label><select id="g_rf_fr">${radioSel(fsk.radio)}</select></div>
+      <div style="flex:1"><label>频率 / MHz</label><input id="g_rf_ff" type="number" step="0.1" value="${fsk.freq}"></div>
+      <div style="flex:0 0 100px"><label>带宽 / kHz</label><select id="g_rf_fb">${bwSel(fsk.bw)}</select></div>
+      <div style="flex:0 0 100px"><label>数据速率 / bps</label><input id="g_rf_fd" type="number" value="${fsk.dr}"></div>
+    </div>
+  </div>`;
+}
+function rfRead(){
+  const chk = id => { const el = document.getElementById(id); return el && el.checked ? 1 : 0; };
+  const num = id => { const el = document.getElementById(id); const x = el ? parseFloat(el.value) : NaN; return isFinite(x) ? x : 0; };
+  return {
+    version: v('g_rf_ver'), band: v('g_rf_band'),
+    radios: [ {name:'Radio 0', freq: num('g_rf_r0')}, {name:'Radio 1', freq: num('g_rf_r1')} ],
+    multi: [0,1,2,3,4,5,6,7].map(i=>({ enabled: chk('g_rf_mc'+i), index:i, radio: v('g_rf_mr'+i), freq: num('g_rf_mf'+i) })),
+    lora: { enabled: +v('g_rf_le'), radio: v('g_rf_lr'), freq: num('g_rf_lf'), bw: +v('g_rf_lb'), dr: v('g_rf_ldr') },
+    fsk: { enabled: +v('g_rf_fe'), radio: v('g_rf_fr'), freq: num('g_rf_ff'), bw: +v('g_rf_fb'), dr: +v('g_rf_fd') },
+  };
+}
 function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
+  ${rfHtml(rfDefault('CN470'))}
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveGateway)">保存</button></div>`); }
-async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region'),rf_config:rfRead()}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function editGateway(gwId){ const r = await api('GET','/api/gateways'); const g=(r.data||[]).find(x=>x.gw_id===gwId); if(!g)return;
+  let cfg = null; try{ if(g.rf_config) cfg = JSON.parse(g.rf_config); }catch(e){}
   openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
+  ${rfHtml(cfg || rfDefault(g.region || 'CN470'))}
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveGatewayEdit('${gwId}'))">保存</button></div>`); }
-async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region')}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region'),rf_config:rfRead()}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
 function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_mac" onchange="macToggle()"> MAC 命令（FPort=0，NwkSKey 加密）</label></div>
@@ -269,21 +346,25 @@ async function saveApiKey(){
 async function delApiKey(id){ confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
 
 
-function newIntegration(){
-  if(!state.intAppSel){alert('请先选择应用');return;}
+function newIntegration(it){
+  if(!state.intAppSel && !it){alert('请先选择应用');return;}
+  state.editIntId = it ? it.id : 0;
   const httpFields=`<div id="f_http"><label>HTTP URL</label><input id="m_url" placeholder="https://example.com/uplink"><label>Headers (JSON, 可选)</label><input id="m_headers" placeholder='{"X-Api-Key":"..."}'></div>`;
   const influxFields=`<div id="f_influx" class="hidden"><label>InfluxDB Endpoint</label><input id="m_endpoint" placeholder="http://localhost:8086/api/v2/write"><label>Measurement (可选)</label><input id="m_measurement" placeholder="device_uplink"><label>Token (可选)</label><input id="m_token" placeholder="Token xxx"></div>`;
-  const mqttFields=`<div id="f_mqtt" class="hidden"><label>Server</label><input id="m_server" placeholder="tcp://127.0.0.1:1883"><label>Topic 模板</label><input id="m_topic" placeholder="application/{app_id}/device/{dev_eui}/up"><label>QoS</label><select id="m_qos"><option>0</option><option>1</option></select><label>用户名(可选)</label><input id="m_user"><label>密码(可选)</label><input id="m_pass" type="password"></div>`;
+  const mqttFields=`<div id="f_mqtt" class="hidden"><label>Server</label><input id="m_server" placeholder="tcp://127.0.0.1:1883 或 ssl://host:8883"><label>TLS 加密</label><select id="m_tls"><option value="0">否（明文 tcp）</option><option value="1">是（ssl/tls，连 8883/8084）</option></select><label>校验服务端证书</label><select id="m_tls_verify"><option value="1">是（推荐，防中间人）</option><option value="0">否（跳过校验，自签/内网可用）</option></select><label>Topic 模板</label><input id="m_topic" placeholder="application/{app_id}/device/{dev_eui}/up"><label>QoS</label><select id="m_qos"><option>0</option><option>1</option></select><label>用户名</label><input id="m_user"><label>密码</label><input id="m_pass" type="password"></div>`;
   const awsFields=`<div id="f_aws" class="hidden"><label>AWS Region</label><input id="m_aws_region" placeholder="eu-west-1"><label>Access Key ID</label><input id="m_aws_key"><label>Secret Access Key</label><input id="m_aws_secret" type="password"><label>Topic ARN</label><input id="m_aws_topic" placeholder="arn:aws:sns:eu-west-1:123456789012:my-topic"></div>`;
   const azureFields=`<div id="f_azure" class="hidden"><label>Connection String</label><input id="m_az_conn" placeholder="Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=..."><label>Publish Mode</label><select id="m_az_mode"><option value="topic">topic</option><option value="queue">queue</option></select><label>Topic/Queue Name</label><input id="m_az_name"></div>`;
   const gcpFields=`<div id="f_gcp" class="hidden"><label>Project ID</label><input id="m_gcp_project"><label>Topic Name</label><input id="m_gcp_topic"><label>Credentials JSON (服务账号)</label><textarea id="m_gcp_cred" placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'></textarea><label>或 Credentials 文件</label><input id="m_gcp_credfile" placeholder="/path/to/sa.json"></div>`;
   const amqpFields=`<div id="f_amqp" class="hidden"><label>AMQP URL</label><input id="m_amqp_url" placeholder="amqp://user:pass@host:5672"><label>Exchange</label><input id="m_amqp_exchange" placeholder="amq.topic"><label>Routing Key 模板</label><input id="m_amqp_rk" placeholder="application.{app_id}.device.{dev_eui}.event.{event}"></div>`;
   const kafkaFields=`<div id="f_kafka" class="hidden"><label>Brokers</label><input id="m_kafka_brokers" placeholder="host1:9092,host2:9092"><label>Topic</label><input id="m_kafka_topic"><label>TLS</label><select id="m_kafka_tls"><option value="0">否</option><option value="1">是</option></select><label>SASL 用户名(可选)</label><input id="m_kafka_user"><label>SASL 密码(可选)</label><input id="m_kafka_pass" type="password"></div>`;
-  openModal(`<h3>${t('新建外部集成')} (${t('应用')} #${state.intAppSel})</h3>
+  const isEdit = !!it;
+  const appNo = isEdit ? it.application_id : state.intAppSel;
+  openModal(`<h3>${isEdit?t('编辑外部集成'):t('新建外部集成')} (${t('应用')} #${appNo})</h3>
    <label>类型</label><select id="m_kind" onchange="toggleIntFields()"><option value="HTTP">HTTP</option><option value="INFLUX_DB">InfluxDB</option><option value="MQTT_GLOBAL">MQTT</option><option value="AWS_SNS">AWS SNS</option><option value="AZURE_SERVICE_BUS">Azure Service Bus</option><option value="GCP_PUBSUB">GCP Pub/Sub</option><option value="AMQP">AMQP (RabbitMQ)</option><option value="KAFKA">Kafka</option></select>
    <label>启用</label><select id="m_enabled"><option value="1" selected>是</option><option value="0">否</option></select>
    ${httpFields}${influxFields}${mqttFields}${awsFields}${azureFields}${gcpFields}${amqpFields}${kafkaFields}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveIntegration)">保存</button></div>`);
+  if(isEdit){ prefillInt(it); }
 }
 function toggleIntFields(){
   const k=v('m_kind');
@@ -296,17 +377,41 @@ async function saveIntegration(){
   const kind=v('m_kind'); let config={};
   if(kind==='HTTP'){ config={url:v('m_url')}; const h=v('m_headers'); if(h){try{config.headers=JSON.parse(h)}catch(e){alert('Headers 不是合法 JSON');return;}} }
   else if(kind==='INFLUX_DB'){ config={endpoint:v('m_endpoint'),measurement:v('m_measurement'),token:v('m_token')}; }
-  else if(kind==='MQTT_GLOBAL'){ config={server:v('m_server'),topic:v('m_topic'),qos:+v('m_qos'),username:v('m_user'),password:v('m_pass')}; }
+  else if(kind==='MQTT_GLOBAL'){ config={server:v('m_server'),topic:v('m_topic'),qos:+v('m_qos'),username:v('m_user'),password:v('m_pass'),tls:+v('m_tls'),tls_verify:+v('m_tls_verify')}; }
   else if(kind==='AWS_SNS'){ config={aws_region:v('m_aws_region'),aws_access_key_id:v('m_aws_key'),aws_secret_access_key:v('m_aws_secret'),topic_arn:v('m_aws_topic')}; }
   else if(kind==='AZURE_SERVICE_BUS'){ config={connection_string:v('m_az_conn'),publish_mode:v('m_az_mode'),publish_name:v('m_az_name')}; }
   else if(kind==='GCP_PUBSUB'){ config={project_id:v('m_gcp_project'),topic_name:v('m_gcp_topic'),credentials_json:v('m_gcp_cred')||'',credentials_file:v('m_gcp_credfile')||''}; }
   else if(kind==='AMQP'){ config={url:v('m_amqp_url'),exchange:v('m_amqp_exchange'),routing_key_template:v('m_amqp_rk')}; }
   else if(kind==='KAFKA'){ config={brokers:v('m_kafka_brokers'),topic:v('m_kafka_topic'),tls:+v('m_kafka_tls'),username:v('m_kafka_user'),password:v('m_kafka_pass')}; }
-  const body={application_id:+state.intAppSel, kind, enabled:+v('m_enabled'), config};
-  const r=await api('POST','/api/integrations',body); if(r.error){alert(t(r.error));return;} closeModal(); viewIntegrations();
+  if(state.editIntId){
+    const r=await api('PUT',`/api/integrations/${state.editIntId}`,{enabled:+v('m_enabled'), config});
+    if(r.error){alert(t(r.error));return;} closeModal(); state.editIntId=0; viewIntegrations();
+  } else {
+    const body={application_id:+state.intAppSel, kind, enabled:+v('m_enabled'), config};
+    const r=await api('POST','/api/integrations',body); if(r.error){alert(t(r.error));return;} closeModal(); viewIntegrations();
+  }
 }
 async function toggleIntegration(id,enabled){ const r=await api('PUT',`/api/integrations/${id}`,{enabled}); if(r.error){alert(t(r.error));return;} viewIntegrations(); }
 async function delIntegration(id){ confirmDlg('确认删除该外部集成？', async ()=>{ const r=await api('DELETE',`/api/integrations/${id}`); if(r.error){alert(t(r.error));return;} viewIntegrations(); }); }
+function editIntegration(id){
+  const it = (state.intMap && state.intMap[id]) ? state.intMap[id] : null;
+  if(!it){ alert('未找到该集成，请刷新列表'); return; }
+  newIntegration(it);
+}
+function prefillInt(it){
+  const cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
+  const set=(id,val)=>{ const el=document.getElementById(id); if(el && val!==undefined && val!==null) el.value=val; };
+  document.getElementById('m_kind').value=it.kind; toggleIntFields();
+  document.getElementById('m_enabled').value=it.enabled?1:0;
+  if(it.kind==='HTTP'){ set('m_url',cfg.url); set('m_headers', cfg.headers?JSON.stringify(cfg.headers):''); }
+  else if(it.kind==='INFLUX_DB'){ set('m_endpoint',cfg.endpoint); set('m_measurement',cfg.measurement); set('m_token',cfg.token); }
+  else if(it.kind==='MQTT_GLOBAL'){ set('m_server',cfg.server); set('m_topic',cfg.topic); set('m_qos',cfg.qos); set('m_user',cfg.username); set('m_pass',cfg.password); set('m_tls',cfg.tls); set('m_tls_verify',cfg.tls_verify); }
+  else if(it.kind==='AWS_SNS'){ set('m_aws_region',cfg.aws_region); set('m_aws_key',cfg.aws_access_key_id); set('m_aws_secret',cfg.aws_secret_access_key); set('m_aws_topic',cfg.topic_arn); }
+  else if(it.kind==='AZURE_SERVICE_BUS'){ set('m_az_conn',cfg.connection_string); set('m_az_mode',cfg.publish_mode); set('m_az_name',cfg.publish_name); }
+  else if(it.kind==='GCP_PUBSUB'){ set('m_gcp_project',cfg.project_id); set('m_gcp_topic',cfg.topic_name); set('m_gcp_cred',cfg.credentials_json); set('m_gcp_credfile',cfg.credentials_file); }
+  else if(it.kind==='AMQP'){ set('m_amqp_url',cfg.url); set('m_amqp_exchange',cfg.exchange); set('m_amqp_rk',cfg.routing_key_template); }
+  else if(it.kind==='KAFKA'){ set('m_kafka_brokers',cfg.brokers); set('m_kafka_topic',cfg.topic); set('m_kafka_tls',cfg.tls); set('m_kafka_user',cfg.username); set('m_kafka_pass',cfg.password); }
+}
 
 
 function multicastForm(m){

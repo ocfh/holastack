@@ -14,12 +14,20 @@ class MqttClient
     private $clientId;
     private $username;
     private $password;
+    private $tls;
+    private $verifyPeer;
 
-    public function __construct(string $server, string $username = '', string $password = '', string $clientId = '')
+    public function __construct(string $server, string $username = '', string $password = '', string $clientId = '', bool $tls = false, bool $verifyPeer = true)
     {
         $parts = parse_url($server);
+        $scheme = strtolower($parts['scheme'] ?? 'tcp');
         $this->host = $parts['host'] ?? '127.0.0.1';
-        $this->port = (int) ($parts['port'] ?? 1883);
+        // 带 ssl/tls/mqtts scheme 时若未显式给端口，默认回退到 8883
+        $defaultPort = in_array($scheme, ['ssl', 'tls', 'mqtts'], true) ? 8883 : 1883;
+        $this->port = (int) ($parts['port'] ?? $defaultPort);
+        // scheme 显式写了 ssl/tls/mqtts，或调用方强制 tls=true，都走 TLS
+        $this->tls = $tls || in_array($scheme, ['ssl', 'tls', 'mqtts'], true);
+        $this->verifyPeer = $verifyPeer;
         $this->username = $username;
         $this->password = $password;
         $this->clientId = $clientId !== '' ? $clientId : ('holastack-' . bin2hex(random_bytes(4)));
@@ -46,7 +54,22 @@ class MqttClient
 
     public function connect(): bool
     {
-        $this->socket = @stream_socket_client("tcp://{$this->host}:{$this->port}", $errno, $errstr, 3.0);
+        $transport = $this->tls ? 'ssl' : 'tcp';
+        if ($this->tls) {
+            $ctx = stream_context_create([
+                'ssl' => [
+                    'verify_peer'       => $this->verifyPeer,
+                    'verify_peer_name'  => $this->verifyPeer,
+                    'crypto_method'     => STREAM_CRYPTO_METHOD_TLS_CLIENT,
+                ],
+            ]);
+            $this->socket = @stream_socket_client(
+                "$transport://{$this->host}:{$this->port}",
+                $errno, $errstr, 3.0, STREAM_CLIENT_CONNECT, $ctx
+            );
+        } else {
+            $this->socket = @stream_socket_client("$transport://{$this->host}:{$this->port}", $errno, $errstr, 3.0);
+        }
         if (!$this->socket) {
             return false;
         }

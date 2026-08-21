@@ -788,7 +788,7 @@ class NetworkServer
             $this->bumpDownFCnt($device['id']);
             
 
-            $this->enqueueDownlink($gwEui, $peer, $downPhy, $tmst + $region->getReceiveDelay1() * 1000, $freq, $datr, false);
+            $this->enqueueDownlink($gwEui, $peer, $downPhy, $tmst + $region->getReceiveDelay1() * 1000, $region->getRx1Frequency($freq), $datr, false);
             $macConsumed = true;
         }
 
@@ -2369,16 +2369,18 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
         
 
         $dlTmstRx1 = $tmst + $region->getJoinAcceptDelay1() * 1000;
+        // 配对区域（CN470）RX1 用下行配对频点
+        $rx1Freq = $region->getRx1Frequency($freq);
         $this->log(sprintf(
-            "JOIN DOWNLINK RX1%s: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f RX1datr=%s (dedup rssi=%d)",
-            $tag, $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $freq, $datr, $e['bestRssi']
+            "JOIN DOWNLINK RX1%s: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f (ul=%.3f) RX1datr=%s (dedup rssi=%d)",
+            $tag, $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $rx1Freq, $freq, $datr, $e['bestRssi']
         ));
         if ($reason !== 'resched') {
             
 
-            $this->logEvent('join', 'info', "Join Accept 下行下发 RX1 gw=$gwEui freq=" . sprintf('%.3f', $freq) . " datr=$datr", $gwEui, $e['devId'] ?? 0, $e['appId'] ?? 0, $this->buildJoinAcceptLog($joinAccept, $dlTmstRx1, $freq, $datr, $gwEui));
+            $this->logEvent('join', 'info', "Join Accept 下行下发 RX1 gw=$gwEui freq=" . sprintf('%.3f', $rx1Freq) . " datr=$datr", $gwEui, $e['devId'] ?? 0, $e['appId'] ?? 0, $this->buildJoinAcceptLog($joinAccept, $dlTmstRx1, $rx1Freq, $datr, $gwEui));
         }
-        $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx1, $freq, $datr, false);
+        $this->enqueueDownlink($gwEui, $peer, $joinAccept, $dlTmstRx1, $rx1Freq, $datr, false);
 
         
 
@@ -2443,6 +2445,8 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
 
     private function enqueueClassADownlink(string $gwEui, string $peer, string $phy, int $ulTmst, Region $region, float $rx1Freq, string $rx1Datr): int
     {
+        // 配对区域（CN470）RX1 用下行配对频点，而非上行同频
+        $rx1Freq = $region->getRx1Frequency($rx1Freq);
         $rx1Tmst = $ulTmst + $region->getReceiveDelay1() * 1000;
         $this->enqueueDownlink($gwEui, $peer, $phy, $rx1Tmst, $rx1Freq, $rx1Datr, false);
         $gapUs = ($region->getReceiveDelay2() - $region->getReceiveDelay1()) * 1000; 

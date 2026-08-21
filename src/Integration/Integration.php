@@ -273,7 +273,14 @@ class Integration
         $qos = (int) ($cfg['qos'] ?? 0);
         $body = json_encode($data, JSON_UNESCAPED_UNICODE);
 
-        $client = new MqttClient($server, $cfg['username'] ?? '', $cfg['password'] ?? '');
+        $client = new MqttClient(
+            $server,
+            $cfg['username'] ?? '',
+            $cfg['password'] ?? '',
+            '',
+            !empty($cfg['tls']),
+            !empty($cfg['tls_verify'])
+        );
         if (!$client->connect()) {
             $log("INTEGRATION MQTT: connect failed $server");
             return;

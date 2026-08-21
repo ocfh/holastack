@@ -923,8 +923,8 @@ class WebApp
             }
         }
         Database::execute(
-            "INSERT INTO gateways (gw_id, tenant_id, name, region, created_at, last_seen, ip) VALUES (?,?,?,?,?,?,?)",
-            [$gwId, $tid, $p['name'], $region, time(), 0, '']
+            "INSERT INTO gateways (gw_id, tenant_id, name, region, created_at, last_seen, ip, rf_config) VALUES (?,?,?,?,?,?,?,?)",
+            [$gwId, $tid, $p['name'], $region, time(), 0, '', self::rfConfigJson($p['rf_config'] ?? null)]
         );
         return ['gw_id' => $gwId];
     }
@@ -941,10 +941,28 @@ class WebApp
             return ['error' => 'unsupported region'];
         }
         Database::execute(
-            "UPDATE gateways SET name=?, region=? WHERE gw_id=?",
-            [$p['name'] ?? '', $region, $gwId]
+            "UPDATE gateways SET name=?, region=?, rf_config=? WHERE gw_id=?",
+            [$p['name'] ?? '', $region, self::rfConfigJson($p['rf_config'] ?? null), $gwId]
         );
         return ['gw_id' => $gwId];
+    }
+
+    /**
+     * 网关射频配置：接受数组/对象或 JSON 字符串，统一存为 JSON 字符串。
+     */
+    private static function rfConfigJson($v): string
+    {
+        if ($v === null || $v === '') {
+            return '';
+        }
+        if (is_string($v)) {
+            $dec = json_decode($v, true);
+            return ($dec !== null) ? $v : '';
+        }
+        if (is_array($v) || is_object($v)) {
+            return json_encode($v, JSON_UNESCAPED_UNICODE);
+        }
+        return '';
     }
 
     public static function deleteGateway(string $gwId): array

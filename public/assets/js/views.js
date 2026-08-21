@@ -266,6 +266,11 @@ async function deviceDetail(id){
     ${kv('DevEUI', d.dev_eui)}
     ${d.activation==='OTAA'
       ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
+        + (d.dev_addr
+            ? kv('设备地址 DevAddr（服务器分配）', d.dev_addr)
+              + kv('网络会话密钥 NwkSKey（服务器分配）', d.nwk_s_key)
+              + kv('应用程序会话密钥 AppSKey（服务器分配）', d.app_s_key)
+            : `<p class="muted" style="margin:8px 0">设备尚未入网，暂无服务器分配的会话密钥。</p>`)
       : kv('DevAddr', d.dev_addr) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
@@ -1128,6 +1133,7 @@ async function viewIntegrations(){
   if(state.intAppSel){
     const r=await api('GET','/api/integrations?app_id='+state.intAppSel+(tq?'&'+tq:'')); its=r.data||[];
   }
+  state.intMap = Object.fromEntries((its||[]).map(x=>[x.id,x]));
   const summaryOf = it => {
     let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
     return it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
@@ -1148,7 +1154,7 @@ async function viewIntegrations(){
         <td><span class="tag ${it.enabled?'ok':'off'}">${it.enabled?'启用':'停用'}</span></td>
         <td class="muted">${esc(summaryOf(it))}</td>
         <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
-        <td>${adminBtn(`<button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`,
+        <td>${adminBtn(`<button class="btn ghost" onclick="editIntegration(${it.id})">编辑</button> <button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`,
     emptyText: state.intAppSel ? '该应用暂无外部集成' : '请先在上方选择应用',
   };
   const [filteredInts, intgTotal] = filterAndSortRows(intgCfg);

@@ -487,9 +487,12 @@ function renderModal(html){
   let foot = '';
   while (children.length) {
     const last = children[children.length - 1];
-    if (last.tagName === 'DIV' && last.querySelector('button')) {
+    // 只有「仅含按钮」的尾部 div 才算 footer；带 pre/textarea/input/select/table 的内容块不能被吞进 foot
+    const hasBtn = last.tagName === 'DIV' && last.querySelector('button');
+    const hasContent = last.tagName === 'DIV' && last.querySelector('pre, textarea, input, select, table, ul, ol');
+    if (hasBtn && !hasContent) {
       last.style.marginTop = '';
-      foot = last.outerHTML;
+      foot = last.outerHTML + foot;
       last.remove();
       children.pop();
     } else break;

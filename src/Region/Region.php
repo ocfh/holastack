@@ -88,6 +88,13 @@ class Region
             'rx1_dr_offset' => 0,
             'cf_list' => null,
             'max_ul_dr' => 5,
+            'rx1' => [
+                // CN470：下行 RX1 用「配对频点」而非上行同频
+                // 上行 470.3~489.3（96 信道 @0.2MHz）→ 下行 500.3~509.7（48 信道，idx%48）
+                'type' => 'paired',
+                'ul_start' => 470.3, 'ul_step' => 0.2,
+                'dl_start' => 500.3, 'dl_step' => 0.2, 'dl_count' => 48,
+            ],
             'data_rates' => [
                 0 => ['sf' => 12, 'bw' => 125, 'desc' => 'SF12BW125'],
                 1 => ['sf' => 11, 'bw' => 125, 'desc' => 'SF11BW125'],
@@ -359,6 +366,25 @@ class Region
 
     public function getRx2Frequency(): int { return (int) $this->cfg['rx2_frequency']; }
     public function getRx2DataRate(): int { return (int) $this->cfg['rx2_dr']; }
+
+    /**
+     * RX1 下行频点。多数区域与上行同频；配对区域（如 CN470）按下行频段换算。
+     * @param float $ulFreqMHz 上行频点（MHz）
+     */
+    public function getRx1Frequency(float $ulFreqMHz): float
+    {
+        $r = $this->cfg['rx1'] ?? null;
+        if (!$r || ($r['type'] ?? 'same') !== 'paired') {
+            return $ulFreqMHz;
+        }
+        $idx = (int) round(($ulFreqMHz - (float) $r['ul_start']) / (float) $r['ul_step']);
+        $count = max(1, (int) ($r['dl_count'] ?? 48));
+        $dlIdx = $idx % $count;
+        if ($dlIdx < 0) {
+            $dlIdx += $count;
+        }
+        return (float) $r['dl_start'] + $dlIdx * (float) $r['dl_step'];
+    }
     
 
     public function getBeaconFrequency(): int { return (int) $this->cfg['beacon_frequency']; }

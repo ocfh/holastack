@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS gateways (
     created_at INTEGER NOT NULL,
     last_seen INTEGER DEFAULT 0,
     ip TEXT DEFAULT '',
-    stats TEXT DEFAULT ''
+    stats TEXT DEFAULT '',
+    rf_config TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS devices (
