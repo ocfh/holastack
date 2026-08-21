@@ -286,6 +286,8 @@ const api = async (m,p,body) => {
   return j;
 };
 const hex = s => s || '-';
+// DevAddr 显示按 4 字节倒序（与 AT 模块输出一致，仅展示用，不改变存储值）
+const revAddr = s => (/^[0-9a-fA-F]{8}$/.test(s||'') ? s.slice(6,8)+s.slice(4,6)+s.slice(2,4)+s.slice(0,2) : (s||'-'));
 const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 

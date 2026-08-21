@@ -23,11 +23,12 @@ async function newDevice(appId){ const regions=regionOptions(""); const dps=awai
     <div id="abp" class="hidden"><label>DevAddr (8 hex)</label><input id="m_dev_addr" oninput="hexOnly(this)"><label>NwkSKey (32 hex)</label><input id="m_nwk" oninput="hexOnly(this)"><label>AppSKey (32 hex)</label><input id="m_app" oninput="hexOnly(this)"></div>
     <label>Class</label><select id="m_class"><option>A</option><option>B</option><option>C</option></select>
     <label>区域</label><select id="m_region">${regions}</select>
-    <label>设备模板 (可选)</label><select id="m_dp">${dps}</select>
+    <label>设备模板</label><select id="m_dp">${dps}</select>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDevice(${appId||0}))">保存</button></div>`); }
 function toggleAct(){ const a=v('m_act')==='OTAA'; document.getElementById('otaa').classList.toggle('hidden',!a); document.getElementById('abp').classList.toggle('hidden',a); }
 async function saveDevice(appId){ const sel=document.getElementById('m_app_sel'); const finalAppId = appId ? appId : (sel ? +sel.value : 0); if(!finalAppId){alert('请先选择应用');return;}
-  const act=v('m_act'); const body={app_id:finalAppId,name:v('m_name'),dev_eui:v('m_dev_eui'),activation:act,region:v('m_region'),class:v('m_class'),device_profile_id:+v('m_dp')};
+  const dpVal=v('m_dp'); if(!dpVal){alert('请先创建设备模板（设备模板为空时不能创建设备）');return;}
+  const act=v('m_act'); const body={app_id:finalAppId,name:v('m_name'),dev_eui:v('m_dev_eui'),activation:act,region:v('m_region'),class:v('m_class'),device_profile_id:+dpVal};
   if(act==='OTAA'){ body.join_eui=v('m_join_eui'); body.app_key=v('m_app_key'); } else { body.dev_addr=v('m_dev_addr'); body.nwk_s_key=v('m_nwk'); body.app_s_key=v('m_app'); }
   const r = await api('POST','/api/devices',body); if(r.error){alert(t(r.error));return;} closeModal(); viewDevices(); }
 async function editDevice(id){ const r = await api('GET','/api/devices'); const d=(r.data||[]).find(x=>x.id===id); if(!d)return;
@@ -36,7 +37,7 @@ async function editDevice(id){ const r = await api('GET','/api/devices'); const 
     <label>激活方式</label><input value="${d.activation}" disabled>
     <label>Class</label><select id="m_class"><option ${d.class==='A'?'selected':''}>A</option><option ${d.class==='B'?'selected':''}>B</option><option ${d.class==='C'?'selected':''}>C</option></select>
     <label>区域</label><select id="m_region">${regionOptions(d.region)}</select>
-    <label>设备模板 (可选)</label><select id="m_dp">${dps}</select>
+    <label>设备模板</label><select id="m_dp">${dps}</select>
     ${otaa?`<label>DevEUI (16 hex，留空不改)</label><input id="m_dev_eui" value="${esc(d.dev_eui)}" placeholder="留空保持不变" oninput="hexOnly(this)"><label>JoinEUI (16 hex，留空不改)</label><input id="m_join_eui" value="${esc(d.join_eui)}" placeholder="留空保持不变" oninput="hexOnly(this)"><label>AppKey (32 hex，留空不改)</label><input id="m_app_key" placeholder="留空保持不变" oninput="hexOnly(this)">`:`<label>DevAddr (8 hex)</label><input id="m_dev_addr" value="${esc(d.dev_addr)}" oninput="hexOnly(this)"><label>NwkSKey (32 hex)</label><input id="m_nwk" value="${esc(d.nwk_s_key)}" oninput="hexOnly(this)"><label>AppSKey (32 hex)</label><input id="m_app" value="${esc(d.app_s_key)}" oninput="hexOnly(this)"`}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDeviceEdit(${id}))">保存</button></div>`); }
 async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class'),region:v('m_region'),device_profile_id:+v('m_dp')};
@@ -48,13 +49,24 @@ async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class
 async function delDevice(id){ confirmDlg('确认删除该设备及其上下行记录？', async ()=>{ const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(t(r.error));return;} viewDevices(); }); }
 
 // ---- 网关射频信道配置（仿 ChirpStack Gateway 配置）----
+const RF_BAND_DEF = {
+  'EU868': { r0:868.1, r1:868.5, base:868.1 },
+  'US915': { r0:903.9, r1:904.5, base:902.3 },
+  'CN470': { r0:486.7, r1:487.3, base:486.3 },
+  'AS923': { r0:923.2, r1:923.8, base:923.2 },
+  'AU915': { r0:916.8, r1:917.4, base:915.2 },
+  'CN779': { r0:779.5, r1:779.7, base:779.5 },
+  'EU433': { r0:433.175, r1:433.525, base:433.175 },
+  'IN865': { r0:865.0625, r1:866.0625, base:865.0625 },
+  'KR920': { r0:922.8, r1:921.9, base:920.9 },
+  'RU864': { r0:868.9, r1:869.1, base:868.9 },
+};
 function rfDefault(band){
   const b = band || 'CN470';
-  const cn = b === 'CN470';
-  const r0 = cn ? 486.7 : 868.1, r1 = cn ? 487.3 : 868.5;
-  const base = cn ? 486.3 : 868.1;
+  const d = RF_BAND_DEF[b] || RF_BAND_DEF['EU868'];
+  const r0 = +d.r0, r1 = +d.r1, base = +d.base;
   return {
-    version: 'RP001-1.0.3', band: b,
+    version: 'RP001-1.0.3', band: b, mac: '1.0.3',
     radios: [ {name:'Radio 0', freq:r0}, {name:'Radio 1', freq:r1} ],
     multi: [0,1,2,3,4,5,6,7].map(i=>({ enabled:1, index:i, radio: i<4?'Radio 0':'Radio 1', freq: Math.round((base + i*0.2)*10)/10 })),
     lora: { enabled:1, radio:'Radio 0', freq:r0, bw:125, dr:'SF12' },
@@ -70,6 +82,7 @@ function rfHtml(c){
   const fsk = c.fsk || {enabled:0, radio:'Radio 0', freq:radios[0].freq, bw:125, dr:50000};
   const radioSel = sel => `<option${sel==='Radio 0'?' selected':''}>Radio 0</option><option${sel==='Radio 1'?' selected':''}>Radio 1</option>`;
   const verSel = w => ['RP001-1.0.2','RP001-1.0.3','RP001-1.0.4','RP002-1.0.1','RP002-1.0.4'].map(x=>`<option${x===w?' selected':''}>${x}</option>`).join('');
+  const macVerSel = w => ['1.0.2','1.0.3','1.0.4','1.1.0'].map(x=>`<option${x===w?' selected':''}>${x}</option>`).join('');
   const sfSel = s => [12,11,10,9,8,7,6,5].map(x=>`<option${('SF'+x)===s?' selected':''}>SF${x}</option>`).join('');
   const bwSel = b => [125,250,500].map(x=>`<option value="${x}"${x==b?' selected':''}>${x}KHZ</option>`).join('');
   const multiRows = multi.map((m,i)=>`
@@ -79,11 +92,12 @@ function rfHtml(c){
       <div style="flex:1"><select id="g_rf_mr${i}" style="width:100%">${radioSel(m.radio)}</select></div>
       <div style="flex:1"><input id="g_rf_mf${i}" type="number" step="0.1" value="${m.freq}"></div>
     </div>`).join('');
-  return `<div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px 14px">
+  return `<div id="rfConfigBox" style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px 14px">
     <div style="font-weight:700;color:var(--acc);font-size:13px;margin-bottom:6px">射频信道设置</div>
     <div class="row">
       <div><label>区域参数版本</label><select id="g_rf_ver">${verSel(c.version || 'RP001-1.0.3')}</select></div>
-      <div><label>频段</label><select id="g_rf_band">${regionOptions(c.band || 'CN470')}</select></div>
+      <div><label>MAC 版本</label><select id="g_rf_mac">${macVerSel(c.mac || '1.0.3')}</select></div>
+      <div><label>频段</label><select id="g_rf_band" onchange="rfBandChange()">${regionOptions(c.band || 'CN470')}</select></div>
     </div>
     <div style="font-weight:700;color:var(--mut);font-size:12px;margin:10px 0 4px">名称中心频率 / MHz</div>
     <div class="row">
@@ -114,12 +128,23 @@ function rfRead(){
   const chk = id => { const el = document.getElementById(id); return el && el.checked ? 1 : 0; };
   const num = id => { const el = document.getElementById(id); const x = el ? parseFloat(el.value) : NaN; return isFinite(x) ? x : 0; };
   return {
-    version: v('g_rf_ver'), band: v('g_rf_band'),
+    version: v('g_rf_ver'), band: v('g_rf_band'), mac: v('g_rf_mac'),
     radios: [ {name:'Radio 0', freq: num('g_rf_r0')}, {name:'Radio 1', freq: num('g_rf_r1')} ],
     multi: [0,1,2,3,4,5,6,7].map(i=>({ enabled: chk('g_rf_mc'+i), index:i, radio: v('g_rf_mr'+i), freq: num('g_rf_mf'+i) })),
     lora: { enabled: +v('g_rf_le'), radio: v('g_rf_lr'), freq: num('g_rf_lf'), bw: +v('g_rf_lb'), dr: v('g_rf_ldr') },
     fsk: { enabled: +v('g_rf_fe'), radio: v('g_rf_fr'), freq: num('g_rf_ff'), bw: +v('g_rf_fb'), dr: +v('g_rf_fd') },
   };
+}
+window.rfBandChange = function(){
+  const bandSel = document.getElementById('g_rf_band');
+  const band = bandSel ? bandSel.value : 'CN470';
+  const oldVersion = document.getElementById('g_rf_ver') ? v('g_rf_ver') : '';
+  const oldMac = document.getElementById('g_rf_mac') ? v('g_rf_mac') : '';
+  const fresh = rfDefault(band);
+  if (oldVersion) fresh.version = oldVersion;
+  if (oldMac) fresh.mac = oldMac;
+  const box = document.getElementById('rfConfigBox');
+  if (box) box.innerHTML = rfHtml(fresh);
 }
 function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   ${rfHtml(rfDefault('CN470'))}
@@ -210,7 +235,9 @@ async function saveUserEdit(id){
 
 async function dpOptions(sel){
   if(!state.dps.length){ const r=await api('GET','/api/device-profiles'); state.dps=r.data||[]; }
-  return `<option value="0" ${(sel==0||sel===''||sel==null)?'selected':''}>默认模板</option>`+(state.dps||[]).map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
+  const list=(state.dps||[]);
+  if(!list.length){ return `<option value="" selected disabled>暂无设备模板，请先创建</option>`; }
+  return list.map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
 }
 
 
@@ -266,12 +293,14 @@ function deviceProfileForm(d){
   const regions=regionOptions(d.region||"");
   const codec = (sel)=>['NONE','CAYENNE_LPP','JS'].map(c=>`<option value="${c}" ${c===sel?'selected':''}>${c}</option>`).join('');
   const yesno=(v)=>`<option value="1" ${v?'selected':''}>是</option><option value="0" ${v?'':'selected'}>否</option>`;
+  const macSel=(w)=>['1.0.2','1.0.3','1.0.4','1.1.0'].map(x=>`<option ${x===w?'selected':''}>${x}</option>`).join('');
+  const verSel=(w)=>['RP001-1.0.2','RP001-1.0.3','RP001-1.0.4','RP002-1.0.1','RP002-1.0.4'].map(x=>`<option ${x===w?'selected':''}>${x}</option>`).join('');
   return `<label>名称</label><input id="m_name" value="${esc(d.name||'')}">
   <label>描述</label><input id="m_desc" value="${esc(d.description||'')}">
   <div class="row">
     <div><label>区域</label><select id="m_region">${regions}</select></div>
-    <div><label>MAC 版本</label><input id="m_mac" value="${esc(d.mac_version||'1.0.4')}"></div>
-    <div><label>区域参数版本</label><input id="m_reg" value="${esc(d.reg_params_revision||'RP002-1.0.3')}"></div>
+    <div><label>MAC 版本</label><select id="m_mac">${macSel(d.mac_version||'1.0.4')}</select></div>
+    <div><label>区域参数版本</label><select id="m_reg">${verSel(d.reg_params_revision||'RP002-1.0.3')}</select></div>
   </div>
   <div class="row">
     <div><label>ADR 算法</label><input id="m_adr" value="${esc(d.adr_algorithm||'default')}"></div>
@@ -327,7 +356,7 @@ async function editDeviceProfile(id){
   openModal(`<h3>${t('编辑模板')} #${id}</h3>${deviceProfileForm(d)}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDeviceProfile(${id}))">保存</button></div>`);
 }
-async function delDeviceProfile(id){ confirmDlg('确认删除该模板？引用该模板的设备将回退到默认模板。', async ()=>{ const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }); }
+async function delDeviceProfile(id){ confirmDlg('确认删除该模板？引用该模板的设备将变为未选择模板。', async ()=>{ const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }); }
 
 
 function newApiKey(){

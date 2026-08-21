@@ -470,6 +470,9 @@ class WebApp
         }
         $dpId = (int) ($p['device_profile_id'] ?? 0);
         $dp = DeviceProfile::getOrDefault($dpId);
+        if (!$dp) {
+            return ['error' => '请先创建设备模板（设备模板为空时不能创建设备）'];
+        }
         $macVersion = LoRaWANVersion::value($dp['mac_version'] ?? '1.0.3');
         if ($activation === 'OTAA') {
             $appKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_key'] ?? ''));
@@ -808,6 +811,9 @@ class WebApp
             
 
             $dp = DeviceProfile::getOrDefault((int) $p['device_profile_id']);
+            if (!$dp) {
+                return ['error' => '请选择有效的设备模板（模板不存在或已被删除）'];
+            }
             $setParts[] = 'mac_version=?';
             $params[] = LoRaWANVersion::value($dp['mac_version'] ?? '1.0.3');
         }
@@ -1625,5 +1631,21 @@ class WebApp
         Database::execute("DELETE FROM fuota_frames WHERE campaign_id=?", [$id]);
         Database::execute("DELETE FROM fuota_campaigns WHERE id=?", [$id]);
         return ['ok' => true];
+    }
+
+    
+    public static function clearLogs(string $target): array
+    {
+        $tables = [
+            'api' => 'api_logs',
+            'uplinks' => 'uplinks',
+            'downlinks' => 'downlinks',
+            'events' => 'events',
+        ];
+        if (!isset($tables[$target])) {
+            return ['error' => 'invalid log target'];
+        }
+        Database::execute("DELETE FROM " . $tables[$target]);
+        return ['target' => $target, 'cleared' => true];
     }
 }

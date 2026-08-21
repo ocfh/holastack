@@ -16,14 +16,14 @@ async function viewDashboard(){
     <div class="rings">
       ${dashRingCard('设备', devTotal, devOn, devOff, true)}
       ${dashRingCard('网关', gwTotal, gwOn, gwOff, true)}
-      ${dashRingCard('应用', appTotal, 0, 0, false, `<div class="hl-row hl-split"><span>设备模板 <b>${dpsTotal}</b></span><span>组播组 <b>${mcTotal}</b></span></div>`)}
+      ${dashRingCard('应用', appTotal, 0, 0, false, `<div class="hl-row hl-split"><span>${t('设备模板')} <b>${dpsTotal}</b></span><span>${t('组播组')} <b>${mcTotal}</b></span></div>`)}
     </div>
 
     <div class="msg-bar">
       <div class="msg-main"><span class="msg-num">${msgTotal}</span><span class="msg-lbl">消息总数</span></div>
       <div class="msg-split">
-        <div><span class="up">▲</span> 上行 <b>${s.uplinks|0}</b></div>
-        <div><span class="down">▼</span> 下行 <b>${s.downlinks|0}</b></div>
+        <div><span class="up">▲</span> ${t('上行')} <b>${s.uplinks|0}</b></div>
+        <div><span class="down">▼</span> ${t('下行')} <b>${s.downlinks|0}</b></div>
       </div>
     </div>
 
@@ -220,8 +220,8 @@ async function viewDevices(){
     rowHtml: d => {
       const online = d.online==='online';
       const tel = [];
-      if (d.battery!==null && d.battery!==undefined && +d.battery>=0) tel.push('电量'+(+d.battery===0?'外电':(+d.battery)+'%'));
-      if (d.margin!==null && d.margin!==undefined && d.margin!=='') tel.push('余量'+(+d.margin)+'dB');
+      if (d.battery!==null && d.battery!==undefined && +d.battery>=0) tel.push(t('电量')+(+d.battery===0?t('外电'):(+d.battery)+'%'));
+      if (d.margin!==null && d.margin!==undefined && d.margin!=='') tel.push(t('余量')+(+d.margin)+'dB');
       if (d.latitude && +d.latitude!==0 && d.longitude!==null) tel.push('GPS '+ (+d.latitude).toFixed(5)+','+(+d.longitude).toFixed(5));
       const telStr = tel.length? `<div class="muted" style="font-size:11px">${tel.join(' · ')}</div>`:'';
       const seen = (d.last_seen_fmt && d.last_seen_fmt!=='-') ? d.last_seen_fmt : '-';
@@ -231,7 +231,7 @@ async function viewDevices(){
         <td><span class="tag">${d.activation}</span></td>
         <td><span class="tag ${d.class}">${d.class}</span></td>
         <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
-        <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(d.dev_addr)}</td>
+        <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(revAddr(d.dev_addr))}</td>
         <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
         <td class="muted">${seen}${telStr}</td>
         <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
@@ -267,11 +267,11 @@ async function deviceDetail(id){
     ${d.activation==='OTAA'
       ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
         + (d.dev_addr
-            ? kv('设备地址 DevAddr（服务器分配）', d.dev_addr)
+            ? kv('设备地址 DevAddr（服务器分配）', revAddr(d.dev_addr))
               + kv('网络会话密钥 NwkSKey（服务器分配）', d.nwk_s_key)
               + kv('应用程序会话密钥 AppSKey（服务器分配）', d.app_s_key)
             : `<p class="muted" style="margin:8px 0">设备尚未入网，暂无服务器分配的会话密钥。</p>`)
-      : kv('DevAddr', d.dev_addr) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
+      : kv('DevAddr', revAddr(d.dev_addr)) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
@@ -396,7 +396,7 @@ async function viewUplinks(){
       const textDisp = hexToText(u.decrypted_hex);
       return `<tr><td>${u.id}</td>
       <td class="muted"><span class="pill" style="margin:0">${esc(appName(u.app_id))}</span></td>
-      <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(u.dev_addr)}</a></td>
+      <td class="muted"><a href="javascript:void(0)" style="color:var(--acc);text-decoration:none" onclick="deviceDetail(${u.dev_id})">${hex(revAddr(u.dev_addr))}</a></td>
       <td>${u.fcnt}</td><td>${u.port}</td><td>${(u.confirmed==1||u.confirmed==='1')?'✓':'-'}</td>
       <td class="cell-scroll"><code>${hex(u.decrypted_hex)}</code></td>
       <td class="muted cell-scroll" style="font-family:monospace">${esc(textDisp)}</td>
@@ -874,7 +874,8 @@ async function viewSettings(){
     <div class="st-side">
       <button class="st-item active" onclick="stCat('basic',this)">基础信息</button>
       <button class="st-item" onclick="stCat('login',this)">登录页</button>
-      <button class="st-item" onclick="stCat('footer',this)">页脚与集成</button>
+      <button class="st-item" onclick="stCat('footer',this)">${t('页脚与集成')}</button>
+      <button class="st-item" onclick="stCat('maint',this)">${t('日志维护')}</button>
     </div>
     <div class="st-main">
       <div class="st-cat" id="stcat-basic">
@@ -891,9 +892,17 @@ async function viewSettings(){
         <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
       </div>
       <div class="st-cat hidden" id="stcat-footer">
-        <h3>页脚与集成</h3>
+        <h3>${t('页脚与集成')}</h3>
         <label>页面底部 Footer（支持 HTML）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
         <label>API 基础地址</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
+      </div>
+      <div class="st-cat hidden" id="stcat-maint">
+        <h3>${t('日志维护')}</h3>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          ${maintRow('上行消息日志','uplinks')}
+          ${maintRow('下行消息日志','downlinks')}
+          ${maintRow('事件日志','events')}
+        </div>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
         <button class="ghost" onclick="nav('dashboard')">取消</button>
@@ -906,6 +915,19 @@ async function viewSettings(){
 function stCat(id, btn){
   document.querySelectorAll('.st-cat').forEach(c => c.classList.toggle('hidden', c.id !== 'stcat-'+id));
   document.querySelectorAll('.st-item').forEach(b => b.classList.toggle('active', b === btn));
+}
+
+function maintRow(labelKey, target){
+  return `<div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+    <span>${t(labelKey)}</span>
+    <button class="btn danger" onclick="clearLogs('${target}','${labelKey}')">${t('清空')}</button>
+  </div>`;
+}
+async function clearLogs(target, labelKey){
+  if (!confirm(t('确认清空') + ' ' + t(labelKey) + '？' + t('此操作不可恢复'))) return;
+  const r = await api('POST','/api/settings',{clear_logs: target});
+  if (r.error){ alert(t(r.error)); return; }
+  toast(t('已清空') + ' ' + t(labelKey), 'ok');
 }
 async function saveSettings(){
   const langSel = document.getElementById('st_lang');

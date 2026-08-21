@@ -1,18 +1,6 @@
 <?php
-
-
-
-
-
-
-
-
-
-
 return [
     '__name' => 'English',
-    
-
     '运行监控' => 'Monitoring',
     '设备管理' => 'Devices',
     '系统管理' => 'System',
@@ -159,7 +147,7 @@ return [
 
     '+ 新建用户' => '+ New User',
     '角色' => 'Role',
-    '改密' => 'Reset PW',
+    '改密' => 'Reset Password',
     '暂无用户' => 'No users',
 
     
@@ -711,4 +699,84 @@ return [
     '两次输入的密码不一致' => 'Passwords do not match',
     '数据库连接失败' => 'Database connection failed',
     '导入数据库结构失败' => 'Failed to import schema',
+
+    
+    '每页' => 'Per page',
+    '上一页' => 'Prev',
+    '下一页' => 'Next',
+    '跳到' => 'Jump to',
+    '全部' => 'All',
+
+    
+    'info · 信息' => 'Info',
+    'warn · 警告' => 'Warn',
+    'error · 错误' => 'Error',
+
+    
+    'active · 已入网' => 'active · Active',
+    'pending · 待入网' => 'pending · Pending',
+    'disabled · 已禁用' => 'disabled · Disabled',
+    '电量' => 'Battery ',
+    '外电' => 'External',
+    '余量' => 'Margin',
+
+    
+    '入网 join' => 'Join',
+    '上行 uplink' => 'Uplink',
+    '发射确认 txack' => 'TX Ack (txack)',
+    '确认 ack' => 'Ack',
+    '状态 status' => 'Status',
+    '网关上下线' => 'Gateway up/down',
+
+    
+    '邮箱（可选，用于头像）' => 'Email (optional, for avatar)',
+    '查看全部' => 'View all',
+    '用户配置筛选' => 'Tenant filter',
+    '网关协议原文（txpk / phy_payload）' => 'Gateway raw frame (txpk / phy_payload)',
+
+    
+    '编解码脚本（仅 NONE / CAYENNE_LPP 生效）' => 'Codec script (only NONE / CAYENNE_LPP)',
+    '确认删除该模板？引用该模板的设备将变为未选择模板。' => 'Delete this device profile? Devices using it will have no profile.',
+
+    
+    '射频信道设置' => 'Radio Channel Settings',
+    '区域参数版本' => 'Regional Params Revision',
+    'MAC 版本' => 'MAC Version',
+    '频段' => 'Band',
+    '名称中心频率 / MHz' => 'Name / Center Frequency (MHz)',
+    '多信道设置（启用 / 序号 / 射频链路 / 频率 MHz）' => 'Multi-Channel (enable / index / radio / freq MHz)',
+    'LoRa 信道设置' => 'LoRa Channel Settings',
+    'FSK 信道' => 'FSK Channel',
+    '射频链路' => 'Radio',
+    '频率 / MHz' => 'Frequency (MHz)',
+    '带宽 / kHz' => 'Bandwidth (kHz)',
+    '数据速率' => 'Data Rate',
+    '数据速率 / bps' => 'Data Rate (bps)',
+    '保存中…' => 'Saving…',
+    '删除中…' => 'Deleting…',
+    '已保存' => 'Saved',
+    '发送中…' => 'Sending…',
+    '处理中…' => 'Processing…',
+
+    
+    '基础信息' => 'Basic',
+    '页脚与集成' => 'Footer & Integrations',
+    '编解码' => 'Codec',
+    '查看原始 JSON' => 'View raw JSON',
+    '全部事件' => 'All Events',
+    '事件级别' => 'Level',
+    '事件类型' => 'Type',
+    '最近' => 'Recent',
+    '运行' => 'Uptime',
+    '版本' => 'Version',
+    '事件日志' => 'Event Log',
+    '日志维护' => 'Log Maintenance',
+    '清空' => 'Clear',
+    '确认清空' => 'Clear',
+    '此操作不可恢复' => 'This cannot be undone.',
+    '已清空' => 'Cleared',
+    '登录页' => 'Login page',
+    '页面底部 Footer（支持 HTML）' => 'Page footer (HTML allowed)',
+    '站点 Favicon URL' => 'Site favicon URL',
+    'API 基础地址' => 'API base URL',
 ];

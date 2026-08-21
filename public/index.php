@@ -257,6 +257,9 @@ function handleApi(string $method, string $path): array
         case 'settings':
             Auth::guardApi(Auth::ROLE_ADMIN);
             if ($method === 'POST') {
+                if (!empty($body['clear_logs'])) {
+                    return ['ok' => true, 'result' => WebApp::clearLogs((string) $body['clear_logs'])];
+                }
                 Setting::setMany($body);
                 return ['ok' => true, 'data' => Setting::getAll()];
             }

@@ -225,20 +225,20 @@ function buildPager(cfg){
     return `<button class="${cls}" style="padding:4px 9px;font-size:12px;display:inline-flex;align-items:center;gap:3px" ${dis?'disabled':''} onclick="window['${cfg.refresh}__page'](${p})">${label||p}</button>`;
   };
   return `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:12px;flex-wrap:wrap">
-    <div class="muted" style="font-size:12px">共 <b>${total}</b> 条 · 第 ${from}-${to} 条 · ${pages>0?cur:0} / ${pages} 页</div>
+    <div class="muted" style="font-size:12px">${t('共')} <b>${total}</b> ${t('条')} · ${t('第')} ${from}-${to} ${t('条')} · ${pages>0?cur:0} / ${pages} ${t('页')}</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <label style="margin:0;font-size:12px;color:var(--mut)">每页</label>
+      <label style="margin:0;font-size:12px;color:var(--mut)">${t('每页')}</label>
       <select style="width:auto;padding:4px 8px;font-size:12px" onchange="window['${cfg.refresh}__limit'](+this.value)">
         ${[20,50,100,200,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
       </select>
-      ${pageBtn(Math.max(1, cur-1), chevL + '<span>上一页</span>', {disabled: cur<=1})}
+      ${pageBtn(Math.max(1, cur-1), chevL + '<span>'+t('上一页')+'</span>', {disabled: cur<=1})}
       ${win[0] > 1 ? pageBtn(1, '1') + (win[0] > 2 ? '<span class="muted">…</span>' : '') : ''}
       ${win.map(p => pageBtn(p, p, {cur: p===cur})).join('')}
       ${win[win.length-1] < pages ? (win[win.length-1] < pages-1 ? '<span class="muted">…</span>' : '') + pageBtn(pages, pages) : ''}
-      ${pageBtn(Math.min(pages, cur+1), '<span>下一页</span>' + chevR, {disabled: cur>=pages})}
-      <label style="margin:0;font-size:12px;color:var(--mut)">跳到</label>
+      ${pageBtn(Math.min(pages, cur+1), '<span>'+t('下一页')+'</span>' + chevR, {disabled: cur>=pages})}
+      <label style="margin:0;font-size:12px;color:var(--mut)">${t('跳到')}</label>
       <input type="number" min="1" max="${pages}" value="${cur}" style="width:64px;padding:4px 6px;font-size:12px" onchange="window['${cfg.refresh}__page'](+this.value)">
-      <span class="muted" style="font-size:12px">页</span>
+      <span class="muted" style="font-size:12px">${t('页')}</span>
     </div>
   </div>`;
 }

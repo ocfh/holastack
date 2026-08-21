@@ -35,59 +35,11 @@ class DeviceProfile
 
     public static function getOrDefault(int $id): ?array
     {
+        // 不强制保留/兜底默认模板：只有选择了真实存在的模板才返回，否则 null（创建时由调用方拦截）
         if ($id > 0) {
-            $dp = self::get($id);
-            if ($dp) {
-                return $dp;
-            }
+            return self::get($id);
         }
-        
-
-        $def = self::getDefault();
-        if ($def) {
-            return $def;
-        }
-        
-
-        return [
-            'id' => 0, 'name' => '默认模板', 'region' => ELW_DEFAULT_REGION,
-            'mac_version' => '1.0.4', 'reg_params_revision' => 'RP002-1.0.3',
-            'adr_algorithm' => 'default', 'payload_codec_runtime' => 'NONE',
-            'payload_codec_script' => '', 'flush_queue_on_activate' => 0,
-            'uplink_interval' => 0, 'device_status_req_interval' => 0,
-            'supports_otaa' => 1, 'supports_class_b' => 0, 'supports_class_c' => 0,
-            'class_b_timeout' => 0, 'class_b_ping_slot_periodicity' => 0, 'class_b_ping_slot_dr' => 0, 'class_b_ping_slot_freq' => 0,
-            'class_c_timeout' => 0, 'abp_rx1_delay' => 1, 'abp_rx1_dr_offset' => 0, 'abp_rx2_dr' => 0, 'abp_rx2_freq' => 0,
-            'allow_roaming' => 0,
-        ];
-    }
-
-    public static function getDefault(): ?array
-    {
-        return Database::fetch("SELECT * FROM device_profiles WHERE name=? ORDER BY id ASC LIMIT 1", ['默认模板']);
-    }
-
-    public static function ensureDefault(): void
-    {
-        if (self::getDefault()) {
-            return;
-        }
-        $cols = self::columns();
-        $cols['name'] = '默认模板';
-        $cols['region'] = 'EU868';
-        $cols['created_at'] = time();
-        $set = [];
-        $vals = [];
-        $params = [];
-        foreach ($cols as $c => $def) {
-            $set[] = $c;
-            $vals[] = '?';
-            $params[] = self::cast($c, $def);
-        }
-        Database::execute(
-            "INSERT INTO device_profiles (" . implode(',', $set) . ") VALUES (" . implode(',', $vals) . ")",
-            $params
-        );
+        return null;
     }
 
     public static function create(array $p): array
