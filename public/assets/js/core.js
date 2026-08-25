@@ -30,8 +30,8 @@ function applyMobileH2(){
 }
 
 
-const ICON_MOON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-const ICON_SUN  = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
+const ICON_MOON = ICON.moon;
+const ICON_SUN  = ICON.sun;
 function updateThemeIcon(t){
   var btn = document.getElementById('themeToggle');
   if(!btn) return;
@@ -141,11 +141,15 @@ function renderShell(){
     document.getElementById('topbar').classList.add('hidden');
     document.getElementById('view').classList.add('hidden');
     document.getElementById('login').classList.remove('hidden');
+    const dk = document.getElementById('floatDock');
+    if (dk) dk.classList.add('hidden');
     return;
   }
   document.getElementById('login').classList.add('hidden');
   document.getElementById('topbar').classList.remove('hidden');
   document.getElementById('view').classList.remove('hidden');
+  const dk = document.getElementById('floatDock');
+  if (dk) dk.classList.remove('hidden');
   document.getElementById('who').textContent = state.user.username;
   const av = document.getElementById('avatar');
   if (av) av.src = state.user.avatar_url || 'https://gravatar.webp.se/avatar/00000000000000000000000000000000?s=40&d=mp';
@@ -160,6 +164,8 @@ function renderShell(){
   enhanceSelects(document);
   startSelObserver();
 }
+function pageTop(){ window.scrollTo({top:0, behavior:'smooth'}); }
+function pageBottom(){ window.scrollTo({top:document.documentElement.scrollHeight, behavior:'smooth'}); }
 const isAdmin = () => state.user && state.user.role === 'admin';
 const isTenant = () => state.user && state.user.role === 'tenant';
 const isDemo = () => state.user && state.user.role === 'operator';
@@ -170,34 +176,36 @@ const adminBtn = (html) => html;
 
 
 const NAV_GROUPS = [
-  { label:'运行监控', items:[
-    {v:'dashboard', text:'概览'},
-    {v:'uplinks', text:'上行消息日志'},
-    {v:'downlinks', text:'下行消息日志'},
-    {v:'events', text:'网关日志'},
+  { label:'运行监控', icon:'chartBar', items:[
+    {v:'dashboard', text:'概览', icon:'chartBar'},
+    {v:'uplinks', text:'上行消息日志', icon:'signal'},
+    {v:'downlinks', text:'下行消息日志', icon:'arrowDownTray'},
+    {v:'events', text:'网关日志', icon:'server'},
   ]},
-  { label:'设备管理', items:[
-    {v:'applications', text:'应用'},
-    {v:'devices', text:'设备'},
-    {v:'gateways', text:'网关'},
-    {v:'device-profiles', text:'设备模板'},
-    {v:'multicast-groups', text:'组播组'},
+  { label:'设备管理', icon:'cpuChip', items:[
+    {v:'applications', text:'应用', icon:'squares2x2'},
+    {v:'devices', text:'设备', icon:'cpuChip'},
+    {v:'gateways', text:'网关', icon:'radio'},
+    {v:'device-profiles', text:'设备模板', icon:'rectangleStack'},
+    {v:'multicast-groups', text:'组播组', icon:'userGroup'},
   ]},
-  { label:'工具集成', items:[
-    {v:'integrations', text:'外部集成'},
-    {v:'api-keys', text:'API 密钥'},
-    {v:'api-logs', text:'API 调用日志'},
-    {v:'apidocs', text:'API 文档'},
-    {v:'loracalc', text:'LoRa 计算器'},
+  { label:'工具集成', icon:'puzzlePiece', items:[
+    {v:'integrations', text:'外部集成', icon:'puzzlePiece'},
+    {v:'api-keys', text:'API 密钥', icon:'key'},
+    {v:'api-logs', text:'API 调用日志', icon:'clipboardDocumentList'},
+    {v:'apidocs', text:'API 文档', icon:'bookOpen'},
+    {v:'loracalc', text:'LoRa 计算器', icon:'calculator'},
   ]},
-  { label:'系统管理', admin:true, items:[
-    {v:'tenants', text:'用户配置'},
-    {v:'users', text:'用户管理'},
-    {v:'settings', text:'站点设置'},
+  { label:'系统管理', admin:true, icon:'cog6Tooth', items:[
+    {v:'tenants', text:'用户配置', icon:'users'},
+    {v:'users', text:'用户管理', icon:'user'},
+    {v:'settings', text:'站点设置', icon:'cog6Tooth'},
   ]},
 ];
 const VIEW_TITLES = {};
 NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => { VIEW_TITLES[it.v] = it.text; }));
+const VIEW_ICONS = {};
+NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => { VIEW_ICONS[it.v] = it.icon; }));
 
 function renderNav(){
   const desk = document.getElementById('deskNav');
@@ -205,13 +213,13 @@ function renderNav(){
   if (!desk || !mob) return;
   const groups = NAV_GROUPS.filter(g => !g.admin || isAdmin());
   desk.innerHTML = groups.map(g => {
-    const sub = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${it.text}</a>`).join('');
-    return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${g.label}<span class="caret">▾</span></button><div class="navsub">${sub}</div></div>`;
+    const sub = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${ICON[it.icon]||''}<span>${it.text}</span></a>`).join('');
+    return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${ICON[g.icon]||''}<span>${g.label}</span><span class="caret">${ICON.chevronDown}</span></button><div class="navsub">${sub}</div></div>`;
   }).join('');
-  const accountGrid = `<a href="javascript:void(0)" onclick="closeNav();changePw()">修改密码</a>`
-    + `<a href="javascript:void(0)" class="mp-danger" onclick="closeNav();logout()">退出登录</a>`;
+  const accountGrid = `<a href="javascript:void(0)" onclick="closeNav();changePw()">${ICON.key}<span>修改密码</span></a>`
+    + `<a href="javascript:void(0)" class="mp-danger" onclick="closeNav();logout()">${ICON.logout}<span>退出登录</span></a>`;
   mob.innerHTML = groups.map(g => {
-    const grid = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${it.text}</a>`).join('');
+    const grid = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${ICON[it.icon]||''}<span>${it.text}</span></a>`).join('');
     return `<div class="mp-group"><div class="mp-glabel">${g.label}</div><div class="mp-grid">${grid}</div></div>`;
   }).join('') + `<div class="mp-group"><div class="mp-glabel">账户</div><div class="mp-grid">${accountGrid}</div></div>`;
   bindNavLinks();
@@ -405,7 +413,10 @@ async function nav(v, silent=false){
   if(!silent){ closeNav(); closeGrps(); }
   updateNavActive();
   const pt = document.getElementById('pageTitle');
-  if (pt) pt.textContent = VIEW_TITLES[v] || '';
+  if (pt){
+    const ic = VIEW_ICONS[v] ? (ICON[VIEW_ICONS[v]]||'') : '';
+    pt.innerHTML = ic ? (ic + '<span>'+(VIEW_TITLES[v]||'')+'</span>') : (VIEW_TITLES[v]||'');
+  }
   const savedScroll = silent ? captureScrollState() : null;
   if(!silent){
     
@@ -438,6 +449,10 @@ async function nav(v, silent=false){
     if(!silent) document.getElementById('view').innerHTML = `<div class="err-box">加载失败：${esc(e && e.message ? e.message : e)}</div>`;
   } finally {
     if(!silent) hideLoader();
+    if (typeof restoreLogRefresh === 'function') restoreLogRefresh();
+    if (typeof renderRefreshFloat === 'function') renderRefreshFloat();
+    if (typeof renderFloatPrimary === 'function') renderFloatPrimary();
+    if (typeof syncLogRefreshTimer === 'function') syncLogRefreshTimer();
     if (savedScroll) restoreScrollState(savedScroll);
     if (openSelId) {
       enhanceSelects(document);
@@ -562,7 +577,7 @@ function enhanceSelect(sel){
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'sel-btn';
-  btn.innerHTML = '<span class="sel-label"></span><span class="sel-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span>';
+  btn.innerHTML = '<span class="sel-label"></span><span class="sel-caret">' + ICON.chevronDown + '</span>';
   const menu = document.createElement('div');
   menu.className = 'sel-menu';
 
@@ -687,7 +702,7 @@ window.addEventListener('scroll', (e) => {
   if (e.target && e.target.closest && e.target.closest('.sel-menu')) return;
   closeAllSelMenus();
 }, true);
-window.addEventListener('resize', () => { closeAllSelMenus(); applyMobileH2(); });
+window.addEventListener('resize', () => { closeAllSelMenus(); applyMobileH2(); if (typeof renderRefreshFloat==='function') renderRefreshFloat(); if (typeof renderFloatPrimary==='function') renderFloatPrimary(); });
 const _selObserver = new MutationObserver(muts => {
   muts.forEach(m => {
     if (!m.addedNodes) return;

@@ -52,7 +52,9 @@ async function delDevice(id){ confirmDlg('确认删除该设备及其上下行�
 const RF_BAND_DEF = {
   'EU868': { r0:868.1, r1:868.5, base:868.1 },
   'US915': { r0:903.9, r1:904.5, base:902.3 },
-  'CN470': { r0:486.7, r1:487.3, base:486.3 },
+  // CN470 居民抄表：可用信道 0~5、39~44、78~95；6~38 与 45~77 由国家电网保留
+  // 8 通道网关示例：Radio 0 监听 0~5，Radio 1 再补两个高段代表信道
+  'CN470': { r0:470.9, r1:484.9, base:470.3 },
   'AS923': { r0:923.2, r1:923.8, base:923.2 },
   'AU915': { r0:916.8, r1:917.4, base:915.2 },
   'CN779': { r0:779.5, r1:779.7, base:779.5 },
@@ -65,10 +67,17 @@ function rfDefault(band){
   const b = band || 'CN470';
   const d = RF_BAND_DEF[b] || RF_BAND_DEF['EU868'];
   const r0 = +d.r0, r1 = +d.r1, base = +d.base;
+  // CN470 居民抄表：默认启用低段 0~5 与高段 78~79 作为代表
+  const cn470Ch = b === 'CN470' ? [0,1,2,3,4,5,78,79] : null;
+  const freqFor = ch => Math.round((470.3 + ch * 0.2) * 10) / 10;
   return {
     version: 'RP001-1.0.3', band: b, mac: '1.0.3',
     radios: [ {name:'Radio 0', freq:r0}, {name:'Radio 1', freq:r1} ],
-    multi: [0,1,2,3,4,5,6,7].map(i=>({ enabled:1, index:i, radio: i<4?'Radio 0':'Radio 1', freq: Math.round((base + i*0.2)*10)/10 })),
+    multi: [0,1,2,3,4,5,6,7].map(i=>{
+      const ch = cn470Ch ? cn470Ch[i] : i;
+      const f = cn470Ch ? freqFor(ch) : Math.round((base + i*0.2)*10)/10;
+      return { enabled:1, index:i, radio: i<4?'Radio 0':'Radio 1', freq: f };
+    }),
     lora: { enabled:1, radio:'Radio 0', freq:r0, bw:125, dr:'SF12' },
     fsk: { enabled:0, radio:'Radio 0', freq:r0, bw:125, dr:50000 },
   };
@@ -455,7 +464,7 @@ function multicastForm(m){
    <div class="row"><div><label>MC Addr (8 hex)</label><input id="m_mcaddr" value="${esc(m.mc_addr||'')}" oninput="hexOnly(this)"></div>
      <div><label>MC NwkSKey (32 hex)</label><input id="m_mcnwk" value="${esc(m.mc_nwk_s_key||'')}" oninput="hexOnly(this)"></div>
      <div><label>MC AppSKey (32 hex)</label><input id="m_mcapp" value="${esc(m.mc_app_s_key||'')}" oninput="hexOnly(this)"></div></div>
-   <div style="margin-bottom:8px"><button class="btn ghost" type="button" onclick="genMc()">随机生成组播密钥</button></div>
+   <div style="margin-bottom:8px"><button class="btn ghost" type="button" onclick="genMc()">${ICON.arrowPath}随机生成组播密钥</button></div>
    <div class="row"><div><label>DR</label><input id="m_dr" value="${m.dr||0}"></div>
      <div><label>频率 (Hz,0=区域默认)</label><input id="m_freq" value="${m.frequency||0}"></div>
      <div><label>ClassB Ping 周期</label><input id="m_bpp" value="${m.class_b_ping_slot_periodicity||0}"></div></div>

@@ -12,7 +12,7 @@ async function viewDashboard(){
   const devOpen = !mobile || prevOpen.includes('dev');
   const gwOpen = !mobile || prevOpen.includes('gw');
   document.getElementById('view').innerHTML = `
-    <h2>概览</h2>
+    <div class="view-head"><h2>${ICON[VIEW_ICONS['dashboard']]||''}概览</h2></div>
     <div class="rings">
       ${dashRingCard('设备', devTotal, devOn, devOff, true)}
       ${dashRingCard('网关', gwTotal, gwOn, gwOff, true)}
@@ -31,15 +31,15 @@ async function viewDashboard(){
       <div class="log-col ${devOpen?'':'collapsed'}" data-kind="dev">
         <div class="log-head" onclick="toggleLogCol(this)">
           <h3>最近设备日志</h3>
-          <span class="log-fold"><span class="log-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span><span class="log-fold-txt">${devOpen?t('折叠'):t('展开')}</span></span>
-          <button class="log-more" onclick="event.stopPropagation();nav('events')">查看全部</button>
+          <span class="log-fold"><span class="log-chev">${ICON.chevronRight}</span><span class="log-fold-txt">${devOpen?t('折叠'):t('展开')}</span></span>
+          <button class="log-more" onclick="event.stopPropagation();nav('uplinks')">查看全部</button>
         </div>
-        <div class="log-body"><div class="log-inner">${devLogs.length? devLogs.map(e=>dashLogRow(e,'dev #'+(e.dev_id||''))).join('') : '<div class="log-empty">暂无设备日志</div>'}</div></div>
+        <div class="log-body"><div class="log-inner">${devLogs.length? devLogs.map(e=>dashUpRow(e)).join('') : '<div class="log-empty">暂无设备日志</div>'}</div></div>
       </div>
       <div class="log-col ${gwOpen?'':'collapsed'}" data-kind="gw">
         <div class="log-head" onclick="toggleLogCol(this)">
           <h3>最近网关日志</h3>
-          <span class="log-fold"><span class="log-chev"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span><span class="log-fold-txt">${gwOpen?t('折叠'):t('展开')}</span></span>
+          <span class="log-fold"><span class="log-chev">${ICON.chevronRight}</span><span class="log-fold-txt">${gwOpen?t('折叠'):t('展开')}</span></span>
           <button class="log-more" onclick="event.stopPropagation();nav('events')">查看全部</button>
         </div>
         <div class="log-body"><div class="log-inner">${gwLogs.length? gwLogs.map(e=>dashLogRow(e,'网关 '+esc(e.gateway_id||''))).join('') : '<div class="log-empty">暂无网关日志</div>'}</div></div>
@@ -58,9 +58,8 @@ async function toggleLogCol(head){
   try {
     const r = await api('GET','/api/stats');
     const logs = kind==='dev' ? (r.device_logs||[]) : (r.gateway_logs||[]);
-    const who = kind==='dev' ? e => ('dev #'+(e.dev_id||'')) : e => ('网关 '+esc(e.gateway_id||''));
     col.querySelector('.log-body .log-inner').innerHTML = logs.length
-      ? logs.map(e=>dashLogRow(e, who(e))).join('')
+      ? logs.map(e=> kind==='dev' ? dashUpRow(e) : dashLogRow(e, '网关 '+esc(e.gateway_id||''))).join('')
       : '<div class="log-empty">暂无'+(kind==='dev'?'设备':'网关')+'日志</div>';
   } catch(e){}
 }
@@ -112,7 +111,17 @@ function dashLogRow(ev, who){
     <div class="log-msg">${esc(ev.message||'')}</div>
   </div>`;
 }
-const rawBtn = (id, fn) => `<button class="raw-btn" title="查看原始 JSON" onclick="${fn}(${id})"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>`;
+function dashUpRow(e){
+  const tm = e.received_at? new Date(e.received_at*1000).toLocaleString() : '-';
+  const who = 'dev #' + (e.dev_id||'') + (e.dev_addr? ' ('+esc(e.dev_addr)+')' : '');
+  const payload = e.decrypted_hex || e.payload_hex || '';
+  const sig = `${t('RSSI')} ${e.rssi??'-'} · ${t('SNR')} ${e.snr??'-'}`;
+  return `<div class="log-row">
+    <div class="log-top"><span class="tag up">UPLINK</span><span class="log-who">${esc(who)}</span><span class="log-time">${esc(tm)}</span></div>
+    <div class="log-msg">${t('FCnt')} ${e.fcnt??'-'} · ${t('端口')} ${e.port??'-'} · ${esc(sig)}${payload? ' · '+esc(payload):''}</div>
+  </div>`;
+}
+const rawBtn = (id, fn) => `<button class="raw-btn" title="查看原始 JSON" onclick="${fn}(${id})">${ICON.magnifyingGlass}</button>`;
 
 async function tenantFilterHtml(){
   if (!isAdmin()) return '';
@@ -141,7 +150,7 @@ async function viewApplications(){
     ],
     rows: state.apps,
     rowHtml: a => `<tr><td>${a.id}</td><td>${esc(a.name)}</td><td class="muted">${esc(a.app_eui)}</td><td class="muted">${esc(a.callback_url||'')}</td><td class="muted">${new Date(a.created_at*1000).toLocaleString()}</td>
-     <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">+ 设备</button></td></tr>`,
+     <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">${ICON.trash}删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">${ICON.plus}设备</button></td></tr>`,
     emptyText:'暂无应用',
   };
   
@@ -153,8 +162,8 @@ async function viewApplications(){
   window.appsSort_sort = col => _tableToggleSort('appsSort','viewApplications',col);
   window.viewApplications__page = p => _pagerGo({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',p);
   window.viewApplications__limit = l => _pagerSetLimit({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',l);
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>应用</h2>${adminBtn('<button onclick="newApplication()">+ 新建应用</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">重置</button></div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['applications']]||''}应用</h2>${adminBtn('<button onclick="newApplication()">'+ICON.plus+'新建应用</button>')}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">${ICON.arrowPath}重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -234,7 +243,7 @@ async function viewDevices(){
         <td class="muted">${hex(d.dev_eui)}</td><td class="muted">${hex(revAddr(d.dev_addr))}</td>
         <td><span class="tag ${d.status==='active'?'ok':'pending'}">${d.status}</span></td>
         <td class="muted">${seen}${telStr}</td>
-        <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">下行</button></td></tr>`;
+        <td>${adminBtn(`<button class="btn ghost" onclick="editDevice(${d.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDevice(${d.id}))">${ICON.trash}删除</button>`)} <button class="btn ghost" onclick="deviceDetail(${d.id})">${ICON.key}密钥</button> <button class="btn ghost" onclick="downlink(${d.id})">${ICON.arrowDownTray}下行</button></td></tr>`;
     },
     emptyText:'暂无设备',
   };
@@ -251,9 +260,9 @@ async function viewDevices(){
   };
   window.viewDevices__page = p => _pagerGo({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',p);
   window.viewDevices__limit = l => _pagerSetLimit({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',l);
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备</h2>${adminBtn('<button onclick="newDevice()">+ 添加设备</button>')}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['devices']]||''}设备</h2>${adminBtn('<button onclick="newDevice()">'+ICON.plus+'添加设备</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
-    <button class="btn ghost" onclick="resetFilters(()=>{state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};state.devsPage=1;state.devsOffset=0;state.devsLimit=50;}, viewDevices)">重置</button></div>
+    <button class="btn ghost" onclick="resetFilters(()=>{state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};state.devsPage=1;state.devsOffset=0;state.devsLimit=50;}, viewDevices)">${ICON.arrowPath}重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -323,7 +332,7 @@ async function viewGateways(){
       return `<tr><td class="muted">${g.gw_id}</td><td>${esc(g.name)}</td>
         <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
         <td class="muted">${esc(g.region)}</td><td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
-        <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">删除</button>`)}</td></tr>`;
+        <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">${ICON.trash}删除</button>`)}</td></tr>`;
     },
     emptyText:'暂无网关（网关连接后自动出现，亦可手动添加）',
   };
@@ -336,9 +345,9 @@ async function viewGateways(){
   window.gwsSort_fstatus = (col, v) => _tableSetFStatus('gwsFOnline', 'viewGateways', v);
   window.viewGateways__page = p => _pagerGo({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',p);
   window.viewGateways__limit = l => _pagerSetLimit({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',l);
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>网关</h2>${adminBtn('<button onclick="newGateway()">+ 新建网关</button>')}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['gateways']]||''}网关</h2>${adminBtn('<button onclick="newGateway()">'+ICON.plus+'新建网关</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
-      <button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline='';state.gwsSort={col:'time',dir:'desc'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">重置</button></div>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline='';state.gwsSort={col:'time',dir:'desc'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">${ICON.arrowPath}重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -409,12 +418,12 @@ async function viewUplinks(){
     emptyText:'暂无上行',
   });
   const pager = buildPager({ total: state.upsTotal, limit: state.upsLimit, offset: state.upsOffset, pageKey:'upsPage', limitKey:'upsLimit', offsetKey:'upsOffset', totalKey:'upsTotal', refresh:'viewUplinks' });
-  document.getElementById('view').innerHTML = `<h2>上行消息日志</h2>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['uplinks']]||''}上行消息日志</h2><button class="btn danger" onclick="clearPageLogs('uplinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="resetFilters(()=>{state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsFFcnt='';state.upsFPort='';state.upsPage=1;state.upsOffset=0;state.upsLimit=50;}, viewUplinks)">重置</button>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsFFcnt='';state.upsFPort='';state.upsPage=1;state.upsOffset=0;state.upsLimit=50;}, viewUplinks)">${ICON.arrowPath}重置</button>
     </div>
     ${table}
     ${pager}`;
@@ -532,12 +541,12 @@ async function viewDownlinks(){
     emptyText:'暂无下行',
   });
   const pager = buildPager({ total: state.dlsTotal, limit: state.dlsLimit, offset: state.dlsOffset, pageKey:'dlsPage', limitKey:'dlsLimit', offsetKey:'dlsOffset', totalKey:'dlsTotal', refresh:'viewDownlinks' });
-  document.getElementById('view').innerHTML = `<h2>下行消息日志</h2>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['downlinks']]||''}下行消息日志</h2><button class="btn danger" onclick="clearPageLogs('downlinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${devOpts}</select></div>
-      <button class="btn ghost" onclick="resetFilters(()=>{state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';}, viewDownlinks)">重置</button>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';}, viewDownlinks)">${ICON.arrowPath}重置</button>
     </div>
     ${table}
     ${pager}`;
@@ -665,12 +674,12 @@ async function viewEvents(){
     emptyText:'暂无事件',
   });
   const pager = buildPager({ total: state.evsTotal, limit: state.evsLimit, offset: state.evsOffset, pageKey:'evsPage', limitKey:'evsLimit', offsetKey:'evsOffset', totalKey:'evsTotal', refresh:'viewEvents' });
-  document.getElementById('view').innerHTML = `<h2>网关日志</h2>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['events']]||''}网关日志</h2><button class="btn danger" onclick="clearPageLogs('events')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${devOpts}</select></div>
       <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${gwOpts}</select></div>
-      <button class="btn ghost" onclick="resetFilters(()=>{state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50;}, viewEvents)">重置</button>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50;}, viewEvents)">${ICON.arrowPath}重置</button>
     </div>
     ${table}
     ${pager}`;
@@ -709,7 +718,7 @@ async function viewUsers(){
     rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span></td>
      <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
-     <td><button class="btn ghost" onclick="editUser(${u.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">改密</button></td></tr>`,
+     <td><button class="btn ghost" onclick="editUser(${u.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">${ICON.trash}删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">${ICON.key}改密</button></td></tr>`,
     emptyText:'暂无用户',
   };
   const [filteredUsers, usersTotal] = filterAndSortRows(userCfg);
@@ -720,7 +729,7 @@ async function viewUsers(){
   window.usersSort_sort = col => _tableToggleSort('usersSort','viewUsers',col);
   window.viewUsers__page = p => _pagerGo({pageKey:'usersPage',limitKey:'usersLimit',offsetKey:'usersOffset',totalKey:'usersTotal'},'viewUsers',p);
   window.viewUsers__limit = l => _pagerSetLimit({pageKey:'usersPage',limitKey:'usersLimit',offsetKey:'usersOffset',totalKey:'usersTotal'},'viewUsers',l);
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>用户管理</h2><button onclick="newUser()">+ 新建用户</button></div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['users']]||''}用户管理</h2><button onclick="newUser()">${ICON.plus}新建用户</button></div>
     ${table}
     ${pager}`;
 }
@@ -803,7 +812,7 @@ async function viewApiLogs(){
   });
   const filterId = (k) => 'alf_' + k;
   const pager = buildPager({ total: state.apiLogTotal, limit: state.apiLogLimit, offset: state.apiLogOffset, pageKey:'apiLogPage', limitKey:'apiLogLimit', offsetKey:'apiLogOffset', totalKey:'apiLogTotal', refresh:'viewApiLogs' });
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('API 调用日志')}</h2><div class="muted" style="font-size:12px">${t('共')} ${state.apiLogTotal} ${t('条')}${t('（仅保留最近 10000 条）')}</div></div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['api-logs']]||''}${t('API 调用日志')}</h2><div style="display:flex;align-items:center;gap:12px"><div class="muted" style="font-size:12px">${t('共')} ${state.apiLogTotal} ${t('条')}${t('（仅保留最近 10000 条）')}</div><button class="btn danger" onclick="clearPageLogs('api')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
    <div class="card" style="margin-bottom:12px">
      <div class="row" style="align-items:flex-end">
        <div><label>${t('路径包含')}</label><input id="${filterId('path')}" value="${esc(state.apiLogFilter.path||'')}" placeholder="/v1/devices"></div>
@@ -859,54 +868,54 @@ async function viewSettings(){
   const r = await api('GET','/api/settings'); const s = r.data||{};
   const val = (k) => esc(s[k] || '');
   document.getElementById('view').innerHTML = `<style>
-  .st-wrap{display:flex;gap:18px;align-items:flex-start;margin-top:8px}
-  .st-side{width:200px;flex:0 0 200px;position:sticky;top:14px;display:flex;flex-direction:column;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 6px}
-  .st-item{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--txt);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px}
-  .st-item:hover{background:var(--bg-chip)}
-  .st-item.active{background:var(--bg-chip);color:var(--txt);font-weight:600}
-  .st-main{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px}
-  .st-cat h3{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .st-wrap{display:flex;flex-direction:column;gap:18px;margin-top:8px}
+  .st-side{display:flex;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;padding-bottom:6px;scrollbar-width:thin}
+  .st-item{display:flex;align-items:center;justify-content:center;gap:6px;flex:0 0 auto;text-align:center;background:var(--panel);border:1px solid var(--line);color:var(--txt);padding:11px 16px;border-radius:10px;cursor:pointer;font-size:13px;white-space:nowrap}
+  .st-item .hi{width:16px;height:16px}
+  .st-item:hover{background:var(--bg-chip);border-color:var(--acc)}
+  .st-item.active{background:var(--acc);border-color:var(--acc);color:var(--txt-on-acc);font-weight:600}
+  .st-main{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px;box-sizing:border-box}
+  .st-cat h3{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--acc);font-weight:700;margin:0 0 6px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .st-cat h3 .hi{width:16px;height:16px}
   .st-cat.hidden{display:none}
-  @media(max-width:860px){.st-wrap{flex-direction:column}.st-side{width:100%;flex:none;position:static;flex-direction:row;overflow-x:auto}.st-main{padding:16px}}
+  @media(max-width:560px){.st-main{padding:16px}}
+  @media(min-width:561px){.st-wrap{flex-direction:row;align-items:flex-start}.st-side{flex-direction:column;width:168px;flex:0 0 auto;overflow-x:visible}.st-item{width:100%;justify-content:flex-start;padding:12px 16px}.st-main{flex:1;width:auto}}
   </style>
-  <h2>站点设置</h2>
+  <div class="view-head"><h2>${ICON[VIEW_ICONS['settings']]||''}站点设置</h2></div>
   <div class="st-wrap">
     <div class="st-side">
-      <button class="st-item active" onclick="stCat('basic',this)">基础信息</button>
-      <button class="st-item" onclick="stCat('login',this)">登录页</button>
-      <button class="st-item" onclick="stCat('footer',this)">${t('页脚与集成')}</button>
-      <button class="st-item" onclick="stCat('maint',this)">${t('日志维护')}</button>
+      ${stCatItems()}
     </div>
     <div class="st-main">
       <div class="st-cat" id="stcat-basic">
-        <h3>基础信息</h3>
+        <h3>${ICON.squares2x2}基础信息</h3>
         <label>网站名称</label><input id="st_name" value="${val('site_name')}" placeholder="HolaStack">
         <label>顶部图标 URL（可选，留空则显示文字名称）</label><input id="st_logo" value="${val('site_logo_url')}" placeholder="https://example.com/logo.png">
         <label>站点 Favicon URL</label><input id="st_favicon" value="${val('favicon_url')}" placeholder="https://example.com/favicon.ico">
         <label>界面语言</label><select id="st_lang">${(window.LANGS||{zh:'中文'}) && Object.entries(window.LANGS||{zh:'中文'}).map(([k,n])=>`<option value="${k}" ${s.ui_lang===k?'selected':''}>${n}</option>`).join('')}</select>
       </div>
       <div class="st-cat hidden" id="stcat-login">
-        <h3>登录页</h3>
+        <h3>${ICON.user}登录页</h3>
         <label>登录页 LOGO 图片 URL（可选）</label><input id="st_login_img" value="${val('login_logo_url')}" placeholder="https://example.com/login-logo.png">
         <label>登录页 LOGO 文字（无图片时显示）</label><input id="st_login_text" value="${val('login_logo_text')}" placeholder="HolaStack">
         <label>登录页公告（留空则隐藏公告框，支持多行）</label><textarea id="st_notice" rows="3" placeholder="例如：系统将于本周六 23:00 停机维护。">${esc(s.login_notice||'')}</textarea>
       </div>
       <div class="st-cat hidden" id="stcat-footer">
-        <h3>${t('页脚与集成')}</h3>
+        <h3>${ICON.puzzlePiece}${t('页脚与集成')}</h3>
         <label>页面底部 Footer（支持 HTML）</label><textarea id="st_footer" rows="2" placeholder="&copy; {Y} {SITE}">${esc(s.footer||'')}</textarea>
         <label>API 基础地址</label><input id="st_api_url" value="${val('api_base_url')}" placeholder="https://your-server.example.com">
       </div>
       <div class="st-cat hidden" id="stcat-maint">
-        <h3>${t('日志维护')}</h3>
+        <h3>${ICON.clipboardDocumentList}${t('日志维护')}</h3>
         <div style="display:flex;flex-direction:column;gap:10px">
           ${maintRow('上行消息日志','uplinks')}
           ${maintRow('下行消息日志','downlinks')}
-          ${maintRow('事件日志','events')}
+          ${maintRow('网关日志','events')}
         </div>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
-        <button class="ghost" onclick="nav('dashboard')">取消</button>
-        <button onclick="busy('保存中…', saveSettings)">保存</button>
+        <button class="ghost" onclick="nav('dashboard')">${ICON.xMark}取消</button>
+        <button onclick="busy('保存中…', saveSettings)">${ICON.check}保存</button>
       </div>
     </div>
   </div>`;
@@ -916,11 +925,22 @@ function stCat(id, btn){
   document.querySelectorAll('.st-cat').forEach(c => c.classList.toggle('hidden', c.id !== 'stcat-'+id));
   document.querySelectorAll('.st-item').forEach(b => b.classList.toggle('active', b === btn));
 }
+// 站点设置分类菜单：PC 侧栏 / 移动横条共用，按文字长度由短到长排序
+function stCatItems(){
+  const defs = [
+    {id:'basic', icon:'cpuChip',            label:'基础信息'},
+    {id:'login', icon:'user',               label:'登录页'},
+    {id:'footer',icon:'puzzlePiece',        label:t('页脚与集成')},
+    {id:'maint', icon:'clipboardDocumentList',label:t('日志维护')},
+  ];
+  const sorted = defs.slice().sort((a,b)=>a.label.length-b.label.length);
+  return sorted.map(c=>`<button class="st-item${c.id==='basic'?' active':''}" onclick="stCat('${c.id}',this)">${ICON[c.icon]}${esc(c.label)}</button>`).join('');
+}
 
 function maintRow(labelKey, target){
   return `<div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
     <span>${t(labelKey)}</span>
-    <button class="btn danger" onclick="clearLogs('${target}','${labelKey}')">${t('清空')}</button>
+    <button class="btn danger" onclick="clearLogs('${target}','${labelKey}')">${ICON.trash}${t('清空日志')}</button>
   </div>`;
 }
 async function clearLogs(target, labelKey){
@@ -928,6 +948,134 @@ async function clearLogs(target, labelKey){
   const r = await api('POST','/api/settings',{clear_logs: target});
   if (r.error){ alert(t(r.error)); return; }
   toast(t('已清空') + ' ' + t(labelKey), 'ok');
+}
+// 每页右上角的"清空日志"：按当前用户/页面作用域清理，避免误清他人数据
+async function clearPageLogs(target){
+  const map = {
+    uplinks:  ['uplinks', '上行消息日志', viewUplinks],
+    downlinks:['downlinks','下行消息日志', viewDownlinks],
+    events:   ['events',  '网关日志',    viewEvents],
+    api:      ['api',     'API 调用日志', viewApiLogs],
+  };
+  const m = map[target];
+  if (!m) return;
+  const [apiTarget, label, refresh] = m;
+  // 作用域：租户只能清自己；admin 仅当该页确实有租户筛选时才按筛选清，否则清全部
+  let tid = 0;
+  if (isTenant()) {
+    tid = state.user.tenant_id || 0;          // 租户：强制只清自己租户
+  } else if (target === 'api') {
+    tid = (state.apiLogFilter && state.apiLogFilter.tenant_id) ? state.apiLogFilter.tenant_id : 0;
+  } else if (target === 'events') {
+    tid = state.tenantFilter || 0;            // 网关日志页自带租户筛选
+  } else {
+    tid = 0;                                  // 上行/下行页无租户筛选，admin 清全部
+  }
+  const scopeTxt = tid ? t('（仅清理当前用户配置）') : t('（将清空全部）');
+  if (!confirm(t('确认清空') + ' ' + t(label) + '？' + t('此操作不可恢复') + scopeTxt)) return;
+  const r = await api('POST','/api/settings',{clear_logs: apiTarget, clear_logs_tenant: tid});
+  if (r.error){ alert(t(r.error)); return; }
+  toast(t('已清空') + ' ' + t(label) + (tid ? t('（当前用户配置）') : t('（全部）')), 'ok');
+  refresh();
+}
+// 日志页自动刷新（原计算器 lc-refresh 的自动刷新下拉，迁移到右下角悬浮组件）：手动/5s/10s/15s/30s/1m 轮询当前日志页
+let logRefreshTimer = null;
+const LOG_REFRESH_VIEWS = ['uplinks','downlinks','events','api-logs'];
+const LOG_REFRESH_OPTS = [[0,'停止刷新'],[5,'5 秒'],[10,'10 秒'],[15,'15 秒'],[30,'30 秒'],[60,'1 分钟']];
+let refreshFloatOpen = false;
+let logRefreshTarget = null;
+
+// 头部不再显示大号下拉，改为右下角悬浮窗（见 renderRefreshFloat）
+function logRefreshCtrl(){ return ''; }
+
+function refreshFloatText(){
+  const sec = parseInt(state.logRefreshSec||0,10);
+  const o = LOG_REFRESH_OPTS.find(([s])=>s===sec);
+  return o ? o[1] : LOG_REFRESH_OPTS[0][1];
+}
+function renderRefreshFloat(){
+  const box = document.getElementById('logRefreshBox');
+  if (!box) return;
+  if (!LOG_REFRESH_VIEWS.includes(state.view)){
+    box.innerHTML = '';
+    refreshFloatOpen = false;
+    return;
+  }
+  const cur = parseInt(state.logRefreshSec||0,10);
+  box.innerHTML = `<div class="rf-wrap">
+      <div class="refresh-panel${refreshFloatOpen?' show':''}">
+        ${LOG_REFRESH_OPTS.map(([s,txt])=>`<button class="rf-opt${s===cur?' on':''}" onclick="setLogRefresh(${s})">${txt}</button>`).join('')}
+      </div>
+      <button class="float-btn refresh-fab" onclick="toggleRefreshFloat()" title="${refreshFloatText()}">${ICON.arrowPath}</button>
+    </div>`;
+}
+function toggleRefreshFloat(){
+  refreshFloatOpen = !refreshFloatOpen;
+  renderRefreshFloat();
+  if (refreshFloatOpen) setTimeout(()=>document.addEventListener('pointerdown', closeRefreshFloatOuter), 0);
+  else document.removeEventListener('pointerdown', closeRefreshFloatOuter);
+}
+function closeRefreshFloatOuter(e){
+  if (e.target && e.target.closest && e.target.closest('.rf-wrap')) return;
+  refreshFloatOpen = false;
+  const box = document.getElementById('logRefreshBox');
+  if (box) { const p = box.querySelector('.refresh-panel'); if (p) p.classList.remove('show'); }
+  document.removeEventListener('pointerdown', closeRefreshFloatOuter);
+}
+function stopLogRefresh(){
+  if (logRefreshTimer){ clearInterval(logRefreshTimer); logRefreshTimer=null; }
+}
+function syncLogRefreshTimer(){
+  if (!LOG_REFRESH_VIEWS.includes(state.view)) stopLogRefresh();
+}
+function setLogRefresh(sec){
+  sec = parseInt(sec,10)||0;
+  state.logRefreshSec = sec;
+  refreshFloatOpen = false;
+  document.removeEventListener('pointerdown', closeRefreshFloatOuter);
+  stopLogRefresh();
+  logRefreshTarget = sec>0 ? state.view : null;
+  // 将当前日志页的刷新间隔保存到浏览器，下次进入沿用
+  try { if (LOG_REFRESH_VIEWS.includes(state.view)) localStorage.setItem('elw_refresh_'+state.view, String(sec)); } catch(e){}
+  if (sec>0){
+    const target = state.view;
+    logRefreshTimer = setInterval(()=>{
+      // 仅当用户仍停留在该日志页（以地址栏 hash 为准）才静默刷新，否则停止，避免静默渲染把用户拉回日志页
+      if (((location.hash||'').slice(1)||'dashboard') !== target){ stopLogRefresh(); return; }
+      nav(target, true);
+    }, sec*1000);
+  }
+  renderRefreshFloat();
+}
+// 进入日志页时，读取本地保存的刷新间隔并延续自动刷新；若已在该页运行则跳过以免重置定时器
+function restoreLogRefresh(){
+  const v = state.view;
+  if (!LOG_REFRESH_VIEWS.includes(v)) return;
+  if (logRefreshTimer && logRefreshTarget === v) return;
+  let sec = 0;
+  try { const raw = localStorage.getItem('elw_refresh_'+v); sec = raw==null ? 0 : parseInt(raw,10); } catch(e){ sec = 0; }
+  setLogRefresh(isNaN(sec) ? 0 : sec);
+}
+// 移动端悬浮主操作按钮（新建/清空日志），显示在右下角"回顶/回底"按钮上方；清空为红色
+const FAB_PRIMARY = {
+  applications:      {icon:ICON.plus,  title:'新建应用',     onClick:"newApplication()",           danger:false},
+  devices:           {icon:ICON.plus,  title:'添加设备',     onClick:"newDevice()",               danger:false},
+  gateways:          {icon:ICON.plus,  title:'新建网关',     onClick:"newGateway()",              danger:false},
+  users:             {icon:ICON.plus,  title:'新建用户',     onClick:"newUser()",                 danger:false},
+  'device-profiles': {icon:ICON.plus,  title:'新建模板',     onClick:"newDeviceProfile()",        danger:false},
+  tenants:           {icon:ICON.plus,  title:'新建用户配置', onClick:"newTenant()",               danger:false},
+  'multicast-groups':{icon:ICON.plus,  title:'新建组播组',   onClick:"newMulticast()",            danger:false},
+  uplinks:           {icon:ICON.trash, title:'清空日志',     onClick:"clearPageLogs('uplinks')",   danger:true},
+  downlinks:         {icon:ICON.trash, title:'清空日志',     onClick:"clearPageLogs('downlinks')", danger:true},
+  events:            {icon:ICON.trash, title:'清空日志',     onClick:"clearPageLogs('events')",    danger:true},
+  'api-logs':        {icon:ICON.trash, title:'清空日志',     onClick:"clearPageLogs('api')",       danger:true},
+};
+function renderFloatPrimary(){
+  const box = document.getElementById('floatPrimary');
+  if (!box) return;
+  if (window.innerWidth > 760){ box.innerHTML=''; return; }
+  const p = FAB_PRIMARY[state.view];
+  box.innerHTML = p ? `<button class="float-btn fab-primary${p.danger?' danger':''}" onclick="${p.onClick}" title="${p.title}">${p.icon}</button>` : '';
 }
 async function saveSettings(){
   const langSel = document.getElementById('st_lang');
@@ -982,7 +1130,7 @@ async function applyPublicSettings(){
     const ln = document.getElementById('loginNotice');
     if (ln) {
       if (d.login_notice && d.login_notice.trim()) {
-        ln.innerHTML = `<span class="ln-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg></span><span class="ln-txt">${esc(d.login_notice)}</span>`;
+        ln.innerHTML = `<span class="ln-ico">${ICON.speakerWave}</span><span class="ln-txt">${esc(d.login_notice)}</span>`;
         
         ln.classList.toggle('single', !/(\r\n|\n|\r)/.test(d.login_notice.trim()));
         ln.classList.remove('hidden');
@@ -1075,7 +1223,7 @@ async function viewDeviceProfiles(){
     rowHtml: d => `<tr><td>${d.id}</td><td>${esc(d.name)}</td><td class="muted">${esc(d.region)}</td>
       <td class="muted">${esc(d.mac_version)}</td><td class="muted">${esc(d.adr_algorithm)}</td>
       <td class="muted">${esc(d.payload_codec_runtime)}</td><td class="muted">${clsOf(d)}</td>
-      <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDeviceProfile(${d.id}))">删除</button>`)}</td></tr>`,
+      <td>${adminBtn(`<button class="btn ghost" onclick="editDeviceProfile(${d.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delDeviceProfile(${d.id}))">${ICON.trash}删除</button>`)}</td></tr>`,
     emptyText:'暂无设备模板',
   };
   const [filteredDps, dpsTotal] = filterAndSortRows(dpsCfg);
@@ -1089,9 +1237,9 @@ async function viewDeviceProfiles(){
   };
   window.viewDeviceProfiles__page = p => _pagerGo({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',p);
   window.viewDeviceProfiles__limit = l => _pagerSetLimit({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',l);
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">+ 新建模板</button>')}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['device-profiles']]||''}设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">'+ICON.plus+'新建模板</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
-      <button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion='';state.dpsFCls='';state.dpsSort={col:null,dir:'desc'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">重置</button></div>
+      <button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion='';state.dpsFCls='';state.dpsSort={col:null,dir:'desc'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">${ICON.arrowPath}重置</button></div>
     ${table}
     ${pager}`;
 }
@@ -1103,9 +1251,9 @@ async function viewTenants(){
     const unlimited = +row.private_gateways_unlimited === 1;
     return `<tr><td>${row.id}</td><td>${esc(row.name)}</td><td class="muted">${esc(row.description||'')}</td>
     <td class="muted">${unlimited ? t('无限制') : t('上限') + ' ' + (row.private_gateways_limit||0)}</td>
-    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${row.id})">${t('编辑')}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${row.id}))">${t('删除')}</button>`)}</td></tr>`;
+    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${row.id})">${ICON.pencilSquare}${t('编辑')}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${row.id}))">${ICON.trash}${t('删除')}</button>`)}</td></tr>`;
   }).join('')||`<tr><td colspan="5" class="muted">${t('暂无用户配置')}</td></tr>`;
-  document.getElementById('view').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2>${t('用户配置')}</h2>${adminBtn(`<button onclick="newTenant()">${t('+ 新建用户配置')}</button>`)}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['tenants']]||''}${t('用户配置')}</h2>${adminBtn(`<button onclick="newTenant()">${ICON.plus}${t('新建用户配置')}</button>`)}</div>
     <table><thead><tr><th>ID</th><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('私有网关上限')}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function viewApiKeys(){
@@ -1130,7 +1278,7 @@ async function viewApiKeys(){
     ],
     rows: ks,
     rowHtml: k => `<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
-      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">删除</button>`)}</td></tr>`,
+      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">${ICON.trash}删除</button>`)}</td></tr>`,
     emptyText: state.appSel ? '该应用暂无 API 密钥' : '请先在上方选择应用',
   };
   const [filteredKeys, keysTotal] = filterAndSortRows(akCfg);
@@ -1141,8 +1289,8 @@ async function viewApiKeys(){
   window.apiKeysSort_sort = col => _tableToggleSort('apiKeysSort','viewApiKeys',col);
   window.viewApiKeys__page = p => _pagerGo({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',p);
   window.viewApiKeys__limit = l => _pagerSetLimit({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',l);
-  document.getElementById('view').innerHTML=`<h2>API 密钥</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';state.apiKeysPage=1;state.apiKeysOffset=0;state.apiKeysLimit=50;state.apiKeysSort={col:'time',dir:'desc'};}, viewApiKeys)">重置</button>${state.appSel?adminBtn('<button onclick="newApiKey()">+ 新建 API 密钥</button>'):''}</div>
+  document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['api-keys']]||''}API 密钥</h2></div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';state.apiKeysPage=1;state.apiKeysOffset=0;state.apiKeysLimit=50;state.apiKeysSort={col:'time',dir:'desc'};}, viewApiKeys)">${ICON.arrowPath}重置</button>${state.appSel?adminBtn('<button onclick="newApiKey()">'+ICON.plus+'新建 API 密钥</button>'):''}</div>
    ${table}
    ${pager}`;
 }
@@ -1176,7 +1324,7 @@ async function viewIntegrations(){
         <td><span class="tag ${it.enabled?'ok':'off'}">${it.enabled?'启用':'停用'}</span></td>
         <td class="muted">${esc(summaryOf(it))}</td>
         <td class="muted">${new Date(it.created_at*1000).toLocaleString()}</td>
-        <td>${adminBtn(`<button class="btn ghost" onclick="editIntegration(${it.id})">编辑</button> <button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?'停用':'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">删除</button>`)}</td></tr>`,
+        <td>${adminBtn(`<button class="btn ghost" onclick="editIntegration(${it.id})">${ICON.pencilSquare}编辑</button> <button class="btn ghost" onclick="busy('处理中…', ()=>toggleIntegration(${it.id},${it.enabled?0:1}))">${it.enabled?ICON.xMark+'停用':ICON.check+'启用'}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delIntegration(${it.id}))">${ICON.trash}删除</button>`)}</td></tr>`,
     emptyText: state.intAppSel ? '该应用暂无外部集成' : '请先在上方选择应用',
   };
   const [filteredInts, intgTotal] = filterAndSortRows(intgCfg);
@@ -1187,8 +1335,8 @@ async function viewIntegrations(){
   window.intgSort_sort = col => _tableToggleSort('intgSort','viewIntegrations',col);
   window.viewIntegrations__page = p => _pagerGo({pageKey:'intgPage',limitKey:'intgLimit',offsetKey:'intgOffset',totalKey:'intgTotal'},'viewIntegrations',p);
   window.viewIntegrations__limit = l => _pagerSetLimit({pageKey:'intgPage',limitKey:'intgLimit',offsetKey:'intgOffset',totalKey:'intgTotal'},'viewIntegrations',l);
-  document.getElementById('view').innerHTML=`<h2>外部集成</h2>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;state.intgPage=1;state.intgOffset=0;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">+ 新建外部集成</button>'):''}</div>
+  document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['integrations']]||''}外部集成</h2></div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;state.intgPage=1;state.intgOffset=0;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">'+ICON.plus+'新建外部集成</button>'):''}</div>
    ${table}
    ${pager}`;
 }
@@ -1203,9 +1351,9 @@ async function viewMulticastGroups(){
   const rows=ms.map(m=>`<tr><td>${m.id}</td><td>${esc(m.name)}</td><td class="muted">${appName(m.application_id)}</td>
      <td class="muted">${esc(m.region)}</td><td><span class="tag ${m.group_type}">${m.group_type}</span></td>
      <td class="muted"><code>${esc(m.mc_addr)}</code></td><td class="muted">DR${m.dr}</td><td class="muted">${m.f_cnt}</td>
-     <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delMulticast(${m.id}))">删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
-  document.getElementById('view').innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2>组播组</h2>${adminBtn('<button onclick="newMulticast()">+ 新建组播组</button>')}</div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';}, viewMulticastGroups)">重置</button></div>
+     <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">${ICON.bookOpen}详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delMulticast(${m.id}))">${ICON.trash}删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
+  document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['multicast-groups']]||''}组播组</h2>${adminBtn('<button onclick="newMulticast()">'+ICON.plus+'新建组播组</button>')}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';}, viewMulticastGroups)">${ICON.arrowPath}重置</button></div>
    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>区域</th><th>类型</th><th>MC Addr</th><th>DR</th><th>FCnt</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function mcDetail(id){
@@ -1213,18 +1361,18 @@ async function mcDetail(id){
   const devs = await api('GET',`/api/multicast-groups/${id}/devices`);
   const gws = await api('GET',`/api/multicast-groups/${id}/gateways`);
   state.mcDetail = {id, g, devs:(devs.data||[]).map(x=>x.dev_eui), gws:(gws.data||[]).map(x=>x.gw_id)};
-  const devList=(state.mcDetail.devs.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="busy('移除中…', ()=>rmMcDev(${id},'${esc(e)}'))">移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无设备</td></tr>`;
-  const gwList=(state.mcDetail.gws.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="busy('移除中…', ()=>rmMcGw(${id},'${esc(e)}'))">移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无网关（为空则广播到全部网关）</td></tr>`;
+  const devList=(state.mcDetail.devs.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="busy('移除中…', ()=>rmMcDev(${id},'${esc(e)}'))">${ICON.trash}移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无设备</td></tr>`;
+  const gwList=(state.mcDetail.gws.map(e=>`<tr><td><code>${esc(e)}</code></td><td><button class="btn danger" onclick="busy('移除中…', ()=>rmMcGw(${id},'${esc(e)}'))">${ICON.trash}移除</button></td></tr>`).join(''))||`<tr><td colspan="2" class="muted">暂无网关（为空则广播到全部网关）</td></tr>`;
   openModal(`<h3>${t('组播组')} #${id} ${esc(g.name||'')}</h3>
    <p class="muted">MC Addr: <code>${esc(g.mc_addr||'')}</code> · 类型 ${g.group_type} · DR${g.dr} · f_cnt ${g.f_cnt} · 应用 #${g.application_id}</p>
    <h4 style="margin-top:6px">下发数据</h4>
    <div class="row"><div style="flex:0 0 120px"><label>端口 (1..223)</label><input id="m_port" value="10"></div><div style="flex:2"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"></div></div>
    <button onclick="enqueueMc(${id})">加入下发队列</button>
    <h4 style="margin-top:14px">设备（仅用于展示/管理，不参与单播）</h4>
-   <div class="row"><div><input id="m_mcdev" placeholder="DevEUI 16 hex" oninput="hexOnly(this)"></div><button onclick="addMcDev(${id})">添加设备</button></div>
+   <div class="row"><div><input id="m_mcdev" placeholder="DevEUI 16 hex" oninput="hexOnly(this)"></div><button onclick="addMcDev(${id})">${ICON.plus}添加设备</button></div>
    <table style="margin-top:8px"><thead><tr><th>DevEUI</th><th></th></tr></thead><tbody>${devList}</tbody></table>
    <h4 style="margin-top:14px">网关（空=全部网关）</h4>
-   <div class="row"><div><input id="m_mcgw" placeholder="Gateway ID" oninput="hexOnly(this)"></div><button onclick="addMcGw(${id})">添加网关</button></div>
+   <div class="row"><div><input id="m_mcgw" placeholder="Gateway ID" oninput="hexOnly(this)"></div><button onclick="addMcGw(${id})">${ICON.plus}添加网关</button></div>
    <table style="margin-top:8px"><thead><tr><th>GatewayID</th><th></th></tr></thead><tbody>${gwList}</tbody></table>
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }

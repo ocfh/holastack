@@ -1121,7 +1121,7 @@ class WebApp
                 'uplinks' => $ups, 'downlinks' => $dls,
                 'devices_online' => 3, 'devices_offline' => 1,
                 'device_profiles' => 3, 'multicast_groups' => 2,
-                'device_logs' => self::demoEvents(5),
+                'device_logs' => self::demoUplinks(5),
                 'gateway_logs' => self::demoEvents(5),
             ];
         }
@@ -1179,8 +1179,8 @@ class WebApp
         
 
         $deviceLogs = Database::fetchAll(
-            "SELECT id, type, level, dev_id, message, created_at FROM events WHERE dev_id > 0"
-            . ($appClause !== null ? " AND $appClause" : '') . " ORDER BY id DESC LIMIT 5"
+            "SELECT id, dev_id, dev_addr, fcnt, port, rssi, snr, decrypted_hex, payload_hex, received_at FROM uplinks"
+            . ($appClause !== null ? " WHERE $appClause" : '') . " ORDER BY id DESC LIMIT 5"
         );
         $gatewayLogs = Database::fetchAll(
             "SELECT id, type, level, gateway_id, message, created_at FROM events WHERE gateway_id != ''"
@@ -1634,7 +1634,7 @@ class WebApp
     }
 
     
-    public static function clearLogs(string $target): array
+    public static function clearLogs(string $target, ?int $tenantId = null): array
     {
         $tables = [
             'api' => 'api_logs',
@@ -1645,7 +1645,26 @@ class WebApp
         if (!isset($tables[$target])) {
             return ['error' => 'invalid log target'];
         }
-        Database::execute("DELETE FROM " . $tables[$target]);
-        return ['target' => $target, 'cleared' => true];
+        $s = self::scope();
+        // 非管理员只能清理自己租户的日志；管理员若传了 tenant_id 则按租户清理，否则清理全部
+        $tid = $s['is_admin']
+            ? ($tenantId && $tenantId > 0 ? (int) $tenantId : null)
+            : ($s['tenant_id'] ?: null);
+        $tbl = $tables[$target];
+        if ($tid === null) {
+            Database::execute("DELETE FROM " . $tbl);
+        } elseif ($target === 'api') {
+            Database::execute("DELETE FROM api_logs WHERE tenant_id=?", [$tid]);
+        } elseif ($target === 'events') {
+            Database::execute(
+                "DELETE FROM events WHERE dev_id IN (SELECT id FROM devices WHERE tenant_id=?) "
+                . "OR gateway_id IN (SELECT gw_id FROM gateways WHERE tenant_id=?)",
+                [$tid, $tid]
+            );
+        } else {
+            // uplinks / downlinks：通过应用归属租户过滤
+            Database::execute("DELETE FROM " . $tbl . " WHERE app_id IN (SELECT id FROM applications WHERE tenant_id=?)", [$tid]);
+        }
+        return ['target' => $target, 'tenant_id' => $tid, 'cleared' => true];
     }
 }

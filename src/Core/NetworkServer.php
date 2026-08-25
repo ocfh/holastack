@@ -751,14 +751,12 @@ class NetworkServer
         ];
         
 
-        $this->fireCallback($device['app_id'], $uplinkData + $telemetry);
-        
+        // [reorder] 应用回调与集成 webhook 统一移至本方法末尾触发，确保下行 PULL_RESP 先发出，
+        // 避免慢回调阻塞 Class A RX 窗口（接标准 1s 设备 RECEIVE_DELAY1=1000 也不会被拖垮）。
 
         
 
-        Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, function (string $m): void {
-            $this->log($m);
-        });
+        // [reorder] 主集成 webhook 移至方法末尾（与 fireCallback 一同，下行之后触发）
 
         
 
@@ -768,9 +766,7 @@ class NetworkServer
         
 
         if ($statusEvent) {
-            Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, function (string $m): void {
-                $this->log($m);
-            }, 'status');
+            // [reorder] 状态集成 webhook 移至方法末尾（与上行回调一同，下行之后触发）
             $this->logEvent('status', 'info',
                 "设备状态更新 dev#{$device['id']} battery=" . var_export($telemetry['battery'] ?? null, true)
                 . " margin=" . ($telemetry['margin'] ?? ''),
@@ -815,6 +811,19 @@ class NetworkServer
             $this->bumpDownFCnt($device['id']);
             $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
             $this->logEvent('downlink', 'info', "ADRACKReq 应答：空 ACK 下行 dev#{$device['id']} (ADR ack, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $freq, $datr, $gwEui));
+        }
+
+        // === 下行（MAC ACK / 应用 pending / ADR-ACK）已在上文全部 enqueue 并立即 flush（PULL_RESP 已发出）===
+        // 此处再触发应用回调与集成 webhook，避免慢回调阻塞 Class A RX 窗口；
+        // 即便接标准 1s 设备（RECEIVE_DELAY1=1000），下行也已提前发出，不会被拖垮。
+        $this->fireCallback($device['app_id'], $uplinkData + $telemetry);
+        Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, function (string $m): void {
+            $this->log($m);
+        });
+        if ($statusEvent) {
+            Integration::dispatch($device['app_id'], $device, $uplinkData, $telemetry, function (string $m): void {
+                $this->log($m);
+            }, 'status');
         }
     }
 
@@ -1106,14 +1115,16 @@ class NetworkServer
                 if ($resp['dr'] != (int) $device['dr']
                     || $resp['tx_power_index'] != (int) $device['tx_power_index']
                     || $resp['nb_trans'] != (int) $device['nb_trans']) {
-                    $chMask = $this->channelMask($device, $region);
-                    $adrReq = MacCommands::buildLinkADRReq($resp['dr'], $resp['tx_power_index'], $chMask, 0, $resp['nb_trans']);
-                    $fopts .= $adrReq;
-                    MacCommands::setPending($device, MacCommands::CID_LINK_ADR_REQ, $adrReq);
-                    $this->log(sprintf(
-                        "ADR: dev#%d schedule LinkADRReq dr=%d txPower=%d nbTrans=%d",
-                        $device['id'], $resp['dr'], $resp['tx_power_index'], $resp['nb_trans']
-                    ));
+                    $maskGroups = $this->channelMask($device, $region);
+                    foreach ($maskGroups as [$chMask, $chMaskCntl]) {
+                        $adrReq = MacCommands::buildLinkADRReq($resp['dr'], $resp['tx_power_index'], $chMask, $chMaskCntl, $resp['nb_trans']);
+                        $fopts .= $adrReq;
+                        MacCommands::setPending($device, MacCommands::CID_LINK_ADR_REQ, $adrReq);
+                        $this->log(sprintf(
+                            "ADR: dev#%d schedule LinkADRReq dr=%d txPower=%d nbTrans=%d chMask=0x%04X cntl=%d",
+                            $device['id'], $resp['dr'], $resp['tx_power_index'], $resp['nb_trans'], $chMask, $chMaskCntl
+                        ));
+                    }
                 }
             }
         }
@@ -1213,21 +1224,34 @@ class NetworkServer
         }
     }
 
-    private function channelMask(array $device, Region $region): int
+    /**
+     * 按 16 信道一组生成 LinkADRReq 所需的 ChMask 列表。
+     * CN470 等 96 信道区域需要跨多个 ChMaskCntl 块下发。
+     * @return array [[mask16, cntl], ...]
+     */
+    private function channelMask(array $device, Region $region): array
     {
         $ch = json_decode($device['enabled_uplink_channel_indices'] ?? '[]', true);
         if (!is_array($ch) || count($ch) === 0) {
-            // 未配置时用 region 默认信道（EU868=0-2），避免 ChMask 含未定义信道被设备拒绝
+            // 未配置时用 region 默认信道（EU868=0-2，CN470=0-5/39-44/78-95）
             $ch = $region->getDefaultUplinkChannels();
         }
-        $mask = 0;
+        $groups = [];
         foreach ($ch as $i) {
             $i = (int) $i;
-            if ($i >= 0 && $i < 16) {
-                $mask |= (1 << $i);
+            if ($i < 0 || $i > 255) {
+                continue;
             }
+            $cntl = intdiv($i, 16);
+            $bit = $i % 16;
+            $groups[$cntl] = ($groups[$cntl] ?? 0) | (1 << $bit);
         }
-        return $mask & 0xFFFF;
+        ksort($groups);
+        $out = [];
+        foreach ($groups as $cntl => $mask) {
+            $out[] = [$mask & 0xFFFF, $cntl];
+        }
+        return $out;
     }
 
     private function buildDownFrame(array $ks, string $devAddrBin, int $fcnt, bool $confirmed, bool $ack, $fport, string $payload, bool $adr, string $macFopts, string $macPort0, int $confFCnt = 0): string
@@ -2568,8 +2592,8 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
                 [$type, $level, $gwId, $devId, $appId, $message, $rawJson, time()]
             );
         } catch (\Throwable $e) {
-            
-
+            // 不再静默吞掉：事件写库失败会导致日志"看起来停止更新"，必须可见
+            $this->log("logEvent INSERT FAIL: " . $e->getMessage() . " | type=$type gw=$gwId dev=$devId");
         }
         $this->log("[$type/$level] $message");
     }

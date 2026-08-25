@@ -217,30 +217,40 @@ function buildPager(cfg){
   
   const win = [];
   for (let i = Math.max(1, cur - 2); i <= Math.min(pages, cur + 2); i++) win.push(i);
-  const chevL = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
-  const chevR = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+  const chevL = ICON.chevronLeft;
+  const chevR = ICON.chevronRight;
   const pageBtn = (p, label, extra) => {
     const dis = extra && extra.disabled;
     const cls = extra && extra.cur ? 'btn' : 'ghost';
     return `<button class="${cls}" style="padding:4px 9px;font-size:12px;display:inline-flex;align-items:center;gap:3px" ${dis?'disabled':''} onclick="window['${cfg.refresh}__page'](${p})">${label||p}</button>`;
   };
-  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:12px;flex-wrap:wrap">
-    <div class="muted" style="font-size:12px">${t('共')} <b>${total}</b> ${t('条')} · ${t('第')} ${from}-${to} ${t('条')} · ${pages>0?cur:0} / ${pages} ${t('页')}</div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <label style="margin:0;font-size:12px;color:var(--mut)">${t('每页')}</label>
-      <select style="width:auto;padding:4px 8px;font-size:12px" onchange="window['${cfg.refresh}__limit'](+this.value)">
-        ${[20,50,100,200,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
-      </select>
-      ${pageBtn(Math.max(1, cur-1), chevL + '<span>'+t('上一页')+'</span>', {disabled: cur<=1})}
-      ${win[0] > 1 ? pageBtn(1, '1') + (win[0] > 2 ? '<span class="muted">…</span>' : '') : ''}
-      ${win.map(p => pageBtn(p, p, {cur: p===cur})).join('')}
-      ${win[win.length-1] < pages ? (win[win.length-1] < pages-1 ? '<span class="muted">…</span>' : '') + pageBtn(pages, pages) : ''}
-      ${pageBtn(Math.min(pages, cur+1), '<span>'+t('下一页')+'</span>' + chevR, {disabled: cur>=pages})}
-      <label style="margin:0;font-size:12px;color:var(--mut)">${t('跳到')}</label>
-      <input type="number" min="1" max="${pages}" value="${cur}" style="width:64px;padding:4px 6px;font-size:12px" onchange="window['${cfg.refresh}__page'](+this.value)">
-      <span class="muted" style="font-size:12px">${t('页')}</span>
-    </div>
-  </div>`;
+  return `<style>
+    .pager-wrap{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+    .pager-nav{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap}
+    .pager-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+    .pager-jump{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+    </style>
+    <div class="pager-wrap">
+      <div class="pager-nav">
+        ${pageBtn(Math.max(1, cur-1), chevL + '<span>'+t('上一页')+'</span>', {disabled: cur<=1})}
+        ${win[0] > 1 ? pageBtn(1, '1') + (win[0] > 2 ? '<span class="muted">…</span>' : '') : ''}
+        ${win.map(p => pageBtn(p, p, {cur: p===cur})).join('')}
+        ${win[win.length-1] < pages ? (win[win.length-1] < pages-1 ? '<span class="muted">…</span>' : '') + pageBtn(pages, pages) : ''}
+        ${pageBtn(Math.min(pages, cur+1), '<span>'+t('下一页')+'</span>' + chevR, {disabled: cur>=pages})}
+      </div>
+      <div class="pager-meta">
+        <div class="muted" style="font-size:12px">${t('共')} <b>${total}</b> ${t('条')} · ${t('第')} ${from}-${to} ${t('条')} · ${pages>0?cur:0} / ${pages} ${t('页')}</div>
+        <div class="pager-jump">
+          <label style="margin:0;font-size:12px;color:var(--mut)">${t('每页')}</label>
+          <select style="width:auto;padding:4px 8px;font-size:12px" onchange="window['${cfg.refresh}__limit'](+this.value)">
+            ${[20,50,100,200,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
+          </select>
+          <label style="margin:0;font-size:12px;color:var(--mut)">${t('跳到')}</label>
+          <input type="number" min="1" max="${pages}" value="${cur}" style="width:64px;padding:4px 6px;font-size:12px" onchange="window['${cfg.refresh}__page'](+this.value)">
+          <span class="muted" style="font-size:12px">${t('页')}</span>
+        </div>
+      </div>
+    </div>`;
 }
 function _pagerGo(key, re, page){
   const lim = +state[key.limitKey] || 50;

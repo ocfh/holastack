@@ -81,8 +81,8 @@ class Region
             'beacon_rfu2' => 1,
             'beacon_nb_channels' => 8,
             'beacon_channel_step' => 200000,
-            'receive_delay1' => 1000,
-            'receive_delay2' => 2000,
+            'receive_delay1' => 5000,
+            'receive_delay2' => 6000,
             'join_accept_delay1' => 5000,
             'join_accept_delay2' => 6000,
             'rx1_dr_offset' => 0,
@@ -90,7 +90,11 @@ class Region
             'max_ul_dr' => 5,
             'rx1' => [
                 // CN470：下行 RX1 用「配对频点」而非上行同频
-                // 上行 470.3~489.3（96 信道 @0.2MHz）→ 下行 500.3~509.7（48 信道，idx%48）
+                // 上行 96 信道 470.3~489.3 MHz（步进 0.2 MHz）→ 下行按上行信道号 %48 映射到 500.3~509.7 MHz
+                // 居民抄表应用可用信道：0~5、39~44、78~95；6~38 与 45~77 由国家电网保留，默认禁用
+                // 注意：本设备固件把 RECEIVE_DELAY1/2 与 JOIN_ACCEPT_DELAY1/2 的语义对调了——
+                // 数据下行 RX1 实际在 txDone 后 ~5s 开窗（非标准 1s），故这里 receive_delay 也取 5000/6000 迁就设备；
+                // 若以后接标准设备（1s）需改回 1000/2000。
                 'type' => 'paired',
                 'ul_start' => 470.3, 'ul_step' => 0.2,
                 'dl_start' => 500.3, 'dl_step' => 0.2, 'dl_count' => 48,
@@ -430,7 +434,8 @@ class Region
             case 'AU915':
                 return range(0, 63);
             case 'CN470':
-                return range(0, 95);
+                // 居民抄表可用信道：0~5、39~44、78~95；6~38 / 45~77 由国家电网保留
+                return array_merge(range(0, 5), range(39, 44), range(78, 95));
             case 'AS923':
             case 'IN865':
             case 'KR920':

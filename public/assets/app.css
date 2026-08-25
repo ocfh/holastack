@@ -35,8 +35,9 @@
   header{display:flex;align-items:center;gap:14px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:100}
   .brand-block{display:inline-flex;flex-direction:column;align-items:flex-end;line-height:1.15;flex:0 0 auto}
   header h1{font-size:22px;margin:0;color:var(--acc);flex:0 0 auto;font-weight:700}
-  .brand-sub{display:none;align-items:center;color:var(--txt);font-size:13px;font-weight:400}
-  .brand-sub::before{content:"•";margin-right:6px;color:var(--mut)}
+  /* 顶部页面名：PC 端不显示；移动端显示「· 页面名」（圆点分隔，非图标） */
+  .brand-sub{display:none;align-items:center;color:var(--txt);font-size:13px;font-weight:400;gap:5px}
+  .brand-sub .hi{width:1.05em;height:1.05em;flex:0 0 auto}
   #brand img{height:22px;vertical-align:middle}
   
   .desk-nav{display:flex;gap:2px;align-items:center}
@@ -139,6 +140,7 @@
   #modalBox .modal-foot{flex:0 0 auto;padding-top:14px;border-top:1px solid var(--line);margin-top:14px}
   .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:var(--bg-chip);color:var(--mut)}
   .tag.ok{background:var(--tag-ok-bg);color:var(--ok)} .tag.pending{background:var(--tag-pending-bg);color:var(--warn)} .tag.err{background:var(--tag-err-bg);color:var(--err)} .tag.off{background:var(--tag-off-bg);color:var(--mut)}
+  .tag.up{background:var(--tag-ok-bg);color:var(--ok)}
   .tag.A{background:var(--tag-a-bg);color:var(--acc)} .tag.B{background:var(--tag-b-bg);color:var(--warn)} .tag.C{background:var(--tag-c-bg);color:var(--ok)}
   .muted{color:var(--mut)} pre{background:var(--bg-deep);padding:10px;border-radius:8px;overflow:auto;font-size:12px} .hidden{display:none !important}
   #login{display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -214,12 +216,17 @@
     .who{display:none}
     .brand-block{flex-direction:row;align-items:flex-end;gap:8px}
     .brand-sub{display:inline-flex;margin-left:0;max-width:38vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .brand-sub .hi{display:none}
+    .brand-sub::before{content:'•';color:var(--mut);font-size:1.5em;line-height:1}
+    /* 移动端：顶栏已显示页面名，view-head 整体隐藏（操作按钮改为右下角悬浮），避免空占大块 */
+    .view-head{display:none!important;margin:0}
     
     .row{align-items:stretch}
     .row>div, .row>div[style*="flex:0 0"]{flex:1 1 100%!important;max-width:100%}
     .row select, .row input{width:100%}
     
-    table:not(.tbl-wrap table){display:block;overflow-x:auto;white-space:nowrap;width:100%}
+    table:not(.tbl-wrap table){display:block;overflow-x:auto;white-space:nowrap;width:100%;margin-top:14px}
+    .tbl-wrap{margin-top:14px}
     main{padding:14px}
     .loracalc .grid{grid-template-columns:1fr}
   }
@@ -234,3 +241,83 @@
   footer.site-footer a{color:var(--mut);text-decoration:underline;text-decoration-color:var(--line)}
   footer.site-footer a:hover{color:var(--txt)}
   footer.site-footer.login-footer{margin:14px auto 0;max-width:380px;border:0;padding:0 18px}
+
+  /* ===== Heroicons (.hi) - unified icon sizing =====
+     Heroicons 图形仅占 24x24 视口中央约 80%，故图标元素取 1.25em 才能与
+     相邻文字视觉等高协调；所有带文字的图标（导航/按钮/移动端）统一跟随 1.25em，
+     纯图标按钮用固定 px。颜色统一 stroke=currentColor 跟随文字色。 */
+  .hi{width:1.25em;height:1.25em;flex:0 0 auto;vertical-align:-0.3em;display:inline-block}
+  /* page header with action button: keep spacing from the list below (esp. mobile) */
+  .view-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0.83em 0 18px;min-height:36px}
+  .view-head h2{margin:0;font-size:20px;display:flex;align-items:center;gap:.5em}
+  .view-head h2 .hi{width:1em;height:1em;flex:0 0 auto;margin:0}
+  .view-head button{margin:0}
+  .view-head select{margin:0;font-size:13px}
+  /* nav group button: icon + label + caret */
+  .navgrp-btn{display:flex;align-items:center;gap:8px}
+  .navgrp-btn .caret{margin-left:auto;display:inline-flex;opacity:.6}
+  .navgrp.open .navgrp-btn .caret{transform:rotate(180deg)}
+  /* nav sub items */
+  .navsub a{display:flex;align-items:center;gap:10px}
+  .navsub a.active{color:var(--acc);font-weight:600}
+  /* mobile panel */
+  .mp-grid a{display:flex;align-items:center;gap:10px}
+  .mp-grid a.mp-danger .hi{opacity:1}
+  /* buttons with leading icon */
+  .btn{display:inline-flex;align-items:center;gap:6px}
+  .btn.ghost{background:var(--bg-chip);color:var(--txt);border:1px solid var(--line)}
+  .btn.ghost:hover{background:var(--bg-subtle);border-color:var(--acc)}
+  .btn.danger{background:transparent;color:var(--err);border:1px solid var(--err-line,var(--line))}
+  .btn.danger:hover{background:var(--err-box-bg,var(--bg-chip))}
+  /* theme toggle (icon-only) */
+  #themeToggle{display:inline-flex;align-items:center;justify-content:center;background:var(--bg-deep);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:6px;cursor:pointer}
+  #themeToggle .hi{width:18px;height:18px}
+  /* hamburger: display 由响应式规则控制（桌面隐藏/移动显示），此处仅给尺寸对齐 */
+  .hamburger{align-items:center;justify-content:center}
+  .hamburger .hi{width:20px;height:20px}
+  /* topbar account buttons (桌面显示，移动端收进面板) */
+  .tb-account{display:inline-flex;align-items:center;gap:6px}
+  .tb-account .hi{opacity:.85}
+  /* login notice (speaker) icon */
+  .ln-ico{display:inline-flex;align-items:center;color:var(--acc)}
+  .ln-ico .hi{width:16px;height:16px}
+  /* log fold chevron rotation: collapsed -> points right; expanded -> points down */
+  .log-chev{display:inline-flex;transition:transform .15s ease;transform:rotate(90deg)}
+  .log-col.collapsed .log-chev{transform:rotate(0deg)}
+  .log-chev .hi{width:16px;height:16px}
+  /* raw json button (icon-only) */
+  .raw-btn{display:inline-flex;align-items:center;justify-content:center;background:var(--bg-chip);border:1px solid var(--line);color:var(--mut);border-radius:6px;padding:4px;cursor:pointer}
+  .raw-btn:hover{color:var(--acc);border-color:var(--acc)}
+  .raw-btn .hi{width:16px;height:16px}
+  /* select caret */
+  .sel-caret .hi{width:14px;height:14px}
+  /* 移动端响应式：菜单按钮显示、账户按钮收进面板（覆盖上面的默认 display） */
+  @media (max-width:860px){
+    .hamburger{display:inline-flex}
+    .tb-account{display:none}
+  }
+
+  /* ===== 全局悬浮按钮（右下角：回到顶部/回到底部 + 日志自动刷新） ===== */
+  .float-dock{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;align-items:flex-end;gap:10px;z-index:380}
+  .float-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--txt);cursor:pointer;box-shadow:0 6px 16px rgba(var(--shadow-rgba),.22);transition:transform .15s ease,box-shadow .15s ease}
+  .float-btn:hover{transform:translateY(-2px);box-shadow:0 10px 22px rgba(var(--shadow-rgba),.3)}
+  .float-btn .hi{width:20px;height:20px}
+  .logrefresh-float{position:relative}
+  .rf-wrap{position:relative}
+  .refresh-fab{width:auto;padding:0 13px;background:var(--warn);color:var(--txt-on-acc);border-color:transparent}
+  .refresh-fab:hover{box-shadow:0 10px 22px rgba(0,0,0,.3)}
+  .refresh-fab .hi{width:16px;height:16px}
+  #floatPrimary{display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+  .float-btn.fab-primary{background:var(--acc);color:var(--txt-on-acc);border-color:transparent}
+  .float-btn.fab-primary:hover{box-shadow:0 10px 22px rgba(0,0,0,.3)}
+  .float-btn.fab-primary.danger{background:var(--err);color:#fff;border-color:transparent}
+  .refresh-panel{position:absolute;right:0;bottom:calc(100% + 8px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 28px rgba(var(--shadow-rgba),.22);padding:6px;min-width:128px;display:flex;flex-direction:column;gap:2px;opacity:0;visibility:hidden;transform:translateY(6px);transition:opacity .16s ease,transform .16s ease,visibility 0s .16s}
+  .refresh-panel.show{opacity:1;visibility:visible;transform:translateY(0);transition-delay:0s}
+  .rf-opt{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:none;background:transparent;color:var(--txt);font-size:13px;cursor:pointer;text-align:left;border-radius:8px}
+  .rf-opt:hover{background:var(--bg-subtle)}
+  .rf-opt.on{color:var(--acc);font-weight:600}
+  .rf-opt.on::after{content:'✓';margin-left:auto}
+  @media (max-width:760px){
+    .float-dock{right:12px;bottom:14px;gap:8px}
+    .float-btn{width:38px;height:38px}
+  }

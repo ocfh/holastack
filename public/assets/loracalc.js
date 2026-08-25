@@ -216,7 +216,7 @@
     const d0 = Lc_DEVICES.LR1110;
     return `
 <div class="lc-head">
-  <h2>LoRa / LoRaWAN 参数计算器</h2>
+  <h2>${(typeof ICON!=='undefined' && ICON.calculator) ? ICON.calculator : ''} LoRa / LoRaWAN 参数计算器</h2>
   <p class="hint">复刻 Semtech 官方 LoRa Calculator · 中文版 · 所有计算在浏览器本地完成，不上传任何数据。</p>
 </div>
 <div class="tabs">
@@ -457,17 +457,6 @@
       </div>
     </div>
   </div>
-  <div class="lc-refresh">
-    <span>自动刷新</span>
-    <select id="lc_refresh" onchange="Lc_refresh()">
-      <option value="0" selected>手动刷新</option>
-      <option value="5">5 秒</option>
-      <option value="10">10 秒</option>
-      <option value="15">15 秒</option>
-      <option value="30">30 秒</option>
-      <option value="60">1 分钟</option>
-    </select>
-  </div>
 </div>`;
   }
 
@@ -478,19 +467,6 @@
     document.getElementById('panelLW').classList.toggle('hidden', lora);
     document.getElementById('tabLoRa').classList.toggle('active', lora);
     document.getElementById('tabLW').classList.toggle('active', !lora);
-  }
-
-  // ---- 右下角自动刷新 ----
-  let Lc_refreshTimer = null;
-  function Lc_refresh() {
-    if (Lc_refreshTimer) { clearInterval(Lc_refreshTimer); Lc_refreshTimer = null; }
-    const el = document.getElementById('lc_refresh');
-    const sec = el ? parseInt(el.value, 10) : 0;
-    if (sec > 0) {
-      Lc_refreshTimer = setInterval(() => {
-        if (document.getElementById('lcRoot')) { Lc_rCalc(); Lc_wCalc(); }
-      }, sec * 1000);
-    }
   }
 
   // ---- 设备联动（LoRa 页）----
@@ -542,7 +518,7 @@
     const Itx = Lc_txCurrent(dev, txpower, reg, rfpath);
     const Irx = Lc_rxCurrent(dev, reg, rxmode);
 
-    let toaSec = 0, tsym = 0, totalSyms = 0, preambleSyms = 0, sens = 0, xtal = 0, effDr = 0;
+    let toaSec = 0, tsym = 0, totalSyms = 0, preambleSyms = 0, sens = 0, xtal = 0, effDr = 0, preamble = Math.max(1, Lc_num('r_preamble', 8));
     if (mod === 'FSK') {
       const fdev = Lc_num('r_fdev', 25);
       const fdr = Lc_num('r_fdr', 50);
@@ -560,6 +536,7 @@
       xtal = Lc_xtalFsk(fdr * 1000, fHz);
       effDr = (payload * 8) / toaSec;
       document.getElementById('r_midx').textContent = '调制指数 Modulation Index：' + Lc_fmt(2 * fdev / fdr, 3);
+      preamble = preambleBits;
     } else {
       const sf = parseInt(Lc_val('r_sf', '12'), 10);
       const bw = parseFloat(Lc_val('r_bw', '125'));
@@ -567,7 +544,7 @@
       const payload = Math.max(0, Lc_num('r_payload', 12));
       const crcOn = Lc_chk('r_crc');
       const implicit = Lc_val('r_header', '0') === '1';
-      const preamble = Math.max(1, Lc_num('r_preamble', 8));
+      preamble = Math.max(1, Lc_num('r_preamble', 8));
       const ldroMode = Lc_val('r_ldro', 'auto');
       const ts = Math.pow(2, sf) / (bw * 1000);
       let ldro = false;
@@ -722,9 +699,9 @@
 .loracalc *{box-sizing:border-box}
 .loracalc .lc-head h2{margin:0 0 4px;font-size:18px;color:var(--txt)}
 .loracalc .hint{color:var(--mut);font-size:12px;margin:0 0 14px}
-.loracalc .tabs{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
-.loracalc .tab{background:var(--panel);border:1px solid var(--line);color:var(--mut);padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px}
-.loracalc .tab.active{background:var(--acc);color:var(--txt-on-acc);border-color:var(--acc)}
+.loracalc .tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}
+  .loracalc .tab{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--panel);border:1px solid var(--line);color:var(--mut);padding:12px 16px;border-radius:10px;cursor:pointer;font-weight:600;font-size:14px;text-align:center}
+  .loracalc .tab.active{background:var(--acc);color:var(--txt-on-acc);border-color:var(--acc)}
 .loracalc .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
 @media (max-width:860px){ .loracalc .grid{grid-template-columns:1fr} }
 .loracalc .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
@@ -751,9 +728,6 @@
 .loracalc .stat.big{grid-column:1 / -1;background:var(--bg-subtle)}
 .loracalc .stat.big .v{font-size:28px;color:var(--ok)}
 .loracalc .stat.warnv .v{color:var(--warn)}
-.loracalc .lc-refresh{position:fixed;right:22px;bottom:22px;z-index:120;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;box-shadow:0 4px 16px rgba(var(--shadow-rgba),.25)}
-.loracalc .lc-refresh span{color:var(--mut);font-size:12px;white-space:nowrap}
-.loracalc .lc-refresh select{width:auto;min-width:110px;padding:6px 8px;font-size:13px;margin:0}
 .loracalc .hidden{display:none}
 `;
   let Lc_cssInjected = false;
@@ -786,11 +760,9 @@
       Lc_wClass();
       Lc_rCalc();
       Lc_wCalc();
-      Lc_refresh();
     };
 
     window.Lc_switchTab = Lc_switchTab;
-    window.Lc_refresh = Lc_refresh;
     window.Lc_rDevice = Lc_rDevice;
     window.Lc_rMod = Lc_rMod;
     window.Lc_rRfPath = Lc_rRfPath;

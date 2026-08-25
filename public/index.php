@@ -255,11 +255,13 @@ function handleApi(string $method, string $path): array
         case 'regions':
             return ['regions' => WebApp::regions()];
         case 'settings':
+            if ($method === 'POST' && !empty($body['clear_logs'])) {
+                Auth::guardApi(Auth::ROLE_TENANT);
+                $tid = isset($body['clear_logs_tenant']) ? (int) $body['clear_logs_tenant'] : null;
+                return ['ok' => true, 'result' => WebApp::clearLogs((string) $body['clear_logs'], $tid)];
+            }
             Auth::guardApi(Auth::ROLE_ADMIN);
             if ($method === 'POST') {
-                if (!empty($body['clear_logs'])) {
-                    return ['ok' => true, 'result' => WebApp::clearLogs((string) $body['clear_logs'])];
-                }
                 Setting::setMany($body);
                 return ['ok' => true, 'data' => Setting::getAll()];
             }
@@ -717,9 +719,9 @@ function renderPage(): string
   <img id="avatar" class="avatar" alt="avatar" src="https://gravatar.webp.se/avatar/00000000000000000000000000000000?s=40&d=mp">
   <span class="who" id="who"></span>
   <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题" style="padding:7px 9px;line-height:1;display:inline-flex;align-items:center;justify-content:center"></button>
-  <button class="ghost tb-account" onclick="changePw()">修改密码</button>
-  <button class="ghost tb-account" onclick="logout()">退出</button>
-  <button class="hamburger" id="navToggle" aria-label="菜单" onclick="toggleNav()">☰</button>
+  <button class="ghost tb-account" onclick="changePw()"><svg class="hi" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon"> <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"/> </svg>修改密码</button>
+  <button class="ghost tb-account" onclick="logout()"><svg class="hi" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon"> <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75"/> </svg>退出</button>
+  <button class="hamburger" id="navToggle" aria-label="菜单" onclick="toggleNav()"><svg class="hi" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg></button>
   <div id="mobilePanel" class="mobile-panel"></div>
 </header>
 
@@ -739,9 +741,17 @@ function renderPage(): string
 <main id="view" class="hidden"></main>
 <footer id="siteFooter" class="site-footer hidden"></footer>
 
+<nav id="floatDock" class="float-dock hidden">
+  <div id="logRefreshBox" class="logrefresh-float"></div>
+  <div id="floatPrimary"></div>
+  <button class="float-btn" onclick="pageTop()" title="回到顶部"><svg class="hi" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 15.75 7.5-7.5 7.5 7.5"/></svg></button>
+  <button class="float-btn" onclick="pageBottom()" title="回到底部"><svg class="hi" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg></button>
+</nav>
+
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 <div id="loader"><div class="spinner"></div></div>
 
+<script src="/assets/js/icons.js"></script>
 <script src="/assets/js/core.js"></script>
 <script src="/assets/js/table.js"></script>
 <script src="/assets/js/views.js"></script>
