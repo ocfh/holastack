@@ -1559,7 +1559,8 @@ class NetworkServer
             "SELECT d.*, dev.nwk_s_key, dev.app_s_key, dev.dev_addr, dev.class, dev.last_gw_id,
                     dev.ping_period, dev.beacon_epoch, dev.region, dev.fcnt_down AS dev_fcnt_down,
                     dev.last_seen,
-                    dev.f_nwk_s_int_key, dev.s_nwk_s_int_key, dev.nwk_s_enc_key, dev.mac_version
+                    dev.f_nwk_s_int_key, dev.s_nwk_s_int_key, dev.nwk_s_enc_key, dev.mac_version,
+                    dev.ping_slot_freq, dev.ping_slot_dr
              FROM downlinks d
              JOIN devices dev ON dev.id = d.dev_id
              WHERE d.status='pending' AND dev.class IN ('B','C')"
@@ -1580,16 +1581,29 @@ class NetworkServer
                 'last_gw_id'       => $dl['last_gw_id'],
                 'ping_period'      => (int) $dl['ping_period'],
                 'beacon_epoch'     => (int) $dl['beacon_epoch'],
+                'ping_slot_freq'   => (int) ($dl['ping_slot_freq'] ?? 0),
+                'ping_slot_dr'     => (int) ($dl['ping_slot_dr'] ?? 0),
                 'region'           => $dl['region'],
                 'fcnt_down'        => (int) $dl['dev_fcnt_down'],
                 'last_seen'        => (int) $dl['last_seen'],
             ];
-            $sendAt = ($device['class'] === 'C') ? $now : $this->nextPingSlot($device, $now);
-            if ($now < $sendAt) {
-                continue; 
-
+            $pingSlotUnix = 0;
+            if ($device['class'] === 'C') {
+                // Class C：随时可下发（imme），但刚上行 2.5s 内让设备先开 RXC
+                $sendAt = $now;
+                $imme = true;
+            } else {
+                // Class B：必须对齐 ping slot 精确时刻，进入窗口后再下发（带 tmst）
+                $slot = $this->nextPingSlot($device, $now);
+                $lead = 5; // 提前量：在 slot 前 ≤5s 内下发，确保网关收到带 tmst 的帧
+                if (($slot - $now) > $lead || $slot < ($now - 1)) {
+                    continue; // 还太早或已错过本次 slot
+                }
+                $sendAt = $now;
+                $imme = false;
+                $pingSlotUnix = $slot;
             }
-            $this->sendDeviceDownlink($device, $dl, true);
+            $this->sendDeviceDownlink($device, $dl, $imme, $pingSlotUnix);
         }
     }
 
@@ -1789,7 +1803,17 @@ class NetworkServer
         $nextBeacon = (int) ceil(($gpsNow - $ref) / Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD + $ref;
         $devAddrHex = sprintf('%08s', $device['dev_addr'] ?? '00000000');
         $devAddr = unpack('N', hex2bin($devAddrHex))[1];
-        $pingOffset30 = Beacon::computePingOffset($nextBeacon, $devAddr, $pingPeriod30);
+        // ping-slot 偏移须用设备真实密钥派生：1.1 用 FNwkSIntKey，1.0.x 用 NwkSKey，
+        // 与设备端一致，否则 NS 算出的时隙与设备 Rx 窗口错位（此前误用全零密钥）。
+        $macVersion = (string) ($device['mac_version'] ?? '1.0.3');
+        $pingKey = (strncmp($macVersion, '1.1', 3) === 0)
+            ? (string) ($device['f_nwk_s_int_key'] ?? '')
+            : (string) ($device['nwk_s_key'] ?? '');
+        $pingKeyBin = (strlen($pingKey) === 32) ? hex2bin($pingKey) : '';
+        if ($pingKeyBin === '') {
+            $this->log("CLASSB WARN dev#{$device['id']} 缺少 {$macVersion} 的 ping 派生密钥，ping-slot 与设备端可能失配");
+        }
+        $pingOffset30 = Beacon::computePingOffset($nextBeacon, $devAddr, $pingPeriod30, $pingKeyBin);
         
 
         $baseUnix = $now + ($nextBeacon - $gpsNow);
@@ -1800,7 +1824,7 @@ class NetworkServer
         return (int) ceil($slotUnix);
     }
 
-    private function sendDeviceDownlink(array $device, array $dl, bool $imme): void
+    private function sendDeviceDownlink(array $device, array $dl, bool $imme, int $pingSlotUnix = 0): void
     {
         
 
@@ -1832,10 +1856,29 @@ class NetworkServer
         $downPhy = $this->buildDownPhy($ks, $devAddrBin, $fcntDown, $confirmed, false, (int) $dl['port'], $payload, 0, '', 0);
         $this->bumpDownFCnt($device['id']);
         $peer = $this->gateways[$gwEui]['addr'] ?? '';
-        $this->enqueueDownlink($gwEui, $peer, $downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), $imme);
+        $tmst = 0;
+        $freq = $region->getRx2Frequency() / 1e6;
+        $datr = $region->drToDatr($region->getRx2DataRate());
+        if (($device['class'] ?? '') === 'B' && $pingSlotUnix > 0) {
+            // Class B：下行须在 ping-slot 精确时刻、于 beacon/专用信道、以设备 ping-slot DR 发射
+            $freq = ($device['ping_slot_freq'] > 0)
+                ? ((int) $device['ping_slot_freq'] / 1e6)
+                : ($region->getBeaconFrequency() / 1e6);
+            $dr   = ($device['ping_slot_dr'] > 0) ? (int) $device['ping_slot_dr'] : $region->getBeaconDataRate();
+            $datr = $region->drToDatr($dr);
+            $ref  = $this->gateways[$gwEui]['c_ref'] ?? null;
+            if (is_array($ref) && (time() - (int) ($ref['host'] ?? 0)) <= self::BEACON_REF_MAX_AGE) {
+                $deltaUs = ((int) $pingSlotUnix * 1000000) - (int) ($ref['host_us'] ?? 0);
+                $tmst    = (((int) ($ref['tmst'] ?? 0) + $deltaUs) & 0xFFFFFFFF);
+            } else {
+                $this->log("CLASSB DOWNLINK SKIP -> dev_id={$device['id']} (无 concentrator 时间参考，无法对齐 ping-slot $pingSlotUnix)");
+                return;
+            }
+        }
+        $this->enqueueDownlink($gwEui, $peer, $downPhy, $tmst, $freq, $datr, $imme);
         Database::execute("UPDATE downlinks SET status='sent', fcnt=?, sent_at=? WHERE id=?", [$fcntDown, time(), $dl['id']]);
         $this->log("SCHED DOWNLINK -> dev_id={$device['id']} class={$device['class']} port={$dl['port']} gw=$gwEui");
-        $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} class={$device['class']} port={$dl['port']} gw=$gwEui", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, 0, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), $gwEui));
+        $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} class={$device['class']} port={$dl['port']} gw=$gwEui", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $tmst, $freq, $datr, $gwEui));
     }
 
     

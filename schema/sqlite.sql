@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS devices (
     uplink_adr_history TEXT DEFAULT '',
     pending_mac TEXT DEFAULT '',
     relay_state TEXT DEFAULT '',
+    codec TEXT DEFAULT '',
     last_seen INTEGER DEFAULT 0,
     battery INTEGER DEFAULT -1,
     margin INTEGER DEFAULT NULL,

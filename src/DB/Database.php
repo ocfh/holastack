@@ -158,8 +158,10 @@ class Database
                 ['roaming_servers', 'passive_roaming_lifetime', 'INTEGER NOT NULL DEFAULT 0'],
                 ['roaming_servers', 'validate_mic', 'INTEGER NOT NULL DEFAULT 1'],
                 ['devices', 'relay_state', 'TEXT DEFAULT \'\''],
+                ['devices', 'codec', 'TEXT DEFAULT \'\''],
                 ['device_profiles', 'relay_params', 'TEXT DEFAULT \'\''],
                 
+
 
                 ['relay_devices', 'slot_index', 'INTEGER NOT NULL DEFAULT 0'],
                 ['relay_devices', 'join_eui', 'TEXT DEFAULT \'\''],
@@ -326,8 +328,10 @@ class Database
                 ['roaming_servers', 'passive_roaming_lifetime', 'INT DEFAULT 0'],
                 ['roaming_servers', 'validate_mic', 'TINYINT DEFAULT 1'],
                 ['devices', 'relay_state', 'TEXT'],
+                ['devices', 'codec', 'TEXT'],
                 ['device_profiles', 'relay_params', 'TEXT'],
                 
+
 
                 ['relay_devices', 'slot_index', 'INT NOT NULL DEFAULT 0'],
                 ['relay_devices', 'join_eui', 'VARCHAR(32) DEFAULT \'\''],

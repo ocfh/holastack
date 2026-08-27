@@ -167,9 +167,21 @@ async function editGateway(gwId){ const r = await api('GET','/api/gateways'); co
 async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region'),rf_config:rfRead()}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
-function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_mac" onchange="macToggle()"> MAC 命令（FPort=0，NwkSKey 加密）</label></div>
+function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f">
+  <label>LED 颜色（端口 2 · 1 字节 RGB 掩码：bit0=红 / bit1=绿 / bit2=蓝）</label>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 4px">
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#8c8c8c" title="关 (00)" onclick="setLedPayload(0)">关</button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#ff4d4f" title="红 (01)" onclick="setLedPayload(1)"></button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#52c41a" title="绿 (02)" onclick="setLedPayload(2)"></button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#1890ff" title="蓝 (04)" onclick="setLedPayload(4)"></button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#fadb14" title="黄 红+绿 (03)" onclick="setLedPayload(3)"></button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#13c2c2" title="青 绿+蓝 (06)" onclick="setLedPayload(6)"></button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;background:#9254de" title="品红 红+蓝 (05)" onclick="setLedPayload(5)"></button>
+    <button type="button" class="led-sw" style="width:30px;height:30px;border-radius:50%;border:2px solid rgba(0,0,0,.35);cursor:pointer;background:#ffffff;color:#000" title="全亮 (07)" onclick="setLedPayload(7)">全</button>
+  </div><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_confirmed"> 确认下行 (Confirmed)</label><label class="check" style="margin:10px 0 4px"><input type="checkbox" id="m_mac" onchange="macToggle()"> MAC 命令（FPort=0，NwkSKey 加密）</label></div>
   <div class="muted" style="font-size:12px;margin-top:6px" id="macHint">MAC 命令不走应用层，用于修改设备参数（RX2 频率、DR 等）</div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('发送中…', ()=>sendDown(${devId}))">发送</button></div>`); }
+function setLedPayload(mask){ const p=document.getElementById('m_port'); if(p){p.value=2;} const el=document.getElementById('m_payload'); if(el){ el.value=('0'+mask.toString(16).toUpperCase()).slice(-2); } }
 function macToggle(){
   const mac = document.getElementById('m_mac').checked;
   const port = document.getElementById('m_port');

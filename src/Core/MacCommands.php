@@ -512,7 +512,17 @@ class MacCommands
         $pl = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
         $status = ord($pl[0] ?? "\x00");
         if (($status & 0x03) === 0x03) {
+            // 设备已接受 PingSlotChannelReq：记下实际 ping slot 信道，NS 后续下行必须走这里
+            $pending = self::getPending($device, self::CID_PING_SLOT_CHANNEL_REQ);
+            if ($pending !== null && strlen($pending) >= 5) {
+                // payload = CID(1) + Frequency(3, 单位 100Hz) + DR(1)
+                $freqHz = self::unpackFreq(substr($pending, 1, 3)) * 100;
+                $dr = ord($pending[4]) & 0x0F;
+                $device['ping_slot_freq'] = $freqHz;
+                $device['ping_slot_dr'] = $dr;
+            }
             self::clearError($device, self::CID_PING_SLOT_CHANNEL_REQ);
+            self::clearPending($device, self::CID_PING_SLOT_CHANNEL_REQ);
         } else {
             self::bumpError($device, self::CID_PING_SLOT_CHANNEL_REQ);
         }

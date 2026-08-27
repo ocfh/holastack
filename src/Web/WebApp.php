@@ -505,7 +505,90 @@ class WebApp
                 [$appId, $tid, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'active', time()]
             );
         }
+        if (!empty($p['codec'])) {
+            Database::execute("UPDATE devices SET codec=? WHERE id=?", [substr((string) $p['codec'], 0, 8192), Database::lastInsertId()]);
+        }
         return ['id' => Database::lastInsertId()];
+    }
+
+    /**
+     * Bulk import devices (CSV or JSON) into an application.
+     * Reuses createDevice() for per-row validation so ABP/OTAA rules stay identical.
+     */
+    public static function importDevices(int $appId, string $raw, string $format): array
+    {
+        $app = self::getApplication($appId);
+        if (!$app) {
+            return ['error' => 'application not found'];
+        }
+        if (!self::canAccess($app)) {
+            return ['error' => 'forbidden: application not in your tenant'];
+        }
+        $rows = [];
+        $format = strtolower(trim($format));
+        if ($format === 'json') {
+            $dec = json_decode($raw, true);
+            if (!is_array($dec)) {
+                return ['error' => 'JSON 解析失败'];
+            }
+            if (isset($dec['rows']) && is_array($dec['rows'])) {
+                $dec = $dec['rows'];
+            }
+            $rows = $dec;
+        } else {
+            $lines = preg_split('/\r?\n/', trim($raw));
+            $lines = array_values(array_filter($lines, function ($l) { return trim($l) !== ''; }));
+            if (empty($lines)) {
+                return ['error' => '空内容'];
+            }
+            $header = str_getcsv(array_shift($lines));
+            $lower = array_map('strtolower', $header);
+            $hasHeader = in_array('dev_eui', $lower, true) || in_array('name', $lower, true);
+            if (!$hasHeader) {
+                array_unshift($lines, implode(',', $header));
+                $header = ['name', 'dev_eui', 'activation', 'app_key', 'join_eui', 'nwk_s_key', 'app_s_key', 'dev_addr', 'region', 'class', 'device_profile_id'];
+            }
+            foreach ($lines as $ln) {
+                $cells = str_getcsv($ln);
+                if (count($cells) < 2) {
+                    continue;
+                }
+                $row = [];
+                foreach ($header as $i => $h) {
+                    $row[strtolower(trim($h))] = $cells[$i] ?? '';
+                }
+                $rows[] = $row;
+            }
+        }
+        if (empty($rows)) {
+            return ['error' => '没有可导入的行'];
+        }
+        $tid = (int) ($app['tenant_id'] ?? 0);
+        $defDp = Database::fetch("SELECT id FROM device_profiles WHERE tenant_id=? ORDER BY id ASC LIMIT 1", [$tid]);
+        $defDpId = $defDp ? (int) $defDp['id'] : 0;
+
+        $created = 0;
+        $failed = 0;
+        $errors = [];
+        foreach ($rows as $i => $r) {
+            if (!is_array($r)) {
+                $failed++;
+                $errors[] = ['row' => $i + 1, 'dev_eui' => '', 'error' => '行格式错误'];
+                continue;
+            }
+            $r['app_id'] = $appId;
+            if (empty($r['device_profile_id']) && $defDpId > 0) {
+                $r['device_profile_id'] = $defDpId;
+            }
+            $res = self::createDevice($r);
+            if (isset($res['error'])) {
+                $failed++;
+                $errors[] = ['row' => $i + 1, 'dev_eui' => ($r['dev_eui'] ?? ''), 'error' => $res['error']];
+            } else {
+                $created++;
+            }
+        }
+        return ['created' => $created, 'failed' => $failed, 'errors' => $errors];
     }
 
     public static function listGateways(?int $tenantId = null): array
@@ -805,6 +888,10 @@ class WebApp
         $region = $p['region'] ?? $device['region'];
         $setParts = ['name=?', 'class=?', 'region=?'];
         $params = [$name, $class, $region];
+        if (array_key_exists('codec', $p)) {
+            $setParts[] = 'codec=?';
+            $params[] = substr((string) ($p['codec'] ?? ''), 0, 8192);
+        }
         if (array_key_exists('device_profile_id', $p)) {
             $setParts[] = 'device_profile_id=?';
             $params[] = (int) $p['device_profile_id'];

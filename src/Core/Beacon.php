@@ -100,13 +100,20 @@ class Beacon
 
 
 
-    public static function computePingOffset(int $gpsSeconds, int $devAddr, int $pingPeriod30): int
+    /**
+     * 计算 ping slot 偏移（LoRaWAN 规范 18.x）。
+     * 加密密钥：1.0.x 用 NwkSKey；1.1 用 FNwkSIntKey。此前误用全零密钥，会导致
+     * NS 算出的 ping slot 时间窗与设备端不一致，下行永远错过窗口。
+     * @param string $key 16 字节原始密钥（hex2bin 后的二进制）
+     */
+    public static function computePingOffset(int $gpsSeconds, int $devAddr, int $pingPeriod30, string $key = ''): int
     {
         if ($pingPeriod30 <= 0) {
             $pingPeriod30 = 1;
         }
         $block = pack('V', $gpsSeconds & 0xFFFFFFFF) . pack('V', $devAddr & 0xFFFFFFFF) . str_repeat("\x00", 8);
-        $cipher = \holastack\Crypto\AES::ecbEncrypt(str_repeat("\x00", 16), $block);
+        $k = (strlen($key) === 16) ? $key : str_repeat("\x00", 16);
+        $cipher = \holastack\Crypto\AES::ecbEncrypt($k, $block);
         $result = (ord($cipher[0]) & 0xFF) + ((ord($cipher[1]) & 0xFF) << 8);
         return $result % $pingPeriod30;
     }

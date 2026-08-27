@@ -122,6 +122,7 @@ function dashUpRow(e){
   </div>`;
 }
 const rawBtn = (id, fn) => `<button class="raw-btn" title="查看原始 JSON" onclick="${fn}(${id})">${ICON.magnifyingGlass}</button>`;
+const frameBtn = (id, fn) => `<button class="raw-btn" title="帧结构检视" onclick="${fn}(${id})">${ICON.codeBracket}</button>`;
 
 async function tenantFilterHtml(){
   if (!isAdmin()) return '';
@@ -260,28 +261,184 @@ async function viewDevices(){
   };
   window.viewDevices__page = p => _pagerGo({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',p);
   window.viewDevices__limit = l => _pagerSetLimit({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',l);
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['devices']]||''}设备</h2>${adminBtn('<button onclick="newDevice()">'+ICON.plus+'添加设备</button>')}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['devices']]||''}设备</h2>${adminBtn('<button onclick="newDevice()">'+ICON.plus+'添加设备</button> <button class="btn ghost" onclick="importDevicesForm()">批量导入</button> <button class="btn ghost" onclick="exportDevicesCsv()">导出CSV</button>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
     <button class="btn ghost" onclick="resetFilters(()=>{state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};state.devsPage=1;state.devsOffset=0;state.devsLimit=50;}, viewDevices)">${ICON.arrowPath}重置</button></div>
     ${table}
     ${pager}`;
 }
+
+window.importDevicesForm = function () {
+  const appOpts = (state.apps || []).map(a => `<option value="${a.id}">#${a.id} ${esc(a.name)}</option>`).join('');
+  openModal(`<h3>批量导入设备</h3>
+    <label>目标应用</label><select id="imp_app">${appOpts}</select>
+    <label>格式</label><select id="imp_fmt"><option value="csv">CSV</option><option value="json">JSON</option></select>
+    <label>数据（CSV 含表头，或 JSON 数组 / {"rows":[...]}）</label>
+    <textarea id="imp_raw" rows="10" style="width:100%;font-family:monospace;font-size:12px" placeholder="name,dev_eui,activation,app_key,join_eui&#10;温湿度1,70b3d57ed0000001,OTAA,00000000000000000000000000000000,0000000000000000"></textarea>
+    <p class="muted" style="font-size:12px">CSV 列：name,dev_eui,activation(OTAA|ABP),app_key,join_eui,nwk_s_key,app_s_key,dev_addr,region,class,device_profile_id。ABP 需提供 dev_addr / nwk_s_key / app_s_key。未指定 device_profile_id 时自动用该应用租户下的第一个模板。</p>
+    <div class="modal-foot"><button class="btn" onclick="submitDeviceImport()">导入</button></div>`);
+};
+
+window.submitDeviceImport = async function () {
+  const appId = +document.getElementById('imp_app').value;
+  const fmt = document.getElementById('imp_fmt').value;
+  const raw = document.getElementById('imp_raw').value;
+  if (!appId) { alert('请选择应用'); return; }
+  const r = await api('POST', '/api/devices/import', { app_id: appId, raw, format: fmt });
+  if (r.error) { alert('导入失败：' + r.error); return; }
+  const ok = r.created || 0, fail = r.failed || 0;
+  let msg = `导入完成：成功 ${ok} 条，失败 ${fail} 条。`;
+  if (fail > 0) {
+    msg += '\n\n失败明细：\n' + (r.errors || []).map(e => `第${e.row}行 ${e.dev_eui || ''}: ${e.error}`).join('\n');
+  }
+  alert(msg);
+  closeModal();
+  viewDevices();
+};
+
+window.exportDevicesCsv = function () {
+  const rows = state.devs || [];
+  if (!rows.length) { alert('当前没有可导出的设备'); return; }
+  const cols = ['id', 'name', 'app_id', 'dev_eui', 'dev_addr', 'activation', 'class', 'status', 'region'];
+  const head = cols.join(',');
+  const body = rows.map(d => cols.map(c => {
+    let v = d[c];
+    if (v === null || v === undefined) v = '';
+    v = String(v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }).join(',')).join('\n');
+  const csv = '﻿' + head + '\n' + body;
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'devices_' + Date.now() + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+};
+
+function hexToBytes(hex){
+  hex = (hex||'').replace(/[^0-9a-fA-F]/g,'');
+  const out=[];
+  for(let i=0;i<hex.length;i+=2) out.push(parseInt(hex.substr(i,2),16));
+  return out;
+}
+function decodeCayenneLpp(hex){
+  const b=hexToBytes(hex); let i=0; const out=[];
+  const need=(n)=>{ if(b.length-i<n) return null; const s=b.slice(i,i+n); i+=n; return s; };
+  while(i+2<=b.length){
+    const chan=b[i], type=b[i+1]; i+=2;
+    let r=null;
+    if(type===0x00||type===0x01){ const x=need(1); if(x===null)break; r={type:(type===0?'digital_in':'digital_out'), value:x[0]}; }
+    else if(type===0x02||type===0x03){ const x=need(2); if(x===null)break; r={type:(type===0x02?'analog_in':'analog_out'), value:((x[0]*256+x[1])/100)}; }
+    else if(type===0x65){ const x=need(2); if(x===null)break; r={type:'luminosity', value:(x[0]*256+x[1])}; }
+    else if(type===0x66){ const x=need(1); if(x===null)break; r={type:'presence', value:x[0]}; }
+    else if(type===0x67){ const x=need(2); if(x===null)break; const v=(x[0]<<8)|x[1]; const s=(v&0x8000)?(v-0x10000):v; r={type:'temperature', value:+(s/10).toFixed(1)}; }
+    else if(type===0x68){ const x=need(1); if(x===null)break; r={type:'humidity', value:+(x[0]/2).toFixed(1)}; }
+    else if(type===0x71){ const x=need(3); if(x===null)break; const v=(x[0]<<16)|(x[1]<<8)|x[2]; r={type:'barometric_pressure', value:+((v/10)-6553.6).toFixed(1)}; }
+    else break;
+    if(r) out.push({type:String(chan)+'.'+r.type, value:r.value});
+  }
+  return out;
+}
+function decodePayload(codecJson, hex){
+  if(!hex) return [];
+  let cfg={runtime:'NONE'};
+  try { if(codecJson) cfg=JSON.parse(codecJson); } catch(e){}
+  if(cfg.runtime==='CAYENNE_LPP') return decodeCayenneLpp(hex);
+  if(cfg.runtime==='JS' && cfg.script){
+    try {
+      const fn=new Function('hex','bytes', cfg.script);
+      const bytes=hexToBytes(hex);
+      const out=fn(hex, bytes);
+      if(Array.isArray(out)) return out;
+      if(out && typeof out==='object') return Object.entries(out).map(([k,v])=>({type:k, value:v}));
+    } catch(e){ return [{type:'decode_error', value:String(e.message||e)}]; }
+  }
+  return [];
+}
+function drawSignalChart(canvasId, points){
+  const cv=document.getElementById(canvasId); if(!cv) return;
+  const W=cv.width=(cv.parentElement?cv.parentElement.clientWidth:600)||600, H=cv.height=170;
+  const ctx=cv.getContext('2d'); ctx.clearRect(0,0,W,H);
+  if(!points||points.length===0){ ctx.fillStyle='#7d8aa0'; ctx.font='12px sans-serif'; ctx.fillText('暂无上行信号数据',12,H/2); return; }
+  const pad=30;
+  const xAt=i=> pad + (points.length===1?0:(i/(points.length-1))*(W-pad*2));
+  const yR=v=> H-22 - ((Math.max(-130,Math.min(-40,v))+130)/90)*(H-44);
+  const yS=v=> H-22 - ((Math.max(-20,Math.min(15,v))+20)/35)*(H-44);
+  ctx.strokeStyle='rgba(120,140,160,0.18)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(pad,8); ctx.lineTo(pad,H-22); ctx.lineTo(W-2,H-22); ctx.stroke();
+  ctx.strokeStyle='#58A6FF'; ctx.lineWidth=1.8; ctx.beginPath();
+  points.forEach((p,i)=>{ const x=xAt(i),y=yR(p.rssi); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.strokeStyle='#3FB950'; ctx.beginPath();
+  points.forEach((p,i)=>{ const x=xAt(i),y=yS(p.snr); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.font='11px sans-serif'; ctx.fillStyle='#58A6FF'; ctx.fillText('RSSI(dBm)', W-150, 14);
+  ctx.fillStyle='#3FB950'; ctx.fillText('SNR(dB)', W-70, 14);
+}
+async function saveDeviceCodec(id){
+  const rt=(document.getElementById('codec_rt')||{}).value||'NONE';
+  const script= rt==='JS' ? (document.getElementById('codec_script')||{}).value||'' : '';
+  const codec=JSON.stringify({runtime:rt, script});
+  const r=await api('PUT','/api/devices/'+id,{codec});
+  if(r&&r.error){ toast('保存失败: '+r.error,'err'); return; }
+  toast('解码配置已保存','ok');
+  const d=(state.devs||[]).find(x=>x.id===id); if(d) d.codec=codec;
+}
+function codecRuntimeChanged(){
+  const rt=(document.getElementById('codec_rt')||{}).value;
+  const w=document.getElementById('codec_script_wrap'); if(w) w.style.display = rt==='JS'?'':'none';
+}
+let __liveES=null;
+async function toggleLiveEvents(){
+  if(__liveES){ __liveES.close(); __liveES=null; state.live=false; toast('已关闭实时事件流','info'); viewEvents(); return; }
+  state.live=true; toast('已开启实时事件流','ok'); viewEvents();
+  __liveES=new EventSource('/api/stream?token='+encodeURIComponent(state.token||''));
+  __liveES.onmessage=e=>{ try{ const d=JSON.parse(e.data); if(d&&d.id&&state.view==='events') viewEvents(); }catch(_){} };
+  __liveES.onerror=()=>{ };
+}
 async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
   const d=(state.devs||[]).find(x=>x.id===id); if(!d)return;
-  
+  let codecCfg={runtime:'NONE'};
+  try { if(d.codec) codecCfg=JSON.parse(d.codec); } catch(e){}
+  let ups=[];
+  try { const ur=await api('GET','/api/uplinks?dev_id='+id+'&limit=80'); ups=ur.data||[]; } catch(e){}
+  const decoded = ups.map(u=>({u, fields: decodePayload(d.codec, u.decrypted_hex||u.payload_hex||'')})).filter(x=>x.fields&&x.fields.length);
+
   const kv=(label,val)=>`<label>${label}</label><input value="${esc(val||'')}" readonly style="cursor:pointer" title="点击自动复制" onclick="copyKeyField(this, '${label}')">`;
-  openModal(`<h3>${t('设备密钥')} #${id} ${esc(d.name)}</h3>
-    ${kv('DevEUI', d.dev_eui)}
-    ${d.activation==='OTAA'
-      ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
-        + (d.dev_addr
-            ? kv('设备地址 DevAddr（服务器分配）', revAddr(d.dev_addr))
-              + kv('网络会话密钥 NwkSKey（服务器分配）', d.nwk_s_key)
-              + kv('应用程序会话密钥 AppSKey（服务器分配）', d.app_s_key)
-            : `<p class="muted" style="margin:8px 0">设备尚未入网，暂无服务器分配的会话密钥。</p>`)
-      : kv('DevAddr', revAddr(d.dev_addr)) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
+  const codecOpts=[['NONE','不解码'],['CAYENNE_LPP','Cayenne LPP'],['JS','自定义 JS']].map(o=>`<option value="${o[0]}" ${codecCfg.runtime===o[0]?'selected':''}>${o[1]}</option>`).join('');
+  const scriptVal = codecCfg.runtime==='JS' ? (codecCfg.script||'') : '';
+  const decodedHtml = decoded.length
+    ? decoded.slice(0,12).map(x=>`<div class="dec-row"><span class="muted">#${x.u.id} f${x.u.fcnt}</span> ${x.fields.map(f=>`<span class="tag ok">${esc(String(f.type))}: <b>${esc(String(f.value))}</b></span>`).join(' ')}</div>`).join('')
+    : '<p class="muted">暂无已解码的上行（请先配置解码方式并等待设备上行）。</p>';
+
+  openModal(`<h3>${t('设备')} #${id} ${esc(d.name)}</h3>
+    <div class="dp-section"><h4>密钥</h4>
+      ${kv('DevEUI', d.dev_eui)}
+      ${d.activation==='OTAA'
+        ? kv('JoinEUI', d.join_eui) + kv('AppKey', d.app_key)
+          + (d.dev_addr
+              ? kv('DevAddr（服务器分配）', revAddr(d.dev_addr)) + kv('NwkSKey（服务器分配）', d.nwk_s_key) + kv('AppSKey（服务器分配）', d.app_s_key)
+              : `<p class="muted" style="margin:8px 0">设备尚未入网，暂无服务器分配的会话密钥。</p>`)
+        : kv('DevAddr', revAddr(d.dev_addr)) + kv('NwkSKey', d.nwk_s_key) + kv('AppSKey', d.app_s_key)}
+    </div>
+    <div class="dp-section"><h4>数据解码</h4>
+      <div class="row" style="align-items:flex-end;gap:12px">
+        <div style="flex:0 0 220px"><label>解码方式</label><select id="codec_rt" onchange="codecRuntimeChanged()">${codecOpts}</select></div>
+        <button class="btn" onclick="saveDeviceCodec(${id})">保存解码配置</button> <button class="btn ghost" onclick="decoderTemplates()">解码器模板</button>
+      </div>
+      <div id="codec_script_wrap" style="margin-top:10px;${codecCfg.runtime==='JS'?'':'display:none'}">
+        <label>JS 解码函数（签名 function(hex, bytes) → 字段数组或对象，如 return [{type:'temp',value:x[0]}]）</label>
+        <textarea id="codec_script" rows="5" style="width:100%;font-family:monospace">${esc(scriptVal)}</textarea>
+      </div>
+    </div>
+    <div class="dp-section"><h4>信号质量（RSSI / SNR，近 80 条上行）</h4>
+      <canvas id="sigChart" style="width:100%;height:170px"></canvas>
+    </div>
+    <div class="dp-section"><h4>最近上行解码（${decoded.length}）</h4>
+      <div id="decList">${decodedHtml}</div>
+    </div>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+  drawSignalChart('sigChart', ups.map(u=>({rssi:+(u.rssi||0), snr:+(u.snr||0)})));
 }
 
 
@@ -413,12 +570,12 @@ async function viewUplinks(){
       <td class="muted">${u.gateway_id||'-'}</td>
       <td class="muted">${u.rssi} / ${u.snr}</td>
       <td class="muted">${new Date(u.received_at*1000).toLocaleString()}</td>
-      <td>${rawBtn(u.id,'showRaw')}</td></tr>`;
+      <td>${rawBtn(u.id,'showRaw')} ${frameBtn(u.id,'frameInspector')}</td></tr>`;
     },
     emptyText:'暂无上行',
   });
   const pager = buildPager({ total: state.upsTotal, limit: state.upsLimit, offset: state.upsOffset, pageKey:'upsPage', limitKey:'upsLimit', offsetKey:'upsOffset', totalKey:'upsTotal', refresh:'viewUplinks' });
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['uplinks']]||''}上行消息日志</h2><button class="btn danger" onclick="clearPageLogs('uplinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['uplinks']]||''}上行消息日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('uplinks','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('uplinks','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('uplinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${appOpts}</select></div>
@@ -536,12 +693,12 @@ async function viewDownlinks(){
         <td><span class="tag ${st.cls}">${st.label}</span></td>
         <td class="muted">${sent}</td><td class="muted">${d.transmissions||0}</td>
         <td class="muted">${ack}</td>
-        <td>${rawBtn(d.id,'showDownlinkRaw')}</td></tr>`;
+        <td>${rawBtn(d.id,'showDownlinkRaw')} ${frameBtn(d.id,'frameInspector')}</td></tr>`;
     },
     emptyText:'暂无下行',
   });
   const pager = buildPager({ total: state.dlsTotal, limit: state.dlsLimit, offset: state.dlsOffset, pageKey:'dlsPage', limitKey:'dlsLimit', offsetKey:'dlsOffset', totalKey:'dlsTotal', refresh:'viewDownlinks' });
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['downlinks']]||''}下行消息日志</h2><button class="btn danger" onclick="clearPageLogs('downlinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['downlinks']]||''}下行消息日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('downlinks','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('downlinks','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('downlinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${appOpts}</select></div>
@@ -674,7 +831,7 @@ async function viewEvents(){
     emptyText:'暂无事件',
   });
   const pager = buildPager({ total: state.evsTotal, limit: state.evsLimit, offset: state.evsOffset, pageKey:'evsPage', limitKey:'evsLimit', offsetKey:'evsOffset', totalKey:'evsTotal', refresh:'viewEvents' });
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['events']]||''}网关日志</h2><button class="btn danger" onclick="clearPageLogs('events')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['events']]||''}网关日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('events','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('events','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('events')">${ICON.trash}${t('清空日志')}</button> <button id="liveBtn" class="btn ghost ${state.live?'on':''}" onclick="toggleLiveEvents()">${state.live?'● 实时中':'实时'}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${devOpts}</select></div>
@@ -913,6 +1070,15 @@ async function viewSettings(){
           ${maintRow('网关日志','events')}
         </div>
       </div>
+      <div class="st-cat hidden" id="stcat-map">
+        <h3>${ICON.map}地图服务</h3>
+        <label>地图提供商（用于「位置地图」页渲染，可选）</label>
+        <select id="st_mapprov">${window.MAP_PROVIDERS.map(p=>`<option value="${p.id}" ${s.map_provider===p.id?'selected':''}>${esc(p.name)}${p.needKey?'（需 Key）':''}</option>`).join('')}</select>
+        <label>自定义瓦片 URL（选择「自定义瓦片 URL」时使用，Leaflet 占位符 {z}/{x}/{y}；含 token 可用 KEY 占位）</label>
+        <input id="st_mapurl" value="${val('map_url')}" placeholder="https://your-tile-server.com/{z}/{x}/{y}.png?token=KEY">
+        <label>API Key（下发给需要 Key 的提供商 / 填到上面的 KEY 占位）</label><input id="st_mapkey" value="${val('map_key')}" placeholder="粘贴地图提供商的访问令牌">
+        <p class="muted" style="margin:2px 0 0">内置无需 Key 的提供商（OpenStreetMap / CARTO / OpenTopo / 高德 / 腾讯 / Google）可直接使用；百度、Mapbox、MapTiler 及您自己的服务器需在 Key / URL 处填写。国内坐标系（高德/腾讯=GCJ-02，百度=BD-09）与设备侧 WGS84 坐标存在数十米偏移，属正常现象。</p>
+      </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
         <button class="ghost" onclick="nav('dashboard')">${ICON.xMark}取消</button>
         <button onclick="busy('保存中…', saveSettings)">${ICON.check}保存</button>
@@ -932,6 +1098,7 @@ function stCatItems(){
     {id:'login', icon:'user',               label:'登录页'},
     {id:'footer',icon:'puzzlePiece',        label:t('页脚与集成')},
     {id:'maint', icon:'clipboardDocumentList',label:t('日志维护')},
+    {id:'map',   icon:'map',                label:'地图服务'},
   ];
   const sorted = defs.slice().sort((a,b)=>a.label.length-b.label.length);
   return sorted.map(c=>`<button class="st-item${c.id==='basic'?' active':''}" onclick="stCat('${c.id}',this)">${ICON[c.icon]}${esc(c.label)}</button>`).join('');
@@ -998,9 +1165,11 @@ function renderRefreshFloat(){
   if (!box) return;
   if (!LOG_REFRESH_VIEWS.includes(state.view)){
     box.innerHTML = '';
+    box.style.display = 'none';
     refreshFloatOpen = false;
     return;
   }
+  box.style.display = '';
   const cur = parseInt(state.logRefreshSec||0,10);
   box.innerHTML = `<div class="rf-wrap">
       <div class="refresh-panel${refreshFloatOpen?' show':''}">
@@ -1073,7 +1242,8 @@ const FAB_PRIMARY = {
 function renderFloatPrimary(){
   const box = document.getElementById('floatPrimary');
   if (!box) return;
-  if (window.innerWidth > 760){ box.innerHTML=''; return; }
+  if (window.innerWidth > 760){ box.innerHTML=''; box.style.display='none'; return; }
+  box.style.display='';
   const p = FAB_PRIMARY[state.view];
   box.innerHTML = p ? `<button class="float-btn fab-primary${p.danger?' danger':''}" onclick="${p.onClick}" title="${p.title}">${p.icon}</button>` : '';
 }
@@ -1089,6 +1259,9 @@ async function saveSettings(){
     footer: v('st_footer'),
     api_base_url: v('st_api_url'),
     ui_lang: langSel ? langSel.value : 'zh',
+    map_provider: v('st_mapprov'),
+    map_url: v('st_mapurl'),
+    map_key: v('st_mapkey'),
   };
   const r = await api('POST','/api/settings', body);
   if (r.error) { toast(r.error, 'err'); return; }
@@ -1375,4 +1548,438 @@ async function mcDetail(id){
    <div class="row"><div><input id="m_mcgw" placeholder="Gateway ID" oninput="hexOnly(this)"></div><button onclick="addMcGw(${id})">${ICON.plus}添加网关</button></div>
    <table style="margin-top:8px"><thead><tr><th>GatewayID</th><th></th></tr></thead><tbody>${gwList}</tbody></table>
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+
+/* ----------------------------------------------------------------------------
+ * NOC 仪表盘 (网络运维中心)
+ * ------------------------------------------------------------------------- */
+let nocClockTimer = null;
+function bar(pct, color){
+  pct = Math.max(0, Math.min(100, pct|0));
+  return `<div class="bar"><span style="width:${pct}%;background:${color||'var(--acc)'}"></span></div>`;
+}
+function kpiCard(title, total, a, b, icon, isMsg){
+  const ic = ICON[icon]||'';
+  let sub;
+  if (isMsg) sub = `<span class="up">▲ ${a}</span> <span class="down">▼ ${b}</span>`;
+  else if (b) sub = `<span class="ok">${a} 在线</span> · <span class="err">${b} 离线</span>`;
+  else sub = `<span class="muted">— 无明细 —</span>`;
+  return `<div class="kpi">
+    <div class="kpi-ic">${ic}</div>
+    <div class="kpi-main"><div class="kpi-num">${total}</div><div class="kpi-title">${title}</div></div>
+    <div class="kpi-sub">${sub}</div>
+  </div>`;
+}
+function buildHourlyTrend(ups, dls, hours){
+  const now = new Date();
+  const buckets = [];
+  for (let i=hours-1; i>=0; i--){
+    const d = new Date(now.getTime() - i*3600*1000);
+    buckets.push({ t:new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours()), up:0, dl:0 });
+  }
+  const idxOf = (ts)=>{
+    if (!ts) return -1;
+    const d = new Date((ts|0)*1000);
+    const hh = new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours()).getTime();
+    return buckets.findIndex(b=>b.t.getTime()===hh);
+  };
+  (ups||[]).forEach(u=>{ const i=idxOf(u.received_at); if(i>=0) buckets[i].up++; });
+  (dls||[]).forEach(x=>{ const i=idxOf(x.sent_at||x.created_at); if(i>=0) buckets[i].dl++; });
+  const max = Math.max(1, ...buckets.map(b=>b.up+b.dl));
+  const W=600,H=160,padB=22,padT=10,n=buckets.length,bw=W/n;
+  const colW = Math.max(2, Math.min(13, (bw-3)/2));
+  let bars='';
+  buckets.forEach((b,i)=>{
+    const x = i*bw + bw/2;
+    const hu = (b.up/max)*(H-padB-padT);
+    const hd = (b.dl/max)*(H-padB-padT);
+    const baseY = H-padB;
+    bars += `<rect x="${(x-colW-1).toFixed(1)}" y="${(baseY-hu).toFixed(1)}" width="${colW}" height="${hu.toFixed(1)}" fill="var(--acc)" rx="1"></rect>`;
+    bars += `<rect x="${(x+1).toFixed(1)}" y="${(baseY-hd).toFixed(1)}" width="${colW}" height="${hd.toFixed(1)}" fill="var(--ok)" rx="1"></rect>`;
+    if (n<=12 || i%2===0) bars += `<text x="${x.toFixed(1)}" y="${H-6}" text-anchor="middle" fill="var(--mut)" font-size="9">${String(b.t.getHours()).padStart(2,'0')}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="trend-svg" preserveAspectRatio="none">
+    <line x1="0" y1="${H-padB}" x2="${W}" y2="${H-padB}" stroke="var(--line)"></line>${bars}
+  </svg><div class="trend-legend"><span class="dot acc"></span>上行 <span class="dot ok"></span>下行</div>`;
+}
+function startNocClock(){
+  if (nocClockTimer) clearInterval(nocClockTimer);
+  const el = document.getElementById('nocClock');
+  if (!el) return;
+  const upd = ()=>{ el.textContent = new Date().toLocaleString(); };
+  upd(); nocClockTimer = setInterval(upd, 1000);
+}
+async function viewNoc(){
+  const s = await api('GET','/api/stats'); state.stats = s;
+  const devTotal=s.devices|0, devOn=s.devices_online|0, devOff=s.devices_offline|0;
+  const gwTotal=s.gateways|0, gwOn=s.gateways_online|0, gwOff=s.gateways_offline|0;
+  const ups=s.uplinks|0, dls=s.downlinks|0;
+  let apps=[], devs=[];
+  try { const ra = await api('GET','/api/applications'); apps = ra.data||[]; } catch(e){}
+  try { const rd = await api('GET','/api/devices'); devs = rd.data||[]; } catch(e){}
+  const byApp = {};
+  apps.forEach(a => byApp[a.id] = { name:a.name, total:0, online:0 });
+  devs.forEach(d => { const b=byApp[d.app_id]; if (b){ b.total++; if (d.online==='online') b.online++; } });
+  let upsRows=[], dlRows=[];
+  try { const ru = await api('GET','/api/uplinks?limit=800'); upsRows = ru.data||[]; } catch(e){}
+  try { const rd = await api('GET','/api/downlinks?limit=800'); dlRows = rd.data||[]; } catch(e){}
+  const trend = buildHourlyTrend(upsRows, dlRows, 24);
+
+  document.getElementById('view').innerHTML = `
+    <div class="view-head"><h2>${ICON[VIEW_ICONS['noc']]||''}运维仪表盘</h2><div class="noc-clock" id="nocClock"></div></div>
+    <div class="kpi-grid">
+      ${kpiCard('设备', devTotal, devOn, devOff, 'cpuChip')}
+      ${kpiCard('网关', gwTotal, gwOn, gwOff, 'radio')}
+      ${kpiCard('应用', s.applications|0, 0, 0, 'squares2x2')}
+      ${kpiCard('消息', ups+dls, ups, dls, 'signal', true)}
+    </div>
+    <div class="noc-grid">
+      <div class="panel" style="grid-column:1/-1"><div class="panel-h">近 24 小时吞吐</div><div class="trend noc-trend">${trend}</div></div>
+    </div>
+    ${apps.length ? `<div class="panel"><div class="panel-h">应用设备分布</div>
+      <table class="tbl"><thead><tr><th>应用</th><th>设备数</th><th>在线</th><th>在线率</th><th style="width:160px">状态条</th></tr></thead><tbody>
+      ${apps.map(a=>{ const b=byApp[a.id]||{total:0,online:0}; const r=b.total?Math.round(b.online/b.total*100):0;
+        return `<tr><td>${esc(a.name)}</td><td>${b.total}</td><td>${b.online}</td><td>${r}%</td><td>${bar(r, r>=80?'var(--ok)':(r>=50?'var(--warn)':'var(--err)'))}</td></tr>`; }).join('')}
+      </tbody></table></div>` : ''}
+  `;
+  startNocClock();
+}
+
+/* ----------------------------------------------------------------------------
+ * 位置地图 (设备 / 网关地理分布)
+ * ------------------------------------------------------------------------- */
+// ----------------------------------------------------------------------------
+// 位置地图（设备 / 网关地理分布）—— 第三方地图 API 接入（Leaflet 瓦片）
+// ----------------------------------------------------------------------------
+// 可在站点设置选择提供商；无需 Key 的可直接用，needKey=1 的需在设置里填 Key。
+window.MAP_PROVIDERS = [
+  { id:'',    name:'（无，使用内置简图）', url:'', needKey:0 },
+  { id:'custom', name:'自定义瓦片 URL',  url:null, needKey:0 },
+  { id:'osm',     name:'OpenStreetMap',   needKey:0, sub:'abc',  maxZ:19, url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
+  { id:'carto-l',  name:'CARTO Positron', needKey:0, sub:'abcd', maxZ:20, url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' },
+  { id:'carto-d',  name:'CARTO Dark Matter', needKey:0, sub:'abcd', maxZ:20, url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' },
+  { id:'opentopo', name:'OpenTopoMap',    needKey:0, sub:'abc',  maxZ:17, url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png' },
+  { id:'gaode',    name:'高德（国内·GCJ-02）', needKey:0, sub:'1234', maxZ:19, url:'https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}' },
+  { id:'tencent',  name:'腾讯（国内·GCJ-02）', needKey:0, sub:'0123', maxZ:19, url:'https://rt{s}.map.gtimg.com/tile?z={z}&x={x}&y={y}&styleid=3' },
+  { id:'google',   name:'Google Maps（境外）', needKey:0, maxZ:20, url:'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}' },
+  { id:'baidu',    name:'百度（国内·BD-09，需 Key）', needKey:1, maxZ:19, url:'https://api.map.baidu.com/customimglite/tile?x={x}&y={y}&z={z}&scale=1&ak=KEY' },
+  { id:'mapbox',   name:'Mapbox（需 Key）', needKey:1, maxZ:20, url:'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=KEY' },
+  { id:'maptiler', name:'MapTiler（需 Key）', needKey:1, maxZ:20, url:'https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=KEY' },
+];
+function getMapSettings(){ return fetch('/api/public-settings').then(r=>r.json()).then(j=>j.data||{}).catch(()=>({})); }
+function injectLeaflet(){
+  return new Promise((res)=>{
+    if (window.L && L.map && L.tileLayer){ res(); return; }
+    const lk = document.createElement('link');
+    lk.rel = 'stylesheet'; lk.href = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(lk);
+    const sb = document.createElement('script');
+    sb.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+    sb.onload = () => res(); sb.onerror = () => res();
+    document.head.appendChild(sb);
+  });
+}
+function escHtml(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function renderLeafletMap(devs, gws, prov, mapKey){
+  await injectLeaflet();
+  const canvas = document.getElementById('mapCanvas');
+  if (!canvas || !window.L) throw new Error('Leaflet 加载失败');
+  if (window.__leafletMap){ try{ window.__leafletMap.remove(); }catch(e){} window.__leafletMap = null; }
+  canvas.innerHTML = '';
+  canvas.style.height = '500px'; canvas.style.background = '#dfe3ea';
+  const url = String(prov.url||'').replace('KEY', mapKey||'');
+  const map = L.map(canvas, { zoomControl:true }).setView([30, 105], 3);
+  window.__leafletMap = map;
+  L.tileLayer(url, { maxZoom: prov.maxZ||19, attribution: prov.name, subdomains: prov.sub?prov.sub.split(''):undefined }).addTo(map);
+  const pts = [];
+  (gws||[]).forEach(g=>{ if (!hasCoord(g)) return;
+    L.circleMarker([+g.latitude, +g.longitude], { radius:6, color:'var(--acc)', fillColor:'var(--acc)', fillOpacity:.85 })
+      .addTo(map).bindPopup('<b>'+escHtml(g.name||g.gw_id||'')+'</b><br>网关'); pts.push([+g.latitude,+g.longitude]);
+  });
+  (devs||[]).forEach(d=>{ if (!hasCoord(d)) return;
+    const on = d.online==='online'; const c = on ? '#36d399' : '#f87272';
+    L.circleMarker([+d.latitude, +d.longitude], { radius:7, color:c, fillColor:c, fillOpacity:.85 })
+      .addTo(map).bindPopup('<b>'+escHtml(d.name||'')+'</b><br>'+(on?'在线':'离线')+' · '+(d.last_seen_fmt||''));
+    pts.push([+d.latitude,+d.longitude]);
+  });
+  if (pts.length){ map.fitBounds(pts, { padding:[24,24] }); } else { map.setView([30,105], 3); }
+  const side = document.getElementById('mapSide');
+  if (side) side.innerHTML = `<div class="map-sum"><div><b>${devs.length}</b> 设备（<b>${(devs||[]).filter(hasCoord).length}</b> 有坐标）</div><div><b>${gws.length}</b> 网关（<b>${(gws||[]).filter(hasCoord).length}</b> 有坐标）</div><div class="muted">提供商：${escHtml(prov.name)}｜点击标记查看信息</div></div>`;
+}
+async function viewMap(){
+  document.getElementById('view').innerHTML = `
+    <div class="view-head"><h2>${ICON[VIEW_ICONS['map']]||''}位置地图</h2>
+      <div class="map-legend"><span class="dot ok"></span>在线 <span class="dot err"></span>离线 <span class="dot acc"></span>网关</div>
+    </div>
+    <div class="map-wrap">
+      <div class="map-canvas" id="mapCanvas"></div>
+      <div class="map-side" id="mapSide"><div class="muted">点击地图上的标记查看设备详情</div></div>
+    </div>`;
+  let devs=[], gws=[];
+  try { const rd = await api('GET','/api/devices'); devs = rd.data||[]; } catch(e){}
+  try { const rg = await api('GET','/api/gateways'); gws = rg.data||[]; } catch(e){}
+  state.mapDevs = devs; state.mapGws = gws;
+  const set = await getMapSettings();
+  const prov = (window.MAP_PROVIDERS||[]).find(p=>p.id===set.map_provider);
+  // 自定义瓦片 URL：用站点设置里填写的 map_url 作为瓦片地址
+  const tileUrl = (prov && prov.id==='custom') ? (set.map_url||'') : (prov && prov.url || '');
+  const name = (prov && prov.id==='custom') ? '自定义瓦片 URL' : (prov ? prov.name : '');
+  if (prov && tileUrl){
+    try { await renderLeafletMap(devs, gws, {name, url:tileUrl, needKey:0, maxZ:prov.maxZ||19}, set.map_key||''); }
+    catch(e){ toast('地图加载失败，已回退内置简图','err'); renderMap(devs, gws); }
+  } else if (prov && prov.id==='custom'){
+    toast('已选择自定义瓦片 URL，但未填写地图 URL，改用内置简图','warn'); renderMap(devs, gws);
+  } else {
+    renderMap(devs, gws);
+  }
+}
+function hasCoord(o){
+  const la=parseFloat(o.latitude), lo=parseFloat(o.longitude);
+  return isFinite(la) && isFinite(lo) && !(la===0 && lo===0);
+}
+function renderMap(devs, gws){
+  const canvas = document.getElementById('mapCanvas');
+  if (!canvas) return;
+  const W=720,H=360,pad=12;
+  const lon2x = lon => pad + (lon+180)/360*(W-2*pad);
+  const lat2y = lat => pad + (90-lat)/180*(H-2*pad);
+  let grid='';
+  for (let lon=-180; lon<=180; lon+=30){ const x=lon2x(lon); grid+=`<line x1="${x.toFixed(1)}" y1="${pad}" x2="${x.toFixed(1)}" y2="${H-pad}" stroke="var(--line)"></line>`; }
+  for (let lat=-90; lat<=90; lat+=30){ const y=lat2y(lat); grid+=`<line x1="${pad}" y1="${y.toFixed(1)}" x2="${W-pad}" y2="${y.toFixed(1)}" stroke="var(--line)"></line>`; }
+  let markers='';
+  const placed=[];
+  (gws||[]).forEach(g=>{
+    if (!hasCoord(g)) return;
+    const x=lon2x(parseFloat(g.longitude)), y=lat2y(parseFloat(g.latitude));
+    markers += `<g class="mk" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+      <circle r="8" fill="var(--acc)" opacity="0.22"></circle>
+      <path d="M0,-7 L5.5,4 L0,1.2 L-5.5,4 Z" fill="var(--acc)" stroke="var(--bg)" stroke-width="0.6"></path>
+      <title>${esc(g.name||g.gw_id||'')}（网关）</title></g>`;
+  });
+  (devs||[]).forEach(d=>{
+    if (!hasCoord(d)) return;
+    let x=lon2x(parseFloat(d.longitude)), y=lat2y(parseFloat(d.latitude));
+    for (let t=0;t<8;t++){ const jx=x+(Math.random()*9-4.5), jy=y+(Math.random()*9-4.5);
+      if (placed.every(p=>Math.hypot(p.x-jx,p.y-jy)>7)){ x=jx; y=jy; break; } }
+    placed.push({x,y});
+    const on = d.online==='online';
+    const c = on?'var(--ok)':'var(--err)';
+    markers += `<g class="mk" data-id="${d.id}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})" onclick="mapShowDev(${d.id})" style="cursor:pointer">
+      <circle r="6.5" fill="${c}" opacity="0.22"></circle>
+      <circle r="3.2" fill="${c}" stroke="var(--bg)" stroke-width="0.6"></circle>
+      <title>${esc(d.name||'')}（${on?'在线':'离线'}）</title></g>`;
+  });
+  canvas.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="map-svg" preserveAspectRatio="xMidYMid meet">
+    <rect x="0" y="0" width="${W}" height="${H}" fill="var(--bg-subtle)"></rect>
+    ${grid}${markers}</svg>`;
+  const withCoord = (devs||[]).filter(hasCoord).length;
+  const side = document.getElementById('mapSide');
+  let html = `<div class="map-sum">
+      <div><b>${devs.length}</b> 设备（<b>${withCoord}</b> 有坐标）</div>
+      <div><b>${gws.length}</b> 网关（<b>${(gws||[]).filter(hasCoord).length}</b> 有坐标）</div>
+    </div>`;
+  if (!withCoord) html += `<div class="warn-box">当前设备未填写经纬度，地图上无标记。可在设备编辑中设置 latitude / longitude 后在地图上显示。</div>`;
+  side.innerHTML = html;
+}
+function mapShowDev(id){
+  const d = (state.mapDevs||[]).find(x=>x.id===id); if (!d) return;
+  const side = document.getElementById('mapSide');
+  const la=parseFloat(d.latitude), lo=parseFloat(d.longitude);
+  const coordTxt = (hasCoord(d)) ? `${la.toFixed(4)}, ${lo.toFixed(4)}` : '—';
+  side.innerHTML = `<div class="dev-card">
+    <div class="dev-card-h">${esc(d.name||'')}</div>
+    <div class="muted">#${d.id} · ${esc(d.dev_eui||'')}</div>
+    <div class="dev-rows">
+      <div><span>状态</span><b class="${d.online==='online'?'ok':'err'}">${d.online==='online'?'在线':'离线'}</b></div>
+      <div><span>Class</span><b>${esc(d.cls||d.class||'A')}</b></div>
+      <div><span>经纬度</span><b>${coordTxt}</b></div>
+      <div><span>最后上行</span><b>${esc(d.last_seen_fmt||'-')}</b></div>
+    </div>
+    <div style="margin-top:12px"><button class="btn ghost" onclick="nav('devices')">${ICON.cpuChip}设备列表</button></div>
+  </div>`;
+}
+
+// ===================================================================
+// 帧检视：LoRaWAN PHY 逐字段解析
+// ===================================================================
+function b2h(arr, sep){ return (arr||[]).map(x=>('0'+((x&0xff)>>>0).toString(16)).slice(-2)).join(sep||''); }
+function rev(arr){ return (arr||[]).slice().reverse(); }
+
+function parseLoraFrame(hexPlain){
+  const b = hexToBytes(hexPlain);
+  const out = {rows:[]};
+  if (!b.length){ out.error='空帧（无 phy_payload）'; return out; }
+  const mhdr=b[0];
+  const mtype=(mhdr>>5)&0x07, major=mhdr&0x03;
+  const MT={0:'Join-request',1:'Join-accept',2:'Unconfirmed Data Up',3:'Unconfirmed Data Down',4:'Confirmed Data Up',5:'Confirmed Data Down',6:'RFU(6)',7:'Proprietary'};
+  out.rows.push({k:'MHDR', v:b2h([mhdr]), d:`MType=${mtype} → ${MT[mtype]||'?'}; Major=${major}${major===0?' (LoRaWAN R1)':''}`});
+  if (mtype===0){ // Join-request
+    if (b.length<23){ out.error=`Join-request 长度不足（${b.length} 字节，需 23）`; return out; }
+    out.rows.push({k:'AppEUI', v:b2h(b.slice(1,9)), d:'空口小端，网络序 '+b2h(rev(b.slice(1,9)))});
+    out.rows.push({k:'DevEUI', v:b2h(b.slice(9,17)), d:'空口小端，网络序 '+b2h(rev(b.slice(9,17)))});
+    out.rows.push({k:'DevNonce', v:b2h(b.slice(17,19))});
+    out.rows.push({k:'MIC', v:b2h(b.slice(19,23))});
+    out.note='MIC 需 AppKey 验证，由 NS 完成；此处仅展示原始字节。';
+    return out;
+  }
+  if (mtype===1){ // Join-accept（空口为密文）
+    if (b.length<17){ out.error='Join-accept 长度不足'; return out; }
+    out.rows.push({k:'(密文主体)', v:b2h(b.slice(1,b.length-4)), d:'Join-accept 在空口为 AES 加密，需 AppKey 解密后才能解析 AppNonce/NetID/DevAddr/DLSettings/RxDelay/CFList'});
+    out.rows.push({k:'MIC', v:b2h(b.slice(b.length-4)), d:'末 4 字节（密文内）'});
+    out.note='Join-accept 为加密帧，解密由 NS 完成。';
+    return out;
+  }
+  if (mtype>=2 && mtype<=5){ // 数据帧 上行/下行
+    if (b.length<8){ out.error='数据帧长度不足'; return out; }
+    const up = (mtype===2||mtype===4);
+    const devAddr=b.slice(1,5);
+    out.rows.push({k:'DevAddr', v:b2h(devAddr), d:'空口小端，网络序 '+b2h(rev(devAddr))});
+    const fctrl=b[5];
+    const foptsLen = fctrl&0x0f;
+    const flags=[];
+    if (fctrl&0x80) flags.push('ADR');
+    flags.push(up ? ((fctrl&0x40)?'ADRACKReq':'') : ((fctrl&0x40)?'FPending':''));
+    if (fctrl&0x20) flags.push('ACK');
+    if (fctrl&0x10) flags.push('ClassB(FCtrl.b4)');
+    out.rows.push({k:'FCtrl', v:b2h([fctrl]), d:`${(flags.filter(Boolean).join(' / ')||'无标志')} · FOptsLen=${foptsLen}`});
+    const fcnt = b[6] | (b[7]<<8);
+    out.rows.push({k:'FCnt (低16位)', v:String(fcnt), d:'完整 FCnt 由 NS 按设备会话上下文补全'});
+    let p=8;
+    if (foptsLen>0){
+      const fopts=b.slice(p,p+foptsLen);
+      out.rows.push({k:'FOpts', v:b2h(fopts), d: foptsLen===15?'MAC 命令占满，无 FPort/FRMPayload':'MAC 命令（'+foptsLen+' 字节）'});
+      p+=foptsLen;
+    }
+    const remain=b.length-p;
+    if (remain>4){
+      const fport=b[p]; p++;
+      out.rows.push({k:'FPort', v:String(fport), d: fport===0?'MAC 层（FRMPayload 为 MAC 命令）':'应用层'});
+      const payload=b.slice(p, b.length-4);
+      out.rows.push({k:'FRMPayload', v:b2h(payload)||'(空)', d:'应用负载（若已配置会话密钥，NS 已解密后存储为 decrypted_hex）'});
+      out.rows.push({k:'MIC', v:b2h(b.slice(b.length-4))});
+      out.note='MIC 需 NwkSKey 验证，NS 侧已校验；FRMPayload 解密需 AppSKey/NwkSKey。';
+    } else if (remain===4){
+      out.rows.push({k:'MIC', v:b2h(b.slice(p,p+4)), d:'无 FPort/FRMPayload（纯 MAC/确认帧）'});
+    } else {
+      out.error=`帧尾部长度异常（剩余 ${remain} 字节，应 ≥4 用于 MIC）`;
+    }
+    return out;
+  }
+  out.rows.push({k:'Payload', v:b2h(b.slice(1)), d:'专有/RFU 帧，按透传处理'});
+  return out;
+}
+
+async function frameInspector(id){
+  const rec = (state.ups||[]).find(x=>x.id===id) || (state.dls||[]).find(x=>x.id===id);
+  if (!rec){ toast('未找到该记录','err'); return; }
+  let phy = rec.phy_payload || '';
+  if (!phy && rec.raw_json){ try{ const j=JSON.parse(rec.raw_json); phy = j.phy_payload || (j.txpk&&j.txpk.data) || ''; }catch(e){} }
+  if (!phy){
+    openModal(`<h3>帧结构检视 #${id}</h3><p class="muted">该记录没有原始帧（phy_payload）可供解析。上行记录通常包含空口帧；若为空，可能是 NS 未记录原始帧。</p><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    return;
+  }
+  const parsed = parseLoraFrame(phy);
+  const rowsHtml = parsed.error
+    ? `<tr><td colspan="3" class="warn-box" style="border:0">${esc(parsed.error)}</td></tr>`
+    : parsed.rows.map(r=>`<tr><td class="mono">${esc(r.k)}</td><td class="mono">${esc(r.v)}</td><td class="muted">${esc(r.d||'')}</td></tr>`).join('');
+  const noteHtml = parsed.note ? `<p class="muted" style="margin-top:10px">${esc(parsed.note)}</p>` : '';
+  openModal(`<h3>帧结构检视 #${id}</h3>
+    <p class="muted" style="word-break:break-all">完整帧 (hex)：<code>${esc(phy)}</code></p>
+    <div style="position:relative"><button class="ad-copy" onclick="copyText('${phy}')">复制帧</button></div>
+    <table class="tbl" style="margin-top:8px"><thead><tr><th>字段</th><th>值 (hex)</th><th>说明</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+    ${noteHtml}
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+
+// ===================================================================
+// 包捕获导出（上行 / 下行 / 事件）
+// ===================================================================
+function downloadBlob(name, text, mime){
+  const blob = new Blob([text], {type: mime||'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ try{ URL.revokeObjectURL(url); a.remove(); }catch(e){} }, 120);
+}
+async function exportCapture(kind, fmt){
+  const map = {uplinks: state.ups, downlinks: state.dls, events: state.evs};
+  const data = map[kind] || [];
+  if (!data.length){ toast('当前没有可导出的记录','info'); return; }
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  if (fmt==='csv'){
+    const flat = data.map(r=>{ const o={}; for (const k of Object.keys(r)){ if (k==='raw_json') continue; let v=r[k]; if (v&&typeof v==='object') v=JSON.stringify(v); o[k]=v; } return o; });
+    const cols = Array.from(new Set(flat.flatMap(o=>Object.keys(o))));
+    const escC = v => { v=v==null?'':String(v); return /[",\n\r]/.test(v)? '"'+v.replace(/"/g,'""')+'"' : v; };
+    const lines = [cols.join(',')].concat(flat.map(o=>cols.map(c=>escC(o[c])).join(',')));
+    downloadBlob(`capture_${kind}_${stamp}.csv`, '﻿'+lines.join('\n'), 'text/csv;charset=utf-8');
+  } else {
+    downloadBlob(`capture_${kind}_${stamp}.json`, JSON.stringify(data, null, 2), 'application/json');
+  }
+  toast(`已导出 ${data.length} 条 ${kind}（${fmt.toUpperCase()}）`, 'ok');
+}
+
+// ===================================================================
+// 解码器模板库
+// ===================================================================
+const DECODER_TEMPLATES = [
+  { name:'HEX 透传（原样输出）', desc:'把负载 hex 当作字符串返回，便于调试与抓包对照。',
+    code:`// function(hex, bytes) -> 字段数组
+return [{ type:'raw', value: hex }];` },
+  { name:'温度 + 湿度（2 字节大端，各 ÷100）', desc:'常见于温湿度传感器：前 2 字节温度、后 2 字节湿度。',
+    code:`// function(hex, bytes) -> 字段数组
+if (!bytes || bytes.length < 4) return [];
+const be = (i)=> (bytes[i]<<8) | bytes[i+1];
+return [
+  { type:'temperature', value: +((be(0)/100).toFixed(2)) },
+  { type:'humidity',    value: +((be(2)/100).toFixed(2)) },
+];` },
+  { name:'单通道模拟量（uint16 大端）', desc:'单个 2 字节大端无符号整数。',
+    code:`// function(hex, bytes) -> 字段数组
+if (!bytes || bytes.length < 2) return [];
+const v = (bytes[0]<<8) | bytes[1];
+return [{ type:'value', value: v }];` },
+  { name:'带符号 int16 大端', desc:'2 字节大端有符号整数（如 ±温度）。',
+    code:`// function(hex, bytes) -> 字段数组
+if (!bytes || bytes.length < 2) return [];
+let v = (bytes[0]<<8) | bytes[1];
+if (v & 0x8000) v -= 0x10000;
+return [{ type:'value', value: v }];` },
+  { name:'JSON-in-HEX（UTF-8 文本）', desc:'负载是 UTF-8 编码的 JSON 字符串，直接解析为字段。',
+    code:`// function(hex, bytes) -> 字段数组
+try {
+  const txt = new TextDecoder('utf-8').decode(Uint8Array.from(bytes||[]));
+  const o = JSON.parse(txt);
+  return Object.entries(o).map(([k,v])=>({ type:k, value:v }));
+} catch(e){ return [{ type:'parse_error', value:String(e.message||e) }]; }` },
+  { name:'Cayenne LPP（内置，无需脚本）', desc:'在「解码方式」下拉选 Cayenne LPP 即可；此处给出等价调用。',
+    code:`// 提示：在「解码方式」选 Cayenne LPP 即可，无需自定义脚本。
+// 若强制用 JS，可调用内置解码器：
+return decodeCayenneLpp(hex);` },
+];
+
+async function decoderTemplates(){
+  const cards = DECODER_TEMPLATES.map((t,i)=>`
+    <div class="tpl-card">
+      <div class="tpl-head">${esc(t.name)}</div>
+      <div class="muted" style="font-size:12px;margin:4px 0 8px">${esc(t.desc)}</div>
+      <pre class="tpl-code">${esc(t.code)}</pre>
+      <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="ghost" onclick="copyTemplate(${i})">复制</button>
+        <button class="btn" onclick="useDecoderTemplate(${i})">使用此模板</button>
+      </div>
+    </div>`).join('');
+  openModal(`<h3>解码器模板</h3>
+    <p class="muted">选择一个模板插入到「自定义 JS」解码函数。插入后请将解码方式切到 JS 并点「保存解码配置」。</p>
+    <div class="tpl-grid">${cards}</div>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+async function copyTemplate(i){ const t=DECODER_TEMPLATES[i]; if(t) copyText(t.code); }
+async function useDecoderTemplate(i){
+  const t = DECODER_TEMPLATES[i]; if(!t) return;
+  const sel = document.getElementById('codec_rt');
+  const ta = document.getElementById('codec_script');
+  if (!ta){ toast('请先在设备详情中打开「数据解码」面板','err'); return; }
+  if (sel) sel.value='JS';
+  if (typeof codecRuntimeChanged==='function') codecRuntimeChanged();
+  ta.value = t.code;
+  toast('已填入模板，记得点「保存解码配置」','ok');
+  closeModal();
 }

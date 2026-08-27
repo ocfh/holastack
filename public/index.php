@@ -279,6 +279,9 @@ function handleApi(string $method, string $path): array
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
             return ['data' => WebApp::listApplications($tid)];
         case 'devices':
+            if (($segs[1] ?? '') === 'import' && $method === 'POST') {
+                return WebApp::importDevices((int) ($body['app_id'] ?? 0), $body['raw'] ?? '', $body['format'] ?? 'csv');
+            }
             if (isset($segs[1]) && ($segs[2] ?? '') === 'downlink' && $method === 'POST') {
                 return WebApp::enqueueDownlink((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '', !empty($body['confirmed']), !empty($body['mac']));
             }
@@ -306,6 +309,86 @@ function handleApi(string $method, string $path): array
             }
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
             return ['data' => WebApp::listGateways($tid)];
+        case 'device-profiles':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = (int) $segs[1];
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    return WebApp::updateDeviceProfile($id, $body);
+                }
+                if ($method === 'DELETE') {
+                    return WebApp::deleteDeviceProfile($id);
+                }
+                $dp = WebApp::getDeviceProfile($id);
+                if (!$dp) {
+                    http_response_code(404);
+                    return ['error' => 'device_profile_not_found'];
+                }
+                return ['device_profile' => $dp];
+            }
+            if ($method === 'POST') {
+                $r = WebApp::createDeviceProfile($body);
+                if (isset($r['error'])) {
+                    http_response_code(400);
+                    return $r;
+                }
+                http_response_code(201);
+                return $r;
+            }
+            return ['data' => WebApp::listDeviceProfiles(null)];
+
+        case 'api-keys':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                if ($method === 'DELETE') {
+                    return WebApp::deleteApiKey((int) $segs[1]);
+                }
+                http_response_code(405);
+                return ['error' => 'method_not_allowed'];
+            }
+            if ($method === 'POST') {
+                $r = WebApp::createApiKey($appId, $body);
+                if (isset($r['error'])) {
+                    http_response_code(400);
+                    return $r;
+                }
+                http_response_code(201);
+                return $r;
+            }
+            return ['data' => WebApp::listApiKeys($appId)];
+
+        case 'stream':
+            header('Content-Type: text/event-stream; charset=utf-8');
+            header('Cache-Control: no-cache');
+            header('X-Accel-Buffering: no');
+            while (ob_get_level() > 0) { ob_end_flush(); }
+            ignore_user_abort(true);
+            $lastId = (int) ($get['after'] ?? 0);
+            $deadline = time() + 55;
+            while (time() < $deadline) {
+                if (connection_status() !== 0) { break; }
+                $rows = Database::fetchAll(
+                    "SELECT id, type, level, gateway_id, dev_id, message, created_at FROM events WHERE id>? AND app_id=? ORDER BY id ASC LIMIT 50",
+                    [$lastId, $appId]
+                );
+                foreach ($rows as $ev) {
+                    $lastId = (int) $ev['id'];
+                    $payload = json_encode([
+                        'id' => (int) $ev['id'],
+                        'type' => $ev['type'],
+                        'level' => $ev['level'],
+                        'gateway_id' => $ev['gateway_id'],
+                        'dev_id' => (int) $ev['dev_id'],
+                        'message' => $ev['message'],
+                        'created_at' => (int) $ev['created_at'],
+                    ], JSON_UNESCAPED_UNICODE);
+                    echo "data: " . $payload . "\n\n";
+                }
+                flush();
+                if (empty($rows)) { sleep(1); }
+            }
+            echo "event: eof\ndata: {}\n\n";
+            flush();
+            exit;
+
         case 'uplinks':
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
@@ -313,6 +396,24 @@ function handleApi(string $method, string $path): array
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
             return ['data' => WebApp::listUplinks($devId, $appId, $lim, $tid, $off), 'total' => WebApp::countUplinks($devId, $appId, $tid), 'limit' => $lim, 'offset' => $off];
         case 'downlinks':
+            if (isset($segs[1]) && $segs[1] !== '' && $method === 'DELETE') {
+                $id = (int) $segs[1];
+                $dl = Database::fetch("SELECT id, dev_id, app_id, status FROM downlinks WHERE id=?", [$id]);
+                if (!$dl) {
+                    http_response_code(404);
+                    return ['error' => 'downlink_not_found'];
+                }
+                if ((int) $dl['app_id'] !== (int) $appId) {
+                    http_response_code(403);
+                    return ['error' => 'forbidden: downlink not in your application'];
+                }
+                if ($dl['status'] !== 'pending') {
+                    http_response_code(409);
+                    return ['error' => 'downlink_not_pending', 'status' => $dl['status']];
+                }
+                $n = Database::execute("UPDATE downlinks SET status='canceled' WHERE id=?", [$id]);
+                return ['id' => $id, 'canceled' => $n > 0];
+            }
             $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
             $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
@@ -325,6 +426,41 @@ function handleApi(string $method, string $path): array
             $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
             return ['data' => WebApp::listEvents($devId, $gwId, $type, $lim, $tid, $off), 'total' => WebApp::countEvents($devId, $gwId, $type, $tid), 'limit' => $lim, 'offset' => $off];
+        case 'stream':
+            Auth::guardApi(Auth::ROLE_OPERATOR);
+            header('Content-Type: text/event-stream; charset=utf-8');
+            header('Cache-Control: no-cache');
+            header('X-Accel-Buffering: no');
+            while (ob_get_level() > 0) { ob_end_flush(); }
+            ignore_user_abort(true);
+            $lastId = (int) ($get['after'] ?? 0);
+            $deadline = time() + 55;
+            while (time() < $deadline) {
+                if (connection_status() !== 0) { break; }
+                $rows = Database::fetchAll(
+                    "SELECT id, type, level, gateway_id, dev_id, message, created_at FROM events WHERE id>? ORDER BY id ASC LIMIT 50",
+                    [$lastId]
+                );
+                foreach ($rows as $ev) {
+                    $lastId = (int) $ev['id'];
+                    $payload = json_encode([
+                        'id' => (int) $ev['id'],
+                        'type' => $ev['type'],
+                        'level' => $ev['level'],
+                        'gateway_id' => $ev['gateway_id'],
+                        'dev_id' => (int) $ev['dev_id'],
+                        'message' => $ev['message'],
+                        'created_at' => (int) $ev['created_at'],
+                    ], JSON_UNESCAPED_UNICODE);
+                    echo "data: " . $payload . "\n\n";
+                }
+                flush();
+                if (empty($rows)) { sleep(1); }
+            }
+            echo "event: eof\ndata: {}\n\n";
+            flush();
+            exit;
+
         case 'users':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteUser((int) $segs[1]);
@@ -538,6 +674,7 @@ function handleAppApi(string $method, string $path): array
             'class' => $d['class'] ?? 'A',
             'region' => $d['region'] ?? '',
             'status' => $d['status'] ?? '',
+            'codec' => $d['codec'] ?? '',
             'online' => $online,
             'last_seen' => $lastSeen ? date('Y-m-d H:i:s', $lastSeen) : '-',
             'created_at' => (int) ($d['created_at'] ?? 0),
@@ -553,6 +690,25 @@ function handleAppApi(string $method, string $path): array
     
 
 
+    $resolveGateway = static function (string $gwId): ?array {
+        $gwId = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $gwId));
+        if ($gwId === '') {
+            return null;
+        }
+        return WebApp::getGateway($gwId);
+    };
+    $gatewayView = static function (array $g): array {
+        $timeout = time() - WebApp::GW_OFFLINE_TIMEOUT;
+        return [
+            'gw_id'     => $g['gw_id'] ?? '',
+            'name'      => $g['name'] ?? '',
+            'region'    => $g['region'] ?? '',
+            'status'    => ((int) ($g['last_seen'] ?? 0) >= $timeout) ? 'online' : 'offline',
+            'last_seen' => ($g['last_seen'] ?? 0) ? date('Y-m-d H:i:s', (int) $g['last_seen']) : '-',
+            'rf_config' => (isset($g['rf_config']) && $g['rf_config'] !== '') ? json_decode($g['rf_config'], true) : null,
+        ];
+    };
+
     switch ($sub) {
         case '':
             return [
@@ -562,11 +718,31 @@ function handleAppApi(string $method, string $path): array
                 'endpoints' => [
                     'GET    /v1/info',
                     'GET    /v1/devices',
+                    'POST   /v1/devices',
                     'GET    /v1/devices/{dev_eui}',
+                    'PUT    /v1/devices/{dev_eui}',
+                    'DELETE /v1/devices/{dev_eui}',
                     'GET    /v1/devices/{dev_eui}/uplinks',
+                    'GET    /v1/gateways',
+                    'POST   /v1/gateways',
+                    'GET    /v1/gateways/{gw_id}',
+                    'PUT    /v1/gateways/{gw_id}',
+                    'DELETE /v1/gateways/{gw_id}',
                     'GET    /v1/uplinks',
                     'GET    /v1/downlinks',
                     'POST   /v1/devices/{dev_eui}/downlink',
+                    'GET    /v1/devices/{dev_eui}/downlinks',
+                    'GET    /v1/devices/{dev_eui}/metrics',
+                    'GET    /v1/device-profiles',
+                    'POST   /v1/device-profiles',
+                    'GET    /v1/device-profiles/{id}',
+                    'PUT    /v1/device-profiles/{id}',
+                    'DELETE /v1/device-profiles/{id}',
+                    'GET    /v1/api-keys',
+                    'POST   /v1/api-keys',
+                    'DELETE /v1/api-keys/{id}',
+                    'DELETE /v1/downlinks/{id}',
+                    'GET    /v1/stream  (SSE 实时事件流)',
                 ],
             ];
 
@@ -614,13 +790,106 @@ function handleAppApi(string $method, string $path): array
                     http_response_code(201);
                     return $r;
                 }
+                if ($sub2 === 'downlinks' && $method === 'GET') {
+                    $status = $get['status'] ?? '';
+                    $sql = "SELECT id, dev_id, port, payload_hex, confirmed, mac, fcnt, status, created_at, sent_at FROM downlinks WHERE dev_id=?";
+                    $params = [$dev['id']];
+                    if ($status !== '') {
+                        $sql .= " AND status=?";
+                        $params[] = $status;
+                    }
+                    $sql .= " ORDER BY id DESC LIMIT 200";
+                    return ['data' => Database::fetchAll($sql, $params)];
+                }
+                if ($sub2 === 'metrics' && $method === 'GET') {
+                    $hours = (int) ($get['range'] ?? 24);
+                    if ($hours <= 0 || $hours > 720) { $hours = 24; }
+                    $since = time() - $hours * 3600;
+                    $rows = Database::fetchAll(
+                        "SELECT received_at, rssi, snr, fcnt, port FROM uplinks WHERE dev_id=? AND received_at>=? ORDER BY received_at ASC LIMIT 1000",
+                        [$dev['id'], $since]
+                    );
+                    $points = array_map(static function ($r) {
+                        return [
+                            't' => (int) $r['received_at'],
+                            'rssi' => (int) ($r['rssi'] ?? 0),
+                            'snr' => (float) ($r['snr'] ?? 0),
+                            'fcnt' => (int) ($r['fcnt'] ?? 0),
+                            'port' => (int) ($r['port'] ?? 0),
+                        ];
+                    }, $rows);
+                    return ['range_hours' => $hours, 'points' => $points, 'count' => count($points)];
+                }
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    $r = WebApp::updateDevice($dev['id'], $body);
+                    if (isset($r['error'])) {
+                        http_response_code(400);
+                        return $r;
+                    }
+                    return ['id' => $dev['id'], 'updated' => true];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteDevice($dev['id']);
+                    if (isset($r['error'])) {
+                        http_response_code(400);
+                        return $r;
+                    }
+                    return ['id' => $dev['id'], 'deleted' => true];
+                }
                 
 
                 $up = Database::fetch("SELECT COUNT(*) c FROM uplinks WHERE dev_id=?", [$dev['id']])['c'];
                 $dl = Database::fetch("SELECT COUNT(*) c FROM downlinks WHERE dev_id=?", [$dev['id']])['c'];
                 return ['device' => $deviceView($dev), 'counts' => ['uplinks' => (int) $up, 'downlinks' => (int) $dl]];
             }
+            if ($method === 'POST') {
+                $body['app_id'] = $appId;
+                $r = WebApp::createDevice($body);
+                if (isset($r['error'])) {
+                    http_response_code(400);
+                    return $r;
+                }
+                http_response_code(201);
+                return $r;
+            }
             return ['data' => array_map($deviceView, WebApp::listDevices($appId))];
+
+        case 'gateways':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $gwId = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $segs[1]));
+                $gw = $resolveGateway($gwId);
+                if (!$gw) {
+                    http_response_code(404);
+                    return ['error' => 'gateway not found or forbidden'];
+                }
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    $r = WebApp::updateGateway($gwId, $body);
+                    if (isset($r['error'])) {
+                        http_response_code(400);
+                        return $r;
+                    }
+                    return ['gw_id' => $gwId, 'updated' => true];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteGateway($gwId);
+                    if (isset($r['error'])) {
+                        http_response_code(400);
+                        return $r;
+                    }
+                    return ['gw_id' => $gwId, 'deleted' => true];
+                }
+                return ['gateway' => $gatewayView($gw)];
+            }
+            if ($method === 'POST') {
+                $r = WebApp::createGateway($body);
+                if (isset($r['error'])) {
+                    http_response_code(400);
+                    return $r;
+                }
+                http_response_code(201);
+                return $r;
+            }
+            return ['data' => array_map($gatewayView, WebApp::listGateways())];
 
         case 'uplinks':
             $devId = 0;

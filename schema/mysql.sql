@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS devices (
     uplink_adr_history TEXT,
     pending_mac TEXT,
     relay_state TEXT,
+    codec TEXT DEFAULT '',
     created_at INT NOT NULL,
     INDEX idx_devices_dev_eui (dev_eui),
     INDEX idx_devices_dev_addr (dev_addr),
