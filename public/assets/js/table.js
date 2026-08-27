@@ -225,12 +225,19 @@ function buildPager(cfg){
     return `<button class="${cls}" style="padding:4px 9px;font-size:12px;display:inline-flex;align-items:center;gap:3px" ${dis?'disabled':''} onclick="window['${cfg.refresh}__page'](${p})">${label||p}</button>`;
   };
   return `<style>
-    .pager-wrap{display:flex;flex-direction:column;gap:8px;margin-top:12px}
-    .pager-nav{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap}
-    .pager-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-    .pager-jump{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+    .pager-wrap{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-top:12px}
+    .pager-meta{justify-self:start}
+    .pager-nav{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:nowrap}
+    .pager-right{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+    @media (max-width:560px){
+      .pager-wrap{grid-template-columns:1fr 1fr;gap:8px}
+      .pager-nav{grid-row:1;grid-column:1 / -1;justify-content:center}
+      .pager-meta{grid-row:2;grid-column:1;justify-self:start}
+      .pager-right{grid-row:2;grid-column:2;justify-self:end}
+    }
     </style>
     <div class="pager-wrap">
+      <div class="pager-meta muted" style="font-size:12px">${t('共')} <b>${total}</b> ${t('条')} · ${from}-${to} ${t('条')} · <b>${pages>0?cur:0} / ${pages}</b></div>
       <div class="pager-nav">
         ${pageBtn(Math.max(1, cur-1), chevL + '<span>'+t('上一页')+'</span>', {disabled: cur<=1})}
         ${win[0] > 1 ? pageBtn(1, '1') + (win[0] > 2 ? '<span class="muted">…</span>' : '') : ''}
@@ -238,17 +245,13 @@ function buildPager(cfg){
         ${win[win.length-1] < pages ? (win[win.length-1] < pages-1 ? '<span class="muted">…</span>' : '') + pageBtn(pages, pages) : ''}
         ${pageBtn(Math.min(pages, cur+1), '<span>'+t('下一页')+'</span>' + chevR, {disabled: cur>=pages})}
       </div>
-      <div class="pager-meta">
-        <div class="muted" style="font-size:12px">${t('共')} <b>${total}</b> ${t('条')} · ${t('第')} ${from}-${to} ${t('条')} · ${pages>0?cur:0} / ${pages} ${t('页')}</div>
-        <div class="pager-jump">
-          <label style="margin:0;font-size:12px;color:var(--mut)">${t('每页')}</label>
-          <select style="width:auto;padding:4px 8px;font-size:12px" onchange="window['${cfg.refresh}__limit'](+this.value)">
-            ${[20,50,100,200,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
-          </select>
-          <label style="margin:0;font-size:12px;color:var(--mut)">${t('跳到')}</label>
-          <input type="number" min="1" max="${pages}" value="${cur}" style="width:64px;padding:4px 6px;font-size:12px" onchange="window['${cfg.refresh}__page'](+this.value)">
-          <span class="muted" style="font-size:12px">${t('页')}</span>
-        </div>
+      <div class="pager-right">
+        <label style="margin:0;font-size:12px;color:var(--mut)">${t('每页')}</label>
+        <select style="width:auto;padding:4px 8px;font-size:12px" onchange="window['${cfg.refresh}__limit'](+this.value)">
+          ${[20,50,100,200,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
+        </select>
+        <label style="margin:0;font-size:12px;color:var(--mut)">${t('跳到')}</label>
+        <input type="number" min="1" max="${pages}" value="${cur}" style="width:64px;padding:4px 6px;font-size:12px" onchange="window['${cfg.refresh}__page'](+this.value)">
       </div>
     </div>`;
 }

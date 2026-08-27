@@ -347,9 +347,9 @@
 .panel-h{font-size:14px;font-weight:700;margin-bottom:10px;color:var(--txt)}
 .row-rings{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
 .trend{display:flex;flex-direction:column;gap:6px}
-.trend-svg{width:100%;height:160px;display:block}
+.trend-svg{width:100%;height:auto;display:block}
 .trend-legend{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:14px}
-.noc-trend .trend-svg{height:220px}
+.noc-trend{max-width:1440px;width:100%}
 .dot.ok{background:var(--ok)} .dot.err{background:var(--err)} .dot.acc{background:var(--acc)}
 .bar{height:8px;border-radius:6px;background:var(--bg-subtle);overflow:hidden}
 .bar span{display:block;height:100%;border-radius:6px}
@@ -375,6 +375,14 @@
   .kpi-grid{grid-template-columns:repeat(2,1fr)}
   .noc-grid{grid-template-columns:1fr}
   .map-wrap{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .kpi-grid{grid-template-columns:1fr}
+  .kpi{padding:12px 14px}
+  .kpi-num{font-size:22px}
+  .kpi-sub{font-size:11px}
+  .trend-legend{flex-wrap:wrap;gap:8px}
+  .panel{padding:12px}
 }
 /* 帧检视 / 解码器模板 */
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}

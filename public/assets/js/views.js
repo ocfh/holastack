@@ -261,7 +261,7 @@ async function viewDevices(){
   };
   window.viewDevices__page = p => _pagerGo({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',p);
   window.viewDevices__limit = l => _pagerSetLimit({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',l);
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['devices']]||''}设备</h2>${adminBtn('<button onclick="newDevice()">'+ICON.plus+'添加设备</button> <button class="btn ghost" onclick="importDevicesForm()">批量导入</button> <button class="btn ghost" onclick="exportDevicesCsv()">导出CSV</button>')}</div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['devices']]||''}设备</h2>${adminBtn('<div style="display:inline-flex;gap:8px;flex-wrap:wrap;margin-left:auto"><button onclick="newDevice()">'+ICON.plus+'添加设备</button><button class="btn ghost" onclick="importDevicesForm()">批量导入</button><button class="btn ghost" onclick="exportDevicesCsv()">导出CSV</button></div>')}</div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
     <button class="btn ghost" onclick="resetFilters(()=>{state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};state.devsPage=1;state.devsOffset=0;state.devsLimit=50;}, viewDevices)">${ICON.arrowPath}重置</button></div>
     ${table}
@@ -1036,7 +1036,7 @@ async function viewSettings(){
   .st-cat h3 .hi{width:16px;height:16px}
   .st-cat.hidden{display:none}
   @media(max-width:560px){.st-main{padding:16px}}
-  @media(min-width:561px){.st-wrap{flex-direction:row;align-items:flex-start}.st-side{flex-direction:column;width:168px;flex:0 0 auto;overflow-x:visible}.st-item{width:100%;justify-content:flex-start;padding:12px 16px}.st-main{flex:1;width:auto}}
+  @media(min-width:561px){.st-wrap{flex-direction:row;align-items:flex-start}.st-side{flex-direction:column;width:220px;flex:0 0 auto;overflow-x:visible}.st-item{width:100%;justify-content:flex-start;padding:12px 16px}.st-main{flex:1;width:auto}}
   </style>
   <div class="view-head"><h2>${ICON[VIEW_ICONS['settings']]||''}站点设置</h2></div>
   <div class="st-wrap">
@@ -1586,7 +1586,7 @@ function buildHourlyTrend(ups, dls, hours){
   (ups||[]).forEach(u=>{ const i=idxOf(u.received_at); if(i>=0) buckets[i].up++; });
   (dls||[]).forEach(x=>{ const i=idxOf(x.sent_at||x.created_at); if(i>=0) buckets[i].dl++; });
   const max = Math.max(1, ...buckets.map(b=>b.up+b.dl));
-  const W=600,H=160,padB=22,padT=10,n=buckets.length,bw=W/n;
+  const W=800,H=160,padB=22,padT=10,n=buckets.length,bw=W/n;
   const colW = Math.max(2, Math.min(13, (bw-3)/2));
   let bars='';
   buckets.forEach((b,i)=>{
@@ -1598,7 +1598,7 @@ function buildHourlyTrend(ups, dls, hours){
     bars += `<rect x="${(x+1).toFixed(1)}" y="${(baseY-hd).toFixed(1)}" width="${colW}" height="${hd.toFixed(1)}" fill="var(--ok)" rx="1"></rect>`;
     if (n<=12 || i%2===0) bars += `<text x="${x.toFixed(1)}" y="${H-6}" text-anchor="middle" fill="var(--mut)" font-size="9">${String(b.t.getHours()).padStart(2,'0')}</text>`;
   });
-  return `<svg viewBox="0 0 ${W} ${H}" class="trend-svg" preserveAspectRatio="none">
+  return `<svg viewBox="0 0 ${W} ${H}" class="trend-svg" preserveAspectRatio="xMidYMid meet">
     <line x1="0" y1="${H-padB}" x2="${W}" y2="${H-padB}" stroke="var(--line)"></line>${bars}
   </svg><div class="trend-legend"><span class="dot acc"></span>上行 <span class="dot ok"></span>下行</div>`;
 }

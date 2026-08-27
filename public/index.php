@@ -337,6 +337,8 @@ function handleApi(string $method, string $path): array
             return ['data' => WebApp::listDeviceProfiles(null)];
 
         case 'api-keys':
+            $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
+            $tenantId = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
             if (isset($segs[1]) && $segs[1] !== '') {
                 if ($method === 'DELETE') {
                     return WebApp::deleteApiKey((int) $segs[1]);
@@ -353,7 +355,7 @@ function handleApi(string $method, string $path): array
                 http_response_code(201);
                 return $r;
             }
-            return ['data' => WebApp::listApiKeys($appId)];
+            return ['data' => WebApp::listApiKeys($appId, $tenantId)];
 
         case 'stream':
             header('Content-Type: text/event-stream; charset=utf-8');
