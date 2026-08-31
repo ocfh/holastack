@@ -472,11 +472,13 @@ class NetworkServer
 
             
 
+            $region = Region::get($device['region'] ?: ELW_DEFAULT_REGION);
             $rx1DrOffset = (int) ($device['rx1_dr_offset'] ?? 0) & 0x07;
-            $rx2Dr = (int) ($device['rx2_dr'] ?? 0) & 0x0F;
+            // 设备未显式配置 RX2 DR 时取区域默认（CN470 RP002 为 DR1，见 RegionCN470.h CN470_RX_WND_2_DR）
+            $devRx2Dr = (int) ($device['rx2_dr'] ?? 0);
+            $rx2Dr = ($devRx2Dr > 0 ? $devRx2Dr : $region->getRx2DataRate()) & 0x0F;
             $dlSettings = ($rx1DrOffset << 4) | $rx2Dr;
             $rxDelay = (int) ($device['rx_delay'] ?? 1) & 0x0F;
-            $region = Region::get($device['region'] ?: ELW_DEFAULT_REGION);
             $cfList = $region->getCfList(); 
 
             $t6 = microtime(true);
@@ -513,7 +515,9 @@ class NetworkServer
             $setCols[] = 'rx_delay=?';        $setParams[] = $rxDelay;
             $setCols[] = 'rx1_dr_offset=?';   $setParams[] = $rx1DrOffset;
             $setCols[] = 'rx2_dr=?';          $setParams[] = $rx2Dr;
-            $setCols[] = 'rx2_frequency=?';   $setParams[] = $region->getRx2Frequency();
+            // OTAA 设备入网后的 RX2 频点由「本次入网使用的 Join 信道号」决定（CN470 A20：otaaFrequencies[idx]）
+            [$joinChIdx, ] = $region->findJoinChannel((float) $freq);
+            $setCols[] = 'rx2_frequency=?';   $setParams[] = $region->getRx2FrequencyForJoinChannel($joinChIdx);
             $setParams[] = $device['id'];
             Database::execute("UPDATE devices SET " . implode(',', $setCols) . " WHERE id=?", $setParams);
             $this->log("JOIN OK devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . " (mac_version=$macVersion)" . sprintf(" (parse=%.0fms db_q=%.0fms mic=%.0fms key=%.0fms ja=%.0fms total=%.0fms)",
@@ -809,8 +813,8 @@ class NetworkServer
                 false, false, null, '', (bool) $device['adr'], '', '', $fcnt
             );
             $this->bumpDownFCnt($device['id']);
-            $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
-            $this->logEvent('downlink', 'info', "ADRACKReq 应答：空 ACK 下行 dev#{$device['id']} (ADR ack, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $freq, $datr, $gwEui));
+            $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr, (int) ($device['rx2_frequency'] ?? 0));
+            $this->logEvent('downlink', 'info', "ADRACKReq 应答：空 ACK 下行 dev#{$device['id']} (ADR ack, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $region->getRx1Frequency($freq), $datr, $gwEui));
         }
 
         // === 下行（MAC ACK / 应用 pending / ADR-ACK）已在上文全部 enqueue 并立即 flush（PULL_RESP 已发出）===
@@ -937,7 +941,7 @@ class NetworkServer
             $this->bumpDownFCnt($device['id']);
             
 
-            $dlRawJson = $this->buildDataDownLog($downPhy, $tmst, $freq, $datr, $gwEui);
+            $rx1Freq = $region->getRx1Frequency($freq);
             if ($classC) {
                 
 
@@ -956,9 +960,10 @@ class NetworkServer
             } else {
                 
 
-                $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
+                $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr, (int) ($device['rx2_frequency'] ?? 0));
                 $kind = $isMac ? 'MAC CMD' : 'APP';
                 $this->log("$kind DOWNLINK -> dev_id={$device['id']} port={$dl['port']}");
+                $dlRawJson = $this->buildDataDownLog($downPhy, $rx1Tmst, $rx1Freq, $datr, $gwEui);
                 $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} port={$dl['port']} (Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $dlRawJson);
             }
             Database::execute("UPDATE downlinks SET status='sent', fcnt=?, sent_at=?, raw_json=? WHERE id=?", [$fcntDown, time(), $dlRawJson, $dl['id']]);
@@ -1207,6 +1212,7 @@ class NetworkServer
             'enabled_uplink_channel_indices', 'pending_mac', 'mac_command_error_count',
             'uplink_adr_history', 'class', 'battery', 'margin', 'relay_state', 'dev_status_req_at',
             'device_time_valid', 'device_time', 'beacon_epoch',
+            'class_b_ping_slot_freq', 'class_b_ping_slot_dr',
         ];
         $upd = [];
         $params = [];
@@ -1226,7 +1232,7 @@ class NetworkServer
 
     /**
      * 按 16 信道一组生成 LinkADRReq 所需的 ChMask 列表。
-     * CN470 等 96 信道区域需要跨多个 ChMaskCntl 块下发。
+     * CN470（A20 计划 64 信道）等多信道区域需要跨多个 ChMaskCntl 块下发。
      * @return array [[mask16, cntl], ...]
      */
     private function channelMask(array $device, Region $region): array
@@ -1284,9 +1290,9 @@ class NetworkServer
             $this->log("MAC DOWNLINK -> dev_id={$device['id']} (Class C $modeDesc)");
             $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (Class C $modeDesc)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $tmst, $dlFreq, $dlDatr, $gwEui));
         } else {
-            $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr);
+            $rx1Tmst = $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $tmst, $region, $freq, $datr, (int) ($device['rx2_frequency'] ?? 0));
             $this->log("MAC DOWNLINK -> dev_id={$device['id']} (Class A RX1/RX2)");
-            $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (MAC-only, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $freq, $datr, $gwEui));
+            $this->logEvent('downlink', 'info', "下行下发 dev_id={$device['id']} (MAC-only, Class A RX1/RX2)", $gwEui, $device['id'], $device['app_id'], $this->buildDataDownLog($downPhy, $rx1Tmst, $region->getRx1Frequency($freq), $datr, $gwEui));
         }
     }
 
@@ -1304,7 +1310,10 @@ class NetworkServer
 
     private function enqueueClassCDownlink(array $device, Region $region, string $downPhy, int $ulTmst, float $ulFreq, string $ulDatr, string $gwEui, string $peer): array
     {
-        $dlFreq = (int) ($device['rx2_frequency'] ?? 0) > 0 ? (int) $device['rx2_frequency'] / 1e6 : $region->getRx2Frequency() / 1e6;
+        // CN470：Class C 的 RX_C 固定在「区域默认 RX2」(486.9)，设备级 rx2_frequency 是入网后
+        // 的 OTAA 值(485.3)，只对 Class A 的 RX2 窗口有效，用于 RX_C 会全部丢包。
+        $devRx2 = (int) ($device['rx2_frequency'] ?? 0);
+        $dlFreq = (!$region->classCIgnoresDeviceRx2() && $devRx2 > 0) ? $devRx2 / 1e6 : $region->getRx2Frequency() / 1e6;
         $dlDatr = $region->drToDatr((int) ($device['rx2_dr'] ?? 0) > 0 ? (int) $device['rx2_dr'] : $region->getRx2DataRate());
         $sinceUp = time() - (int) ($device['last_seen'] ?? 0);
         $airtimeUs = $this->uplinkAirtimeUs($downPhy, $dlDatr, $region);
@@ -1312,7 +1321,7 @@ class NetworkServer
         if ($sinceUp >= 0 && $sinceUp < 2.5 && ($sinceUp + $airtimeUs / 1e6) > $rx1DelayS + 0.05) {
             
 
-            $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $ulTmst, $region, $ulFreq, $ulDatr);
+            $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $ulTmst, $region, $ulFreq, $ulDatr, (int) ($device['rx2_frequency'] ?? 0));
             return [$dlFreq, $dlDatr, 'a-windows'];
         }
         
@@ -1560,7 +1569,7 @@ class NetworkServer
                     dev.ping_period, dev.beacon_epoch, dev.region, dev.fcnt_down AS dev_fcnt_down,
                     dev.last_seen,
                     dev.f_nwk_s_int_key, dev.s_nwk_s_int_key, dev.nwk_s_enc_key, dev.mac_version,
-                    dev.ping_slot_freq, dev.ping_slot_dr
+                    dev.class_b_ping_slot_freq, dev.class_b_ping_slot_dr
              FROM downlinks d
              JOIN devices dev ON dev.id = d.dev_id
              WHERE d.status='pending' AND dev.class IN ('B','C')"
@@ -1581,8 +1590,8 @@ class NetworkServer
                 'last_gw_id'       => $dl['last_gw_id'],
                 'ping_period'      => (int) $dl['ping_period'],
                 'beacon_epoch'     => (int) $dl['beacon_epoch'],
-                'ping_slot_freq'   => (int) ($dl['ping_slot_freq'] ?? 0),
-                'ping_slot_dr'     => (int) ($dl['ping_slot_dr'] ?? 0),
+                'class_b_ping_slot_freq' => (int) ($dl['class_b_ping_slot_freq'] ?? 0),
+                'class_b_ping_slot_dr'   => (int) ($dl['class_b_ping_slot_dr'] ?? 0),
                 'region'           => $dl['region'],
                 'fcnt_down'        => (int) $dl['dev_fcnt_down'],
                 'last_seen'        => (int) $dl['last_seen'],
@@ -1861,10 +1870,10 @@ class NetworkServer
         $datr = $region->drToDatr($region->getRx2DataRate());
         if (($device['class'] ?? '') === 'B' && $pingSlotUnix > 0) {
             // Class B：下行须在 ping-slot 精确时刻、于 beacon/专用信道、以设备 ping-slot DR 发射
-            $freq = ($device['ping_slot_freq'] > 0)
-                ? ((int) $device['ping_slot_freq'] / 1e6)
+            $freq = ($device['class_b_ping_slot_freq'] > 0)
+                ? ((int) $device['class_b_ping_slot_freq'] / 1e6)
                 : ($region->getBeaconFrequency() / 1e6);
-            $dr   = ($device['ping_slot_dr'] > 0) ? (int) $device['ping_slot_dr'] : $region->getBeaconDataRate();
+            $dr   = ($device['class_b_ping_slot_dr'] > 0) ? (int) $device['class_b_ping_slot_dr'] : $region->getBeaconDataRate();
             $datr = $region->drToDatr($dr);
             $ref  = $this->gateways[$gwEui]['c_ref'] ?? null;
             if (is_array($ref) && (time() - (int) ($ref['host'] ?? 0)) <= self::BEACON_REF_MAX_AGE) {
@@ -2436,7 +2445,8 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
         
 
         $dlTmstRx1 = $tmst + $region->getJoinAcceptDelay1() * 1000;
-        // 配对区域（CN470）RX1 用下行配对频点
+        // Join 下行 RX1 频点：固件已把 Join 信道收窄到符合常规信道计划公式的那几条，
+        // 因此直接用区域公式换算即可（CN470 = A20 的 483.9 + ch*0.2 两段式）。
         $rx1Freq = $region->getRx1Frequency($freq);
         $this->log(sprintf(
             "JOIN DOWNLINK RX1%s: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f (ul=%.3f) RX1datr=%s (dedup rssi=%d)",
@@ -2469,7 +2479,10 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
             ));
         } else {
             $dlTmstRx2 = $tmst + $region->getJoinAcceptDelay2() * 1000;
-            $rx2Freq = $region->getRx2Frequency() / 1e6;
+            // CN470 RP002：未入网的 OTAA 设备 RX2 与 RX1 同频（RegionCN470RxConfig 的
+            // NetworkActivation == ACTIVATION_TYPE_NONE 分支，两个窗口都用 CommonJoinChannels[ch].Rx1Frequency），
+            // 只有 DR 不同。其它区域（无 join_channels 表）回落到区域默认 RX2。
+            $rx2Freq = $region->hasJoinChannels() ? $rx1Freq : ($region->getRx2Frequency() / 1e6);
             $rx2Datr = $region->drToDatr($region->getRx2DataRate());
             $this->log(sprintf(
                 "JOIN DOWNLINK RX2%s: dl_tmst_rx2=%d RX2freq=%.3f RX2datr=%s",
@@ -2510,7 +2523,7 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
 
 
 
-    private function enqueueClassADownlink(string $gwEui, string $peer, string $phy, int $ulTmst, Region $region, float $rx1Freq, string $rx1Datr): int
+    private function enqueueClassADownlink(string $gwEui, string $peer, string $phy, int $ulTmst, Region $region, float $rx1Freq, string $rx1Datr, int $rx2FreqHz = 0): int
     {
         // 配对区域（CN470）RX1 用下行配对频点，而非上行同频
         $rx1Freq = $region->getRx1Frequency($rx1Freq);
@@ -2521,7 +2534,9 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
         $airtimeUs = $this->uplinkAirtimeUs($phy, $rx1Datr, $region);
         if ($airtimeUs <= $gapUs - 20000) {
             $rx2Tmst = $ulTmst + $region->getReceiveDelay2() * 1000;
-            $this->enqueueDownlink($gwEui, $peer, $phy, $rx2Tmst, $region->getRx2Frequency() / 1e6, $region->drToDatr($region->getRx2DataRate()), false);
+            // 设备级 RX2 频点优先（CN470 OTAA 入网时按 Join 信道号写入），否则用区域默认
+            $rx2FreqMHz = $rx2FreqHz > 0 ? ($rx2FreqHz / 1e6) : ($region->getRx2Frequency() / 1e6);
+            $this->enqueueDownlink($gwEui, $peer, $phy, $rx2Tmst, $rx2FreqMHz, $region->drToDatr($region->getRx2DataRate()), false);
         } else {
             $this->log(sprintf(
                 "CLASS A DOWNLINK RX2 SKIPPED (airtime=%.0fus >= gap=%.0fus, 避免与 RX1 发射尾部冲突导致 MIC 损坏)",

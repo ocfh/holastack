@@ -518,8 +518,8 @@ class MacCommands
                 // payload = CID(1) + Frequency(3, 单位 100Hz) + DR(1)
                 $freqHz = self::unpackFreq(substr($pending, 1, 3)) * 100;
                 $dr = ord($pending[4]) & 0x0F;
-                $device['ping_slot_freq'] = $freqHz;
-                $device['ping_slot_dr'] = $dr;
+                $device['class_b_ping_slot_freq'] = $freqHz;
+                $device['class_b_ping_slot_dr'] = $dr;
             }
             self::clearError($device, self::CID_PING_SLOT_CHANNEL_REQ);
             self::clearPending($device, self::CID_PING_SLOT_CHANNEL_REQ);

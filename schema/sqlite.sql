@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS devices (
     last_gw_id TEXT DEFAULT '',
     ping_period INTEGER NOT NULL DEFAULT 0,
     beacon_epoch INTEGER NOT NULL DEFAULT 0,
+    class_b_ping_slot_dr INTEGER NOT NULL DEFAULT 0,
+    class_b_ping_slot_freq INTEGER NOT NULL DEFAULT 0,
     -- MAC command / ADR session state
     adr INTEGER NOT NULL DEFAULT 1,
     dr INTEGER NOT NULL DEFAULT 0,

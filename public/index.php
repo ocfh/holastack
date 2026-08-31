@@ -699,6 +699,17 @@ function handleAppApi(string $method, string $path): array
         }
         return WebApp::getGateway($gwId);
     };
+
+    // 应用 API 分页辅助（与 handleApi 一致，否则 /v1/devices/{dev_eui}/uplinks 等会 500）
+    $limitOf  = static function (string $key) use ($get): int {
+        $n = (int) ($get[$key] ?? 50);
+        return max(1, min($n, 500));
+    };
+    $offsetOf = static function (string $key) use ($get): int {
+        $n = (int) ($get[$key] ?? 0);
+        return max(0, $n);
+    };
+
     $gatewayView = static function (array $g): array {
         $timeout = time() - WebApp::GW_OFFLINE_TIMEOUT;
         return [

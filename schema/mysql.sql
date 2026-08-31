@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS devices (
     altitude DOUBLE DEFAULT 0,
     ping_period INT NOT NULL DEFAULT 0,
     beacon_epoch INT NOT NULL DEFAULT 0,
+    class_b_ping_slot_dr INT NOT NULL DEFAULT 0,
+    class_b_ping_slot_freq INT NOT NULL DEFAULT 0,
     -- MAC command / ADR session state
     adr TINYINT NOT NULL DEFAULT 1,
     dr INT NOT NULL DEFAULT 0,

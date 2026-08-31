@@ -73,32 +73,62 @@ class Region
             ],
         ],
         'CN470' => [
-            'rx2_frequency' => 505300000,
-            'rx2_dr' => 0,
+            // RP002-1.0.1（L2 1.0.4 / RP 2-1.0.1）通道计划 Type A / 20 MHz（简称 A20）。
+            // ⚠️ 上行分【两段】，不是连续的 470.3+0.2N：
+            //   上行 ch0..31 : 470.3 + ch*0.2        → 470.3 ~ 476.5 MHz（TX1 段）
+            //   上行 ch32..63: 503.5 + (ch-32)*0.2   → 503.5 ~ 509.7 MHz（TX2 段，500MHz 频段）
+            // 下行只有一段，按同一个 ch 号映射：
+            //   下行 ch0..31 : 483.9 + ch*0.2        → 483.9 ~ 490.1 MHz
+            //   下行 ch32..63: 490.3 + (ch-32)*0.2   → 490.3 ~ 496.5 MHz
+            // 依据：Middlewares/.../Mac/Region/RegionCN470A20.c
+            //       RegionCN470A20InitializeChannels() / RegionCN470A20GetRx1Frequency()
+            // 旧版 RP001 的 96 信道（下行 500.3 起）已废弃，勿再使用。
+            'rx2_frequency' => 486900000,
+            'rx2_dr' => 1,
             'beacon_frequency' => 508300000,
             'beacon_dr' => 2,
             'beacon_rfu1' => 3,
             'beacon_rfu2' => 1,
             'beacon_nb_channels' => 8,
             'beacon_channel_step' => 200000,
-            'receive_delay1' => 5000,
-            'receive_delay2' => 6000,
+            // 数据上行的 RX1/RX2 延迟是标准值 1s/2s（实测：txDone 22.901s → RX_1 23.878s、RX_2 24.906s）。
+            // 只有 Join 请求才用 5s/6s（join_accept_delay），二者不可混用。
+            'receive_delay1' => 1000,
+            'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
             'join_accept_delay2' => 6000,
             'rx1_dr_offset' => 0,
             'cf_list' => null,
             'max_ul_dr' => 5,
+            // OTAA 设备入网后的 RX2 频点 = 本表[入网时使用的 Join 信道号 % 8]
+            // 依据：RegionCN470A20.h CN470_A20_RX_WND_2_FREQ_OTAA + RegionCN470A20GetRx2Frequency()
+            'rx2_frequency_otaa' => [485.3, 486.9, 488.5, 490.1, 491.7, 493.3, 494.0, 496.5],
+
+            // Join 信道表（[上行频点 MHz, 下行 RX1 频点 MHz]）。
+            // 固件侧已把 CN470_JOIN_CHANNELS 掩码收窄为 { 0x000F, 0x0000 }，只用 CN470_COMMON_JOIN_CHANNELS
+            // 的前 4 条（RegionCN470.h）。这 4 条的下行恰好满足常规 A20 公式 483.9 + ch*0.2：
+            //   470.9(ch=3)→484.5  472.5(ch=11)→486.1  474.1(ch=19)→487.7  475.7(ch=27)→489.3
+            // 若固件掩码改回 20 条全开，需同步补回后 16 条（其中 479.9/499.9 为上下行同频）。
+            'join_channels' => [
+                [470.9, 484.5], [472.5, 486.1], [474.1, 487.7], [475.7, 489.3],
+            ],
             'rx1' => [
-                // CN470：下行 RX1 用「配对频点」而非上行同频
-                // 上行 96 信道 470.3~489.3 MHz（步进 0.2 MHz）→ 下行按上行信道号 %48 映射到 500.3~509.7 MHz
-                // 居民抄表应用可用信道：0~5、39~44、78~95；6~38 与 45~77 由国家电网保留，默认禁用
+                // CN470 下行 RX1 用「配对频点」而非上行同频，A20 计划分两段映射（见上方注释）。
                 // 注意：本设备固件把 RECEIVE_DELAY1/2 与 JOIN_ACCEPT_DELAY1/2 的语义对调了——
                 // 数据下行 RX1 实际在 txDone 后 ~5s 开窗（非标准 1s），故这里 receive_delay 也取 5000/6000 迁就设备；
                 // 若以后接标准设备（1s）需改回 1000/2000。
-                'type' => 'paired',
-                'ul_start' => 470.3, 'ul_step' => 0.2,
-                'dl_start' => 500.3, 'dl_step' => 0.2, 'dl_count' => 48,
+                'type' => 'cn470_a20',
+                // 上行两段：ch0..31 从 ul_start 起，ch32..63 从 ul_start2 起（500MHz 频段）
+                'ul_start' => 470.3, 'ul_step' => 0.2, 'ul_count' => 64,
+                'ul_start2' => 503.5,
+                'dl_start' => 483.9, 'dl_step' => 0.2,
+                'dl_split' => 32, 'dl_start2' => 490.3,
             ],
+            // Class C 的 RX_C 频点必须用「区域默认 RX2」(486.9)，不能用设备级 rx2_frequency。
+            // 依据 LoRaMac.c:4557 —— Reset 时 RxCChannel.Frequency = PHY_DEF_RX2_FREQUENCY；
+            // 只有切回 Class A 才会把 RxCChannel 同步成 Rx2Channel（LoRaMac.c:2544）。
+            // 而 CN470 入网后 Rx2Channel 会被改成 OTAA 值（485.3），与 RX_C 不同。
+            'rx2_class_c_ignores_device' => true,
             'data_rates' => [
                 0 => ['sf' => 12, 'bw' => 125, 'desc' => 'SF12BW125'],
                 1 => ['sf' => 11, 'bw' => 125, 'desc' => 'SF11BW125'],
@@ -372,13 +402,56 @@ class Region
     public function getRx2DataRate(): int { return (int) $this->cfg['rx2_dr']; }
 
     /**
+     * Class C 下行（RX_C）是否必须忽略设备级 rx2_frequency，直接用区域默认 RX2。
+     * CN470 为 true：LoRaMac.c 在 Reset 时把 RxCChannel.Frequency 设为 PHY_DEF_RX2_FREQUENCY，
+     * 只有切回 Class A 才同步成 Rx2Channel；而入网后 Rx2Channel 会变成 OTAA 值，二者不同。
+     */
+    public function classCIgnoresDeviceRx2(): bool
+    {
+        return (bool) ($this->cfg['rx2_class_c_ignores_device'] ?? false);
+    }
+
+    /**
      * RX1 下行频点。多数区域与上行同频；配对区域（如 CN470）按下行频段换算。
      * @param float $ulFreqMHz 上行频点（MHz）
      */
     public function getRx1Frequency(float $ulFreqMHz): float
     {
         $r = $this->cfg['rx1'] ?? null;
-        if (!$r || ($r['type'] ?? 'same') !== 'paired') {
+        if (!$r) {
+            return $ulFreqMHz;
+        }
+        $type = $r['type'] ?? 'same';
+
+        // RP002-1.0.1 CN470 Type A / 20MHz：上行分两段，下行按同一个 ch 号映射
+        if ($type === 'cn470_a20') {
+            $step  = (float) ($r['ul_step'] ?: 0.2);
+            $count = max(1, (int) ($r['ul_count'] ?? 64));
+            $split = (int) ($r['dl_split'] ?? 32);
+            $dlStep = (float) ($r['dl_step'] ?: 0.2);
+            $start2 = (float) ($r['ul_start2'] ?? 0);
+            // 500MHz 段（TX2）：ch = split + (freq - ul_start2)/step
+            if ($start2 > 0 && $ulFreqMHz >= $start2 - $step / 2) {
+                $ch = (int) round(($ulFreqMHz - $start2) / $step);
+                $max = $count - 1 - $split;
+                if ($ch < 0) {
+                    $ch = 0;
+                } elseif ($ch > $max) {
+                    $ch = $max;
+                }
+                return (float) $r['dl_start2'] + $ch * $dlStep;
+            }
+            // 470MHz 段（TX1）：ch = (freq - ul_start)/step
+            $ch = (int) round(($ulFreqMHz - (float) $r['ul_start']) / $step);
+            if ($ch < 0) {
+                $ch = 0;
+            } elseif ($ch > $split - 1) {
+                $ch = $split - 1;
+            }
+            return (float) $r['dl_start'] + $ch * $dlStep;
+        }
+
+        if ($type !== 'paired') {
             return $ulFreqMHz;
         }
         $idx = (int) round(($ulFreqMHz - (float) $r['ul_start']) / (float) $r['ul_step']);
@@ -388,6 +461,55 @@ class Region
             $dlIdx += $count;
         }
         return (float) $r['dl_start'] + $dlIdx * (float) $r['dl_step'];
+    }
+
+    /**
+     * 本区域是否为「未入网 OTAA 设备 RX1/RX2 同频」的区域（RP002 CN470 的行为）。
+     */
+    public function hasJoinChannels(): bool
+    {
+        return is_array($this->cfg['join_channels'] ?? null) && count($this->cfg['join_channels']) > 0;
+    }
+
+    /**
+     * 未入网 OTAA 设备的 Join 信道表查找（RegionCN470.h CN470_COMMON_JOIN_CHANNELS）。
+     * @return array [joinChannelIndex, rx1FreqMHz]；查不到时 index = -1 并回落到常规 RX1 频点
+     */
+    public function findJoinChannel(float $ulFreqMHz): array
+    {
+        $tbl = $this->cfg['join_channels'] ?? null;
+        if (is_array($tbl)) {
+            foreach ($tbl as $i => $row) {
+                if (abs((float) $row[0] - $ulFreqMHz) < 0.05) {
+                    return [(int) $i, (float) $row[1]];
+                }
+            }
+        }
+        return [-1, $this->getRx1Frequency($ulFreqMHz)];
+    }
+
+    /**
+     * Join Accept 的 RX1（也是 RX2）频点，单位 MHz。
+     * 未入网的 OTAA 设备 RX1/RX2 都监听 join_channels 表里同一行的 Rx1Frequency
+     * （RegionCN470.c RegionCN470RxConfig 的 NetworkActivation == ACTIVATION_TYPE_NONE 分支）。
+     */
+    public function getJoinRx1Frequency(float $ulFreqMHz): float
+    {
+        return $this->findJoinChannel($ulFreqMHz)[1];
+    }
+
+    /**
+     * OTAA 设备入网后的 RX2 频点（Hz），由入网时使用的 Join 信道号决定
+     * （RegionCN470A20GetRx2Frequency：otaaFrequencies[joinChannelIndex]）。
+     */
+    public function getRx2FrequencyForJoinChannel(int $joinChannelIndex): int
+    {
+        $list = $this->cfg['rx2_frequency_otaa'] ?? null;
+        if ($joinChannelIndex >= 0 && is_array($list) && count($list) > 0) {
+            $n = count($list);
+            return (int) round((float) $list[$joinChannelIndex % $n] * 1000000);
+        }
+        return $this->getRx2Frequency();
     }
     
 
@@ -434,8 +556,11 @@ class Region
             case 'AU915':
                 return range(0, 63);
             case 'CN470':
-                // 居民抄表可用信道：0~5、39~44、78~95；6~38 / 45~77 由国家电网保留
-                return array_merge(range(0, 5), range(39, 44), range(78, 95));
+                // RP002-1.0.1 A20 计划共 64 条上行信道，默认全开：
+                //   ch0..31  → 470.3 ~ 476.5 MHz
+                //   ch32..63 → 503.5 ~ 509.7 MHz（500MHz 段，网关必须能覆盖，否则一半上行收不到）
+                // 旧版 RP001 的 96 信道「居民抄表 0~5/39~44/78~95」划分已不适用于本计划。
+                return range(0, 63);
             case 'AS923':
             case 'IN865':
             case 'KR920':
