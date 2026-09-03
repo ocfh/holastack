@@ -486,7 +486,10 @@ window.addEventListener('hashchange', ()=>{
 });
 
 
-const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways','uplinks','downlinks','events'];
+// 日志类页面（uplinks/downlinks/events）的自动刷新改由右下角悬浮下拉（views.js 的
+// logRefreshTimer / setLogRefresh）单独控制，避免和本全局 5s 定时器叠加导致下拉失效。
+// 这里只保留无下拉控件的概览/列表页。
+const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways'];
 function isSelMenuOpen(){
   const list = window.__selMenus || [];
   return list.some(m => m.wrap && m.wrap.classList.contains('open'));

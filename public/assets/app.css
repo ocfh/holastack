@@ -358,11 +358,16 @@
 /* ===== 位置地图 ===== */
 .map-legend{margin-left:auto;font-size:12.5px;color:var(--mut);display:flex;align-items:center;gap:14px}
 .map-wrap{display:grid;grid-template-columns:1fr 300px;gap:14px;align-items:stretch}
-.map-canvas{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px;box-shadow:0 6px 18px rgba(var(--shadow-rgba),.08);min-height:360px}
+.map-canvas{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px;box-shadow:0 6px 18px rgba(var(--shadow-rgba),.08);min-height:360px;position:relative;z-index:1}
 .map-svg{width:100%;height:auto;display:block;border-radius:8px}
 .map-side{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 6px 18px rgba(var(--shadow-rgba),.08)}
 .map-sum{display:flex;flex-direction:column;gap:6px;font-size:13px;margin-bottom:10px}
 .map-sum b{color:var(--acc)}
+/* 天地图 T.Map 图层切换按钮 */
+.tdt-layer-box{position:absolute;top:18px;right:18px;z-index:500;display:flex;gap:6px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:10px;padding:5px;box-shadow:0 4px 14px rgba(var(--shadow-rgba),.14)}
+.tdt-layer-box button{font:600 12px/1 -apple-system,system-ui,sans-serif;color:var(--mut);background:transparent;border:0;border-radius:7px;padding:6px 10px;cursor:pointer}
+.tdt-layer-box button:hover{color:var(--txt)}
+.tdt-layer-box button.on{color:#fff;background:var(--acc)}
 .dev-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--bg-subtle)}
 .dev-card-h{font-size:15px;font-weight:700;color:var(--txt)}
 .dev-rows{margin-top:10px;display:flex;flex-direction:column;gap:7px}

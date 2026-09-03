@@ -1077,7 +1077,7 @@ async function viewSettings(){
         <label>自定义瓦片 URL（选择「自定义瓦片 URL」时使用，Leaflet 占位符 {z}/{x}/{y}；含 token 可用 KEY 占位）</label>
         <input id="st_mapurl" value="${val('map_url')}" placeholder="https://your-tile-server.com/{z}/{x}/{y}.png?token=KEY">
         <label>API Key（下发给需要 Key 的提供商 / 填到上面的 KEY 占位）</label><input id="st_mapkey" value="${val('map_key')}" placeholder="粘贴地图提供商的访问令牌">
-        <p class="muted" style="margin:2px 0 0">内置无需 Key 的提供商（OpenStreetMap / CARTO / OpenTopo / 高德 / 腾讯 / Google）可直接使用；百度、Mapbox、MapTiler 及您自己的服务器需在 Key / URL 处填写。国内坐标系（高德/腾讯=GCJ-02，百度=BD-09）与设备侧 WGS84 坐标存在数十米偏移，属正常现象。</p>
+        <p class="muted" style="margin:2px 0 0">无需 Key 的国内底图：高德 / 腾讯（GCJ-02）可直接出图。天地图（矢量 / 影像）免费但需先在 <a href="https://console.tianditu.gov.cn/api/key" target="_blank" rel="noopener">tianditu.gov.cn</a> 申请 tk 并填到「API Key」。百度、Mapbox、MapTiler 及您自己的服务器也需 Key / URL。国内坐标系（高德/腾讯=GCJ-02，百度=BD-09，天地图=WGS84）与设备侧 WGS84 坐标存在数十米偏移，属正常现象。</p>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
         <button class="ghost" onclick="nav('dashboard')">${ICON.xMark}取消</button>
@@ -1221,8 +1221,9 @@ function restoreLogRefresh(){
   const v = state.view;
   if (!LOG_REFRESH_VIEWS.includes(v)) return;
   if (logRefreshTimer && logRefreshTarget === v) return;
-  let sec = 0;
-  try { const raw = localStorage.getItem('elw_refresh_'+v); sec = raw==null ? 0 : parseInt(raw,10); } catch(e){ sec = 0; }
+  // 未显式存储过时默认 10 秒（用户预期默认值）；已存储的值（含 0=停止刷新）一律沿用
+  let sec = 10;
+  try { const raw = localStorage.getItem('elw_refresh_'+v); sec = raw==null ? 10 : parseInt(raw,10); } catch(e){ sec = 10; }
   setLogRefresh(isNaN(sec) ? 0 : sec);
 }
 // 移动端悬浮主操作按钮（新建/清空日志），显示在右下角"回顶/回底"按钮上方；清空为红色
@@ -1661,6 +1662,10 @@ window.MAP_PROVIDERS = [
   { id:'opentopo', name:'OpenTopoMap',    needKey:0, sub:'abc',  maxZ:17, url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png' },
   { id:'gaode',    name:'高德（国内·GCJ-02）', needKey:0, sub:'1234', maxZ:19, url:'https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}' },
   { id:'tencent',  name:'腾讯（国内·GCJ-02）', needKey:0, sub:'0123', maxZ:19, url:'https://rt{s}.map.gtimg.com/tile?z={z}&x={x}&y={y}&styleid=3' },
+  { id:'tianditu-sdk', name:'天地图-官方JS API（免费·WGS84·可切图层）', needKey:1, sdk:'tianditu' },
+  { id:'tianditu', name:'天地图-矢量瓦片（Leaflet·免费·WGS84）', needKey:1, sub:'01234567', maxZ:18, url:'https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=KEY' },
+  { id:'tianditu-sat', name:'天地图-影像（国内·免费·WGS84）', needKey:1, sub:'01234567', maxZ:18, url:'https://t{s}.tianditu.gov.cn/DataServer?T=img_w&x={x}&y={y}&l={z}&tk=KEY' },
+  { id:'tianditu-ter', name:'天地图-地形（国内·免费·WGS84）', needKey:1, sub:'01234567', maxZ:18, url:'https://t{s}.tianditu.gov.cn/DataServer?T=ter_w&x={x}&y={y}&l={z}&tk=KEY' },
   { id:'google',   name:'Google Maps（境外）', needKey:0, maxZ:20, url:'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}' },
   { id:'baidu',    name:'百度（国内·BD-09，需 Key）', needKey:1, maxZ:19, url:'https://api.map.baidu.com/customimglite/tile?x={x}&y={y}&z={z}&scale=1&ak=KEY' },
   { id:'mapbox',   name:'Mapbox（需 Key）', needKey:1, maxZ:20, url:'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=KEY' },
@@ -1671,9 +1676,9 @@ function injectLeaflet(){
   return new Promise((res)=>{
     if (window.L && L.map && L.tileLayer){ res(); return; }
     const lk = document.createElement('link');
-    lk.rel = 'stylesheet'; lk.href = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(lk);
+    lk.rel = 'stylesheet'; lk.href = 'https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.css'; document.head.appendChild(lk);
     const sb = document.createElement('script');
-    sb.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+    sb.src = 'https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.js';
     sb.onload = () => res(); sb.onerror = () => res();
     document.head.appendChild(sb);
   });
@@ -1690,6 +1695,11 @@ async function renderLeafletMap(devs, gws, prov, mapKey){
   const map = L.map(canvas, { zoomControl:true }).setView([30, 105], 3);
   window.__leafletMap = map;
   L.tileLayer(url, { maxZoom: prov.maxZ||19, attribution: prov.name, subdomains: prov.sub?prov.sub.split(''):undefined }).addTo(map);
+  // 天地图：vec_w/img_w/ter_w 为底图（无注记），叠加 cva_w 矢量注记层显示地名/路名
+  if (prov.id && String(prov.id).indexOf('tianditu')===0){
+    L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk='+encodeURIComponent(mapKey||''),
+      { maxZoom: prov.maxZ||18, attribution:'天地图注记', subdomains:'01234567' }).addTo(map);
+  }
   const pts = [];
   (gws||[]).forEach(g=>{ if (!hasCoord(g)) return;
     L.circleMarker([+g.latitude, +g.longitude], { radius:6, color:'var(--acc)', fillColor:'var(--acc)', fillOpacity:.85 })
@@ -1705,6 +1715,94 @@ async function renderLeafletMap(devs, gws, prov, mapKey){
   const side = document.getElementById('mapSide');
   if (side) side.innerHTML = `<div class="map-sum"><div><b>${devs.length}</b> 设备（<b>${(devs||[]).filter(hasCoord).length}</b> 有坐标）</div><div><b>${gws.length}</b> 网关（<b>${(gws||[]).filter(hasCoord).length}</b> 有坐标）</div><div class="muted">提供商：${escHtml(prov.name)}｜点击标记查看信息</div></div>`;
 }
+/* ---------- 天地图官方 JS API（T.Map）渲染 ---------- */
+function tdtDot(color){
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18">'
+    + '<circle cx="9" cy="9" r="6.5" fill="'+color+'" stroke="#ffffff" stroke-width="2.5"/></svg>';
+  return new T.Icon({
+    iconUrl: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg),
+    iconSize: new T.Point(18, 18),
+    iconAnchor: new T.Point(9, 9)
+  });
+}
+function injectTiandituSdk(tk){
+  return new Promise((res) => {
+    if (!tk){ res(); return; }
+    if (window.T && T.Map && window.__tdtTk === tk){ res(); return; }
+    // tk 变化：清掉旧实例与旧脚本，避免拿到旧授权
+    try { if (window.__tdtMap && window.__tdtMap.destroy) window.__tdtMap.destroy(); } catch(e){}
+    window.__tdtMap = null; window.T = undefined;
+    document.querySelectorAll('script[data-tdt-sdk]').forEach(s => { try{ s.remove(); }catch(e){} });
+    const sb = document.createElement('script');
+    sb.setAttribute('data-tdt-sdk', '1');
+    sb.src = 'https://api.tianditu.gov.cn/api?v=4.0&tk=' + encodeURIComponent(tk);
+    sb.onload = () => { window.__tdtTk = tk; setTimeout(res, 60); };
+    sb.onerror = () => { window.__tdtTk = null; res(); };
+    document.head.appendChild(sb);
+    setTimeout(res, 12000); // 兜底超时，防网络挂起卡死
+  });
+}
+async function renderTiandituMap(devs, gws, tk){
+  await injectTiandituSdk(tk);
+  const canvas = document.getElementById('mapCanvas');
+  if (!canvas || !window.T || !T.Map) throw new Error('天地图 JS API 加载失败（请检查 API Key 是否有效）');
+  canvas.innerHTML = '';
+  canvas.style.height = '500px';
+  canvas.style.background = '#dfe3ea';
+  canvas.style.position = 'relative';
+  const map = new T.Map(canvas);
+  window.__tdtMap = map;
+
+  const pts = [];
+  const bind = (ll, html, color) => {
+    const m = new T.Marker(ll, { icon: tdtDot(color) });
+    map.addOverLay(m);
+    m.addEventListener('click', () => {
+      try { map.openInfoWindow(new T.InfoWindow(html, { offset: new T.Point(0, -10) }), ll); } catch(e){}
+    });
+  };
+  (gws || []).forEach(g => {
+    if (!hasCoord(g)) return;
+    const ll = new T.LngLat(+g.longitude, +g.latitude); pts.push(ll);
+    bind(ll, '<b>' + escHtml(g.name || g.gw_id || '') + '</b><br>网关', '#58A6FF');
+  });
+  (devs || []).forEach(d => {
+    if (!hasCoord(d)) return;
+    const ll = new T.LngLat(+d.longitude, +d.latitude); pts.push(ll);
+    const on = d.online === 'online';
+    bind(ll, '<b>' + escHtml(d.name || '') + '</b><br>' + (on ? '在线' : '离线') + ' · ' + (d.last_seen_fmt || ''),
+         on ? '#36d399' : '#f87272');
+  });
+
+  if (pts.length){
+    let minLa = 90, maxLa = -90, minLo = 180, maxLo = -180;
+    pts.forEach(p => { minLa = Math.min(minLa, p.lat); maxLa = Math.max(maxLa, p.lat);
+                       minLo = Math.min(minLo, p.lng); maxLo = Math.max(maxLo, p.lng); });
+    try { map.setViewport(new T.LngLatBounds(new T.LngLat(minLo, minLa), new T.LngLat(maxLo, maxLa))); }
+    catch(e){ try { map.centerAndZoom(pts[0], 13); } catch(e2){} }
+  } else {
+    map.centerAndZoom(new T.LngLat(105, 30), 3);
+  }
+
+  // 图层切换（矢量 / 影像 / 影像+注记 / 地形）
+  const box = document.createElement('div');
+  box.className = 'tdt-layer-box';
+  box.innerHTML = '<button data-t="TMAP_NORMAL_MAP" class="on">矢量</button>'
+    + '<button data-t="TMAP_SATELLITE_MAP">影像</button>'
+    + '<button data-t="TMAP_HYBRID_MAP">影像+注记</button>'
+    + '<button data-t="TMAP_TERRAIN_MAP">地形</button>';
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-t]'); if (!b) return;
+    const k = b.getAttribute('data-t');
+    if (typeof window[k] !== 'undefined'){ try { map.setMapType(window[k]); } catch(err){} }
+    box.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+  });
+  canvas.appendChild(box);
+
+  const side = document.getElementById('mapSide');
+  if (side) side.innerHTML = `<div class="map-sum"><div><b>${devs.length}</b> 设备（<b>${(devs||[]).filter(hasCoord).length}</b> 有坐标）</div><div><b>${gws.length}</b> 网关（<b>${(gws||[]).filter(hasCoord).length}</b> 有坐标）</div><div class="muted">提供商：天地图官方 JS API（WGS84，无偏移）｜点击标记查看信息</div></div>`;
+}
 async function viewMap(){
   document.getElementById('view').innerHTML = `
     <div class="view-head"><h2>${ICON[VIEW_ICONS['map']]||''}位置地图</h2>
@@ -1719,12 +1817,18 @@ async function viewMap(){
   try { const rg = await api('GET','/api/gateways'); gws = rg.data||[]; } catch(e){}
   state.mapDevs = devs; state.mapGws = gws;
   const set = await getMapSettings();
-  const prov = (window.MAP_PROVIDERS||[]).find(p=>p.id===set.map_provider);
+  const prov = (window.MAP_PROVIDERS||[]).find(p=>p.id===set.map_provider)
+            || (window.MAP_PROVIDERS||[]).find(p=>p.id==='gaode');
   // 自定义瓦片 URL：用站点设置里填写的 map_url 作为瓦片地址
   const tileUrl = (prov && prov.id==='custom') ? (set.map_url||'') : (prov && prov.url || '');
   const name = (prov && prov.id==='custom') ? '自定义瓦片 URL' : (prov ? prov.name : '');
-  if (prov && tileUrl){
-    try { await renderLeafletMap(devs, gws, {name, url:tileUrl, needKey:0, maxZ:prov.maxZ||19}, set.map_key||''); }
+  // 天地图：走官方 JS API（T.Map），需填 tk
+  if (prov && prov.id && String(prov.id).indexOf('tianditu')===0){
+    if (!set.map_key){ toast('天地图需在「设置→地图服务」填写 API Key','warn'); renderMap(devs, gws); }
+    else { try { await renderTiandituMap(devs, gws, set.map_key); }
+           catch(e){ console.error(e); toast('天地图加载失败：'+(e.message||e),'err'); renderMap(devs, gws); } }
+  } else if (prov && tileUrl){
+    try { await renderLeafletMap(devs, gws, {name, url:tileUrl, needKey:0, maxZ:prov.maxZ||19, id:prov.id}, set.map_key||''); }
     catch(e){ toast('地图加载失败，已回退内置简图','err'); renderMap(devs, gws); }
   } else if (prov && prov.id==='custom'){
     toast('已选择自定义瓦片 URL，但未填写地图 URL，改用内置简图','warn'); renderMap(devs, gws);

@@ -344,9 +344,29 @@ class NetworkServer
 
     private function saveGatewayStat(string $gwEui, array $stat): void
     {
+        $cols = ['last_seen=?', 'stats=?'];
+        $params = [time(), json_encode($stat), $gwEui];
+        // 网关 GPS 坐标：Semtech UDP stat 用 lati/long/alti；部分 forwarder 用 latitude/longitude/altitude
+        $lat = $stat['lati'] ?? $stat['latitude'] ?? null;
+        $lon = $stat['long'] ?? $stat['longitude'] ?? null;
+        $alt = $stat['alti'] ?? $stat['altitude'] ?? null;
+        if (is_numeric($lat) && is_numeric($lon) && abs((float) $lat) <= 90 && abs((float) $lon) <= 180) {
+            $cols[] = 'latitude=?';
+            $params[] = (float) $lat;
+            $cols[] = 'longitude=?';
+            $params[] = (float) $lon;
+            if (is_numeric($alt)) {
+                $cols[] = 'altitude=?';
+                $params[] = (float) $alt;
+            }
+            $this->log(sprintf(
+                "GW STAT GPS gw=%s lat=%s lon=%s alt=%s",
+                $gwEui, $lat, $lon, $alt === null ? 'n/a' : $alt
+            ));
+        }
         Database::execute(
-            "UPDATE gateways SET last_seen=?, stats=? WHERE gw_id=?",
-            [time(), json_encode($stat), $gwEui]
+            "UPDATE gateways SET " . implode(', ', $cols) . " WHERE gw_id=?",
+            $params
         );
     }
 
@@ -1413,6 +1433,43 @@ class NetworkServer
                 $telemetry['latitude'] = $lat;
                 $telemetry['longitude'] = $lon;
                 $telemetry['altitude'] = $alt;
+            }
+        }
+
+        // Cayenne LPP GPS（信道 0x88）：设备 profile 选用 CAYENNE_LPP 时，解析 GPS 写入设备坐标
+        $dpId = (int) ($device['device_profile_id'] ?? 0);
+        if ($dpId > 0) {
+            $dp = Database::fetch("SELECT payload_codec_runtime FROM device_profiles WHERE id=?", [$dpId]);
+            if ($dp && ($dp['payload_codec_runtime'] ?? '') === \holastack\Integration\Codec::RUNTIME_CAYENNE_LPP) {
+                $fields = \holastack\Integration\Codec::decodeUplink(
+                    \holastack\Integration\Codec::RUNTIME_CAYENNE_LPP,
+                    bin2hex($decryptedBin)
+                );
+                if (is_array($fields)) {
+                    foreach ($fields as $f) {
+                        if (($f['name'] ?? '') === 'gps' && is_array($f['value'] ?? null)) {
+                            $glat = $f['value']['latitude'] ?? null;
+                            $glon = $f['value']['longitude'] ?? null;
+                            $galt = $f['value']['altitude'] ?? null;
+                            if (is_numeric($glat) && is_numeric($glon) && abs((float) $glat) <= 90 && abs((float) $glon) <= 180) {
+                                if (!in_array('latitude=?', $upd, true)) {
+                                    $upd[] = 'latitude=?';
+                                    $params[] = (float) $glat;
+                                    $upd[] = 'longitude=?';
+                                    $params[] = (float) $glon;
+                                    $telemetry['latitude'] = (float) $glat;
+                                    $telemetry['longitude'] = (float) $glon;
+                                }
+                                if (is_numeric($galt) && !in_array('altitude=?', $upd, true)) {
+                                    $upd[] = 'altitude=?';
+                                    $params[] = (float) $galt;
+                                    $telemetry['altitude'] = (float) $galt;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
             }
         }
 
