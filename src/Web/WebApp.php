@@ -1016,8 +1016,10 @@ class WebApp
             }
         }
         Database::execute(
-            "INSERT INTO gateways (gw_id, tenant_id, name, region, created_at, last_seen, ip, rf_config) VALUES (?,?,?,?,?,?,?,?)",
-            [$gwId, $tid, $p['name'], $region, time(), 0, '', self::rfConfigJson($p['rf_config'] ?? null)]
+            "INSERT INTO gateways (gw_id, tenant_id, name, region, created_at, last_seen, ip, rf_config, latitude, longitude, altitude) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [$gwId, $tid, $p['name'], $region, time(), 0, '', self::rfConfigJson($p['rf_config'] ?? null),
+             self::parseCoord($p['latitude'] ?? null), self::parseCoord($p['longitude'] ?? null),
+             self::parseAlt($p['altitude'] ?? null)]
         );
         return ['gw_id' => $gwId];
     }
@@ -1033,9 +1035,12 @@ class WebApp
         if ($region && !in_array($region, Region::supported(), true)) {
             return ['error' => 'unsupported region'];
         }
+        // 手动 GPS 坐标：不依赖网关 stat 上报（很多网关 forwarder 不发 GPS）
         Database::execute(
-            "UPDATE gateways SET name=?, region=?, rf_config=? WHERE gw_id=?",
-            [$p['name'] ?? '', $region, self::rfConfigJson($p['rf_config'] ?? null), $gwId]
+            "UPDATE gateways SET name=?, region=?, rf_config=?, latitude=?, longitude=?, altitude=? WHERE gw_id=?",
+            [$p['name'] ?? '', $region, self::rfConfigJson($p['rf_config'] ?? null),
+             self::parseCoord($p['latitude'] ?? null), self::parseCoord($p['longitude'] ?? null),
+             self::parseAlt($p['altitude'] ?? null), $gwId]
         );
         return ['gw_id' => $gwId];
     }
@@ -1056,6 +1061,30 @@ class WebApp
             return json_encode($v, JSON_UNESCAPED_UNICODE);
         }
         return '';
+    }
+
+    /**
+     * 解析经纬度：空/非法返回 null（前端 hasCoord 视为「无坐标」）。
+     */
+    private static function parseCoord($v): ?float
+    {
+        if ($v === null || $v === '') {
+            return null;
+        }
+        $f = (float) $v;
+        return is_finite($f) ? $f : null;
+    }
+
+    /**
+     * 解析海拔（米）：空/非法返回 null。
+     */
+    private static function parseAlt($v): ?float
+    {
+        if ($v === null || $v === '') {
+            return null;
+        }
+        $f = (float) $v;
+        return is_finite($f) ? $f : null;
     }
 
     public static function deleteGateway(string $gwId): array

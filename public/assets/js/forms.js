@@ -157,14 +157,25 @@ window.rfBandChange = function(){
 }
 function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   ${rfHtml(rfDefault('CN470'))}
+  <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+    <div style="font-weight:600;margin-bottom:6px">位置 GPS（手动填写，不依赖网关上报）</div>
+    <div class="row"><div><label>纬度 latitude</label><input id="m_lat" type="number" step="any" placeholder="如 22.60271"></div><div><label>经度 longitude</label><input id="m_lon" type="number" step="any" placeholder="如 113.84091"></div><div><label>海拔 altitude (m)</label><input id="m_alt" type="number" step="any" placeholder="如 61"></div></div>
+  </div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveGateway)">保存</button></div>`); }
-async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region'),rf_config:rfRead()}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region'),rf_config:rfRead(),latitude:v('m_lat')||null,longitude:v('m_lon')||null,altitude:v('m_alt')||null}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function editGateway(gwId){ const r = await api('GET','/api/gateways'); const g=(r.data||[]).find(x=>x.gw_id===gwId); if(!g)return;
   let cfg = null; try{ if(g.rf_config) cfg = JSON.parse(g.rf_config); }catch(e){}
+  const latV = (g.latitude && +g.latitude!==0) ? ('value="'+Number(g.latitude).toFixed(6)+'"') : '';
+  const lonV = (g.longitude && +g.longitude!==0) ? ('value="'+Number(g.longitude).toFixed(6)+'"') : '';
+  const altV = (g.altitude && +g.altitude!==0) ? ('value="'+Number(g.altitude)+'"') : '';
   openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
   ${rfHtml(cfg || rfDefault(g.region || 'CN470'))}
+  <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+    <div style="font-weight:600;margin-bottom:6px">位置 GPS（手动填写，不依赖网关上报）</div>
+    <div class="row"><div><label>纬度 latitude</label><input id="m_lat" type="number" step="any" placeholder="如 22.60271" ${latV}></div><div><label>经度 longitude</label><input id="m_lon" type="number" step="any" placeholder="如 113.84091" ${lonV}></div><div><label>海拔 altitude (m)</label><input id="m_alt" type="number" step="any" placeholder="如 61" ${altV}></div></div>
+  </div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveGatewayEdit('${gwId}'))">保存</button></div>`); }
-async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region'),rf_config:rfRead()}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region'),rf_config:rfRead(),latitude:v('m_lat')||null,longitude:v('m_lon')||null,altitude:v('m_alt')||null}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
 function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f">

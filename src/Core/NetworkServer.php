@@ -1222,6 +1222,9 @@ class NetworkServer
         } else {
             $fopts = $fullMac;
         }
+        // 回写 MAC 状态：class B 切换、DeviceTime 有效性、ping slot 周期/频点/DR、
+        // ADR(dr/tx_power/nb_trans)、pending_mac 等，确保重启或跨上行后状态不丢失。
+        $this->persistDeviceMacState($device);
         return ['fopts' => $fopts, 'port0' => $port0];
     }
 
@@ -1232,7 +1235,7 @@ class NetworkServer
             'enabled_uplink_channel_indices', 'pending_mac', 'mac_command_error_count',
             'uplink_adr_history', 'class', 'battery', 'margin', 'relay_state', 'dev_status_req_at',
             'device_time_valid', 'device_time', 'beacon_epoch',
-            'class_b_ping_slot_freq', 'class_b_ping_slot_dr',
+            'class_b_ping_slot_freq', 'class_b_ping_slot_dr', 'class_b_ping_slot_periodicity',
         ];
         $upd = [];
         $params = [];
@@ -1649,6 +1652,7 @@ class NetworkServer
                 'beacon_epoch'     => (int) $dl['beacon_epoch'],
                 'class_b_ping_slot_freq' => (int) ($dl['class_b_ping_slot_freq'] ?? 0),
                 'class_b_ping_slot_dr'   => (int) ($dl['class_b_ping_slot_dr'] ?? 0),
+                'class_b_ping_slot_periodicity' => (int) ($dl['class_b_ping_slot_periodicity'] ?? 0),
                 'region'           => $dl['region'],
                 'fcnt_down'        => (int) $dl['dev_fcnt_down'],
                 'last_seen'        => (int) $dl['last_seen'],
@@ -1854,14 +1858,23 @@ class NetworkServer
         if ($gpsNow <= 0) {
             $gpsNow = \holastack\Core\MacCommands::gpsSecondsNow();
         }
-        $period = (int) ($device['ping_period'] > 0 ? $device['ping_period'] : ELW_PING_PERIOD);
-        if ($period <= 0) {
-            $period = ELW_PING_PERIOD;
+        // ping 周期指数：优先用设备经 PingSlotInfoReq 上报的 periodicity（0..7），
+        // 否则回退到配置（ELW_PING_PERIOD / devices.ping_period，视为指数；若像秒数则反推）。
+        // 规范：一个 ping 周期 = 2^(7+periodicity) 个 30ms 时隙，NS 必须与设备端一致，否则窗口错位。
+        $periodicity = (int) ($device['class_b_ping_slot_periodicity'] ?? -1);
+        if ($periodicity < 0 || $periodicity > 7) {
+            $pp = (int) ($device['ping_period'] ?? ELW_PING_PERIOD);
+            if ($pp >= 0 && $pp <= 7) {
+                $periodicity = $pp;
+            } elseif ($pp > 7) {
+                // 配置给的是秒数：反推指数 2^(7+exp)=秒*1000/30
+                $periodicity = max(0, min(7, (int) round(log($pp * 1000 / 30, 2) - 7)));
+            } else {
+                $periodicity = 0;
+            }
         }
-        $pingPeriod30 = (int) round($period * 1000 / 30);
-        if ($pingPeriod30 <= 0) {
-            $pingPeriod30 = 1;
-        }
+        $pingPeriod30 = (int) (1 << (7 + $periodicity));   // = 2^(7+periodicity) 个 30ms 时隙，与设备端一致
+        $periodSec = $pingPeriod30 * 0.030;                 // 一个 ping 周期的秒数（用于向后推进到下一窗口）
         $ref = (int) ($device['beacon_epoch'] ?? 0);
         if ($ref <= 0 || ($ref % Beacon::BEACON_PERIOD) !== 0) {
             $ref = intdiv($gpsNow, Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD;
@@ -1869,23 +1882,25 @@ class NetworkServer
         $nextBeacon = (int) ceil(($gpsNow - $ref) / Beacon::BEACON_PERIOD) * Beacon::BEACON_PERIOD + $ref;
         $devAddrHex = sprintf('%08s', $device['dev_addr'] ?? '00000000');
         $devAddr = unpack('N', hex2bin($devAddrHex))[1];
-        // ping-slot 偏移须用设备真实密钥派生：1.1 用 FNwkSIntKey，1.0.x 用 NwkSKey，
-        // 与设备端一致，否则 NS 算出的时隙与设备 Rx 窗口错位（此前误用全零密钥）。
+        // ping-offset 密钥：1.0.x 用规范 §13.2 规定的全零固定密钥；1.1 用 FNwkSIntKey。
         $macVersion = (string) ($device['mac_version'] ?? '1.0.3');
-        $pingKey = (strncmp($macVersion, '1.1', 3) === 0)
-            ? (string) ($device['f_nwk_s_int_key'] ?? '')
-            : (string) ($device['nwk_s_key'] ?? '');
-        $pingKeyBin = (strlen($pingKey) === 32) ? hex2bin($pingKey) : '';
-        if ($pingKeyBin === '') {
-            $this->log("CLASSB WARN dev#{$device['id']} 缺少 {$macVersion} 的 ping 派生密钥，ping-slot 与设备端可能失配");
+        $is11 = strncmp($macVersion, '1.1', 3) === 0;
+        $pingKeyBin = '';
+        if ($is11) {
+            $fk = (string) ($device['f_nwk_s_int_key'] ?? '');
+            $pingKeyBin = (strlen($fk) === 32) ? hex2bin($fk) : '';
+            if ($pingKeyBin === '') {
+                $this->log("CLASSB WARN dev#{$device['id']} 缺少 1.1 的 FNwkSIntKey，ping-slot 与设备端可能失配");
+            }
         }
-        $pingOffset30 = Beacon::computePingOffset($nextBeacon, $devAddr, $pingPeriod30, $pingKeyBin);
+        // 1.0.x 传空密钥 -> computePingOffset 用全零固定密钥（符合规范 §13.2）
+        $pingOffset30 = Beacon::computePingOffset($nextBeacon, $devAddr, $pingPeriod30, $pingKeyBin, $is11);
         
 
         $baseUnix = $now + ($nextBeacon - $gpsNow);
         $slotUnix = $baseUnix + ($pingOffset30 * 30) / 1000.0;
         while ($slotUnix < $now) {
-            $slotUnix += $period;
+            $slotUnix += $periodSec;
         }
         return (int) ceil($slotUnix);
     }

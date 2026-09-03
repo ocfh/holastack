@@ -117,6 +117,7 @@ class Database
                 ['devices', 'rx_delay', 'INTEGER NOT NULL DEFAULT 1'],
                 ['devices', 'class_b_ping_slot_dr', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'class_b_ping_slot_freq', 'INTEGER NOT NULL DEFAULT 0'],
+                ['devices', 'class_b_ping_slot_periodicity', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'device_time', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'device_time_valid', 'INTEGER NOT NULL DEFAULT 0'],
                 ['devices', 'max_supported_tx_power_index', 'INTEGER NOT NULL DEFAULT 0'],

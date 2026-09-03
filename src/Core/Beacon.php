@@ -101,20 +101,26 @@ class Beacon
 
 
     /**
-     * 计算 ping slot 偏移（LoRaWAN 规范 18.x）。
-     * 加密密钥：1.0.x 用 NwkSKey；1.1 用 FNwkSIntKey。此前误用全零密钥，会导致
-     * NS 算出的 ping slot 时间窗与设备端不一致，下行永远错过窗口。
-     * @param string $key 16 字节原始密钥（hex2bin 后的二进制）
+     * 计算 ping slot 偏移（LoRaWAN 规范 §13.2）。
+     * - 块布局：beaconTime(4, LE) | DevAddr(4, LE) | 0x0000(2) | pad(6)，固定 16 字节。
+     * - 密钥：1.0.x 用规范规定的全零固定密钥；1.1 用 FNwkSIntKey。
+     *   此前误把 1.0.x 的密钥改成 NwkSKey，导致 NS 算出的 ping-offset 与设备端不一致，下行永远错过窗口。
+     * - 1.1 的结果需先 & 0x0FFF 再取模（规范 §13.2 1.1 版）；1.0.x 不掩码（与设备端一致）。
+     * @param string $key 16 字节原始密钥（hex2bin 后的二进制）；传空串表示 1.0.x 全零密钥
+     * @param bool $mask12 是否进行 &0x0FFF 掩码（1.1 为 true）
      */
-    public static function computePingOffset(int $gpsSeconds, int $devAddr, int $pingPeriod30, string $key = ''): int
+    public static function computePingOffset(int $gpsSeconds, int $devAddr, int $pingPeriod30, string $key = '', bool $mask12 = false): int
     {
         if ($pingPeriod30 <= 0) {
             $pingPeriod30 = 1;
         }
-        $block = pack('V', $gpsSeconds & 0xFFFFFFFF) . pack('V', $devAddr & 0xFFFFFFFF) . str_repeat("\x00", 8);
+        $block = pack('V', $gpsSeconds & 0xFFFFFFFF) . pack('V', $devAddr & 0xFFFFFFFF) . "\x00\x00" . str_repeat("\x00", 6);
         $k = (strlen($key) === 16) ? $key : str_repeat("\x00", 16);
         $cipher = \holastack\Crypto\AES::ecbEncrypt($k, $block);
         $result = (ord($cipher[0]) & 0xFF) + ((ord($cipher[1]) & 0xFF) << 8);
+        if ($mask12) {
+            $result &= 0x0FFF;
+        }
         return $result % $pingPeriod30;
     }
 }
