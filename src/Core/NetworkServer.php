@@ -8,6 +8,9 @@ use holastack\Core\MacCommands;
 use holastack\Core\Adr;
 use holastack\Core\LoRaWANVersion;
 use holastack\Storage\DeviceProfile;
+use holastack\Storage\ThingModel;
+use holastack\Storage\Alert;
+use holastack\Storage\ScheduledTask;
 use holastack\Integration\Integration;
 use holastack\Core\Multicast;
 use holastack\Core\Roaming;
@@ -199,6 +202,7 @@ class NetworkServer
         $this->lastDlCheck = time();
         $this->runSafe('join buffer', function (): void { $this->flushJoinBuffer(); });
         $this->runSafe('scheduled downlinks', function (): void { $this->processScheduledDownlinks(); });
+        $this->runSafe('scheduled tasks', function (): void { $this->processScheduledTasks(); });
         $this->runSafe('scheduled multicast', function (): void { $this->processScheduledMulticast(); });
         $this->runSafe('beacon scheduler', function (): void { $this->processBeaconScheduler(); });
         $this->runSafe('scheduled fuota', function (): void { $this->processScheduledFuota(); });
@@ -734,11 +738,27 @@ class NetworkServer
 
             $mac = $this->processMacAndAdr($device, $region, $tmst, $freq, $datr, $lsnr, $fcnt, $p, $decrypted);
             $this->persistDeviceMacState($device);
+
+            $decodedModel = $this->decodeThingModel($device, $decrypted, $fcnt);
         } catch (\Throwable $e) {
             $this->log("WARN uplink MAC/telemetry error devAddr=$devAddrHex class={$device['class']} mac_version={$ks['mac_version']}: " . $e->getMessage());
             $this->logEvent('uplink', 'warn', "上行 MAC/遥测处理异常（已跳过，通知仍下发）devAddr=$devAddrHex: " . $e->getMessage(), $gwEui, $device['id'], $device['app_id'], $this->buildDataUpLog($phy, $tmst, $freq, $datr, $rssi, $lsnr, $gwEui, $rxTime));
             $telemetry = [];
+            $decodedModel = [];
             $mac = ['fopts' => '', 'port0' => ''];
+        }
+
+        if ($decodedModel !== []) {
+            try {
+                Alert::evaluate($device, $decodedModel);
+            } catch (\Throwable $e) {
+                $this->log("WARN alert evaluate dev#{$device['id']}: " . $e->getMessage());
+            }
+            try {
+                Automation::evaluateLinkages($device, $decodedModel);
+            } catch (\Throwable $e) {
+                $this->log("WARN automation evaluate dev#{$device['id']}: " . $e->getMessage());
+            }
         }
 
         
@@ -1333,10 +1353,16 @@ class NetworkServer
 
     private function enqueueClassCDownlink(array $device, Region $region, string $downPhy, int $ulTmst, float $ulFreq, string $ulDatr, string $gwEui, string $peer): array
     {
-        // CN470：Class C 的 RX_C 固定在「区域默认 RX2」(486.9)，设备级 rx2_frequency 是入网后
-        // 的 OTAA 值(485.3)，只对 Class A 的 RX2 窗口有效，用于 RX_C 会全部丢包。
+        // 2026-09-04 修改：原注释「Class C 的 RX_C 固定在区域默认 RX2(486.9)」是错的——
+        // CN470 A20 设备入网后 Class A RX2 / Class C RX_C 都是设备按
+        // RegionCN470A20GetRx2Frequency(joinIdx, true) 拿的设备级值（如 79 工程 idx1=486.1），
+        // 而 NS 区域默认 rx2_frequency=486900000，差 0.8 MHz → Class C 永远收不到。
+        // 改：Class C 优先用设备级 rx2_frequency（如 486.1），回退到区域默认（486.9）。
+        // rx2_class_c_ignores_device=true 时强制走区域默认（兼容旧配置）。
         $devRx2 = (int) ($device['rx2_frequency'] ?? 0);
-        $dlFreq = (!$region->classCIgnoresDeviceRx2() && $devRx2 > 0) ? $devRx2 / 1e6 : $region->getRx2Frequency() / 1e6;
+        $dlFreq = ($region->classCIgnoresDeviceRx2() || $devRx2 <= 0)
+            ? $region->getRx2Frequency() / 1e6
+            : $devRx2 / 1e6;
         $dlDatr = $region->drToDatr((int) ($device['rx2_dr'] ?? 0) > 0 ? (int) $device['rx2_dr'] : $region->getRx2DataRate());
         $sinceUp = time() - (int) ($device['last_seen'] ?? 0);
         $airtimeUs = $this->uplinkAirtimeUs($downPhy, $dlDatr, $region);
@@ -1486,6 +1512,36 @@ class NetworkServer
             ), 'strlen')));
         }
         return $telemetry;
+    }
+
+    /**
+     * 若有物模型存在，对解密后的上行 payload 解码并写入读数历史 / 最新值。
+     */
+    private function decodeThingModel(array $device, string $decryptedBin, int $fcnt): array
+    {
+        $appId = (int) ($device['app_id'] ?? 0);
+        if ($appId <= 0) {
+            return [];
+        }
+        $model = ThingModel::byApp($appId);
+        if (!$model) {
+            return [];
+        }
+        $fields = ThingModel::fields($model);
+        if (!$fields) {
+            return [];
+        }
+        $decoded = ThingModel::decodePayload($fields, (string) ($model['codec'] ?? 'SEGMENT'), bin2hex($decryptedBin));
+        if (!$decoded) {
+            return [];
+        }
+        try {
+            ThingModel::persist((int) $device['id'], $appId, $decoded, $fcnt);
+            $this->log("THING #{$device['id']} decoded=" . json_encode(array_map(fn($v) => $v['text'] ?? '', $decoded), JSON_UNESCAPED_UNICODE));
+        } catch (\Throwable $e) {
+            $this->log("WARN thing model persist dev#{$device['id']}: " . $e->getMessage());
+        }
+        return $decoded;
     }
 
     
@@ -1674,6 +1730,29 @@ class NetworkServer
                 $pingSlotUnix = $slot;
             }
             $this->sendDeviceDownlink($device, $dl, $imme, $pingSlotUnix);
+        }
+    }
+
+    /**
+     * 周期定时任务调度：到点任务 → 入队 pending downlink，等待相应窗口发送。
+     */
+    private function processScheduledTasks(): void
+    {
+        $tasks = ScheduledTask::due(time());
+        if (!$tasks) {
+            return;
+        }
+        foreach ($tasks as $task) {
+            try {
+                $r = ScheduledTask::run($task);
+                if (isset($r['error'])) {
+                    $this->log("SCHED task #{$task['id']} ({$task['name']}) → err {$r['error']}");
+                } else {
+                    $this->log("SCHED task #{$task['id']} ({$task['name']}) → queued downlink #{$r['downlink_id']}");
+                }
+            } catch (\Throwable $e) {
+                $this->log("SCHED task error #{$task['id']}: {$e->getMessage()}");
+            }
         }
     }
 
@@ -2184,13 +2263,15 @@ private function fuotaFragmentationPhase(array $camp, int $now): void
         $this->fuotaSendMulticast($group, $phy);
     }
     $sent = (int) $camp['frames_sent'] + count($frames);
-    
 
-    $delay = (int) $camp['min_delay'] * count($frames);
-    $delay = random_int($delay, max($delay, (int) $camp['max_delay'] * count($frames)));
+
+    // min_delay/max_delay 单位为毫秒，换算为秒级调度间隔
+    $delayMs = (int) $camp['min_delay'] * count($frames);
+    $delayMs = random_int($delayMs, max($delayMs, (int) $camp['max_delay'] * count($frames)));
+    $delaySec = max(1, (int) ceil($delayMs / 1000));
     Database::execute(
         "UPDATE fuota_campaigns SET frames_sent=?, next_frame_at=?, updated_at=? WHERE id=?",
-        [$sent, $now + $delay, $now, $campId]
+        [$sent, $now + $delaySec, $now, $campId]
     );
     $this->log("FUOTA: campaign#$campId sent " . count($frames) . " frame(s) (total $sent/{$camp['total_frames']})");
 }

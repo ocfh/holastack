@@ -82,60 +82,72 @@ class Codec
             $i += $bytes;
             return $s;
         };
+        // Cayenne LPP 规范：多字节字段一律大端（MSB first），有符号需手动扩号
+        $s16 = function (string $b): int {
+            $v = unpack('n', $b)[1];
+            return $v >= 0x8000 ? $v - 65536 : $v;
+        };
+        $s32 = function (string $b): int {
+            $v = unpack('N', $b)[1];
+            return $v >= 0x80000000 ? $v - 4294967296 : $v;
+        };
         switch ($type) {
-            case 0x00: case 0x01: 
+            case 0x00: case 0x01: // 数字输入/输出 U8
 
                 $b = $need(1); if ($b === null) return null;
                 return ['name' => $type === 0 ? 'digital_in' : 'digital_out', 'value' => ord($b)];
-            case 0x02: case 0x03: 
+            case 0x02: case 0x03: // 模拟输入/输出 S16 BE /100
 
                 $b = $need(2); if ($b === null) return null;
-                $v = unpack('s', $b)[1] / 100.0;
-                return ['name' => $type === 0x02 ? 'analog_in' : 'analog_out', 'value' => $v];
-            case 0x65: 
+                return ['name' => $type === 0x02 ? 'analog_in' : 'analog_out', 'value' => $s16($b) / 100.0];
+            case 0x65: // 照度 U16 BE lux
 
                 $b = $need(2); if ($b === null) return null;
                 return ['name' => 'luminosity', 'value' => unpack('n', $b)[1]];
-            case 0x66: 
+            case 0x66: // 存在检测 U8
 
                 $b = $need(1); if ($b === null) return null;
                 return ['name' => 'presence', 'value' => ord($b)];
-            case 0x67: 
+            case 0x67: // 温度 S16 BE /10 ℃
 
                 $b = $need(2); if ($b === null) return null;
-                return ['name' => 'temperature', 'value' => unpack('s', $b)[1] / 10.0];
-            case 0x68: 
+                return ['name' => 'temperature', 'value' => $s16($b) / 10.0];
+            case 0x68: // 湿度 U8 /2 %
 
                 $b = $need(1); if ($b === null) return null;
                 return ['name' => 'humidity', 'value' => ord($b) / 2.0];
-            case 0x71: 
-
-                $b = $need(3); if ($b === null) return null;
-                $v = (ord($b[0]) << 16) | (ord($b[1]) << 8) | ord($b[2]);
-                return ['name' => 'barometric_pressure', 'value' => ($v / 10.0) - 6553.6];
-            case 0x73: 
+            case 0x71: // 加速度计 3×S16 BE /1000 g
 
                 $b = $need(6); if ($b === null) return null;
                 return ['name' => 'accelerometer', 'value' => [
-                    unpack('s', substr($b, 0, 2))[1] / 1000.0,
-                    unpack('s', substr($b, 2, 2))[1] / 1000.0,
-                    unpack('s', substr($b, 4, 2))[1] / 1000.0,
+                    $s16(substr($b, 0, 2)) / 1000.0,
+                    $s16(substr($b, 2, 2)) / 1000.0,
+                    $s16(substr($b, 4, 2)) / 1000.0,
                 ]];
-            case 0x84: 
+            case 0x72: // 气压 U16 BE /10 hPa
+
+                $b = $need(2); if ($b === null) return null;
+                return ['name' => 'barometer', 'value' => unpack('n', $b)[1] / 10.0];
+            case 0x73: // 陀螺仪 3×S16 BE /100 °/s
 
                 $b = $need(6); if ($b === null) return null;
                 return ['name' => 'gyrometer', 'value' => [
-                    unpack('s', substr($b, 0, 2))[1] / 100.0,
-                    unpack('s', substr($b, 2, 2))[1] / 100.0,
-                    unpack('s', substr($b, 4, 2))[1] / 100.0,
+                    $s16(substr($b, 0, 2)) / 100.0,
+                    $s16(substr($b, 2, 2)) / 100.0,
+                    $s16(substr($b, 4, 2)) / 100.0,
                 ]];
-            case 0x86: 
+            case 0x88: // GPS: 纬度 S32/1e7 + 经度 S32/1e7 + 海拔 S24/100（大端）
 
-                $b = $need(9); if ($b === null) return null;
-                $lat = unpack('l', substr($b, 0, 4))[1] / 1e7;
-                $lon = unpack('l', substr($b, 4, 4))[1] / 1e7;
-                $alt = unpack('l', substr($b, 8, 4))[1] / 100.0;
-                return ['name' => 'gps', 'value' => ['latitude' => $lat, 'longitude' => $lon, 'altitude' => $alt]];
+                $b = $need(11); if ($b === null) return null;
+                $alt = unpack('N', "\x00" . substr($b, 8, 3))[1];
+                if ($alt >= 0x800000) {
+                    $alt -= 16777216;
+                }
+                return ['name' => 'gps', 'value' => [
+                    'latitude'  => $s32(substr($b, 0, 4)) / 1e7,
+                    'longitude' => $s32(substr($b, 4, 4)) / 1e7,
+                    'altitude'  => $alt / 100.0,
+                ]];
             default:
                 return null;
         }

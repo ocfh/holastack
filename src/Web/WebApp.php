@@ -6,6 +6,12 @@ use holastack\Region\Region;
 use holastack\Auth\Auth;
 use holastack\Storage\DeviceProfile;
 use holastack\Storage\Tenant;
+use holastack\Storage\ThingModel;
+use holastack\Storage\Alert;
+use holastack\Storage\Automation;
+use holastack\Storage\ScheduledTask;
+use holastack\Storage\Role;
+use holastack\Storage\Department;
 use holastack\Auth\ApiKey;
 use holastack\Integration\Integration;
 use holastack\Core\Multicast;
@@ -763,6 +769,49 @@ class WebApp
         return (int) Database::fetch($sql, $params)['c'];
     }
 
+    /**
+     * 按 ID 取单条上行记录（带租户隔离）。
+     * 找不到或越权时返回 null。
+     */
+    public static function getUplink(int $id, ?int $tenantId = null): ?array
+    {
+        if ($id <= 0) { return null; }
+        if (self::scope()['demo']) {
+            $rows = self::demoUplinks(50, null, null);
+            foreach ($rows as $r) { if ((int) ($r['id'] ?? 0) === $id) { return $r; } }
+            return null;
+        }
+        $row = Database::fetch("SELECT * FROM uplinks WHERE id=?", [$id]);
+        if (!$row) { return null; }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) {
+            $appId = (int) ($row['app_id'] ?? 0);
+            if (!in_array($appId, $appIds, true)) { return null; }
+        }
+        return $row;
+    }
+
+    /**
+     * 按 ID 取单条下行记录（带租户隔离）。
+     */
+    public static function getDownlink(int $id, ?int $tenantId = null): ?array
+    {
+        if ($id <= 0) { return null; }
+        if (self::scope()['demo']) {
+            $rows = self::demoDownlinks(50, null, null);
+            foreach ($rows as $r) { if ((int) ($r['id'] ?? 0) === $id) { return $r; } }
+            return null;
+        }
+        $row = Database::fetch("SELECT * FROM downlinks WHERE id=?", [$id]);
+        if (!$row) { return null; }
+        $appIds = self::visibleAppIds($tenantId);
+        if ($appIds !== null) {
+            $appId = (int) ($row['app_id'] ?? 0);
+            if (!in_array($appId, $appIds, true)) { return null; }
+        }
+        return $row;
+    }
+
     public static function enqueueDownlink(int $devId, int $port, string $payloadHex, bool $confirmed, bool $mac = false): array
     {
         $device = Database::fetch("SELECT * FROM devices WHERE id=?", [$devId]);
@@ -1109,13 +1158,20 @@ class WebApp
 
         if ($cur['role'] === Auth::ROLE_ADMIN) {
             return Database::fetchAll(
-                "SELECT u.id, u.username, u.email, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name, u.created_at
-                 FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id ORDER BY u.id DESC"
+                "SELECT u.id, u.username, u.email, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name,
+                        u.role_id, u.department_id, COALESCE(r.name,'') AS role_name, COALESCE(d.name,'') AS department_name, u.created_at
+                 FROM users u
+                 LEFT JOIN tenants t ON t.id=u.tenant_id
+                 LEFT JOIN roles r ON r.id=u.role_id
+                 LEFT JOIN departments d ON d.id=u.department_id
+                 ORDER BY u.id DESC"
             );
         }
         return [[
             'id' => $cur['id'], 'username' => $cur['username'], 'email' => $cur['email'] ?? '', 'role' => $cur['role'],
             'tenant_id' => (int) ($cur['tenant_id'] ?? 0), 'tenant_name' => '', 'created_at' => 0,
+            'role_id' => (int) ($cur['role_id'] ?? 0), 'department_id' => (int) ($cur['department_id'] ?? 0),
+            'role_name' => '', 'department_name' => '',
         ]];
     }
 
@@ -1211,7 +1267,15 @@ class WebApp
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return ['error' => 'invalid email'];
         }
-        Database::execute("UPDATE users SET role=?, tenant_id=?, email=? WHERE id=?", [$role, $tid, $email, $id]);
+        $roleId = (int) ($p['role_id'] ?? $u['role_id'] ?? 0);
+        if ($roleId > 0 && !Role::get($roleId)) {
+            return ['error' => 'invalid role_id'];
+        }
+        $deptId = (int) ($p['department_id'] ?? $u['department_id'] ?? 0);
+        if ($deptId > 0 && !Department::get($deptId)) {
+            return ['error' => 'invalid department_id'];
+        }
+        Database::execute("UPDATE users SET role=?, tenant_id=?, email=?, role_id=?, department_id=? WHERE id=?", [$role, $tid, $email, $roleId, $deptId, $id]);
         return ['ok' => true];
     }
 
@@ -1354,8 +1418,328 @@ class WebApp
         return DeviceProfile::delete($id);
     }
 
-    
+    public static function listThingModels(int $appId): array
+    {
+        return ThingModel::list($appId, self::effectiveTenant());
+    }
 
+    public static function getThingModel(int $id): ?array
+    {
+        $m = ThingModel::get($id);
+        if ($m) {
+            $m['fields'] = ThingModel::fields($m);
+            $m['fields_json'] = '';
+        }
+        return $m;
+    }
+
+    public static function createThingModel(array $body): array
+    {
+        $appId = (int) ($body['application_id'] ?? 0);
+        if ($appId <= 0 || !self::appInScope($appId)) {
+            return ['error' => 'application_out_of_scope'];
+        }
+        $body['tenant_id'] = self::createTenantId($body);
+        return ThingModel::create($body);
+    }
+
+    public static function updateThingModel(int $id, array $body): array
+    {
+        $m = ThingModel::get($id);
+        if (!$m) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($m)) {
+            return ['error' => 'forbidden: thing model not in your tenant'];
+        }
+        return ThingModel::update($id, $body);
+    }
+
+    public static function deleteThingModel(int $id): array
+    {
+        $m = ThingModel::get($id);
+        if (!$m) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($m)) {
+            return ['error' => 'forbidden: thing model not in your tenant'];
+        }
+        return ThingModel::delete($id);
+    }
+
+    public static function deviceFields(int $devId): array
+    {
+        $d = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]);
+        if (!$d || !self::canAccess($d)) {
+            return ['fields' => [], 'model' => null];
+        }
+        $model = ThingModel::byApp((int) $d['app_id']);
+        return [
+            'fields' => ThingModel::latestByDevice($devId),
+            'model'  => $model ? array_merge(['fields' => ThingModel::fields($model)], $model) : null,
+        ];
+    }
+
+    public static function queryDeviceReadings(int $devId, string $fieldKey, int $from, int $to): array
+    {
+        $d = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]);
+        if (!$d || !self::canAccess($d)) {
+            return ['error' => 'forbidden'];
+        }
+        return ['data' => ThingModel::readings($devId, $fieldKey, $from, $to)];
+    }
+
+    // ---------------- 告警管理 ----------------
+
+    public static function listAlertRules(?int $appId): array
+    {
+        return Alert::listRules((int) $appId, self::effectiveTenant());
+    }
+
+    public static function createAlertRule(array $body): array
+    {
+        $appId = (int) ($body['application_id'] ?? 0);
+        if ($appId <= 0 || !self::appInScope($appId)) {
+            return ['error' => 'application_out_of_scope'];
+        }
+        if (trim((string) ($body['field_key'] ?? '')) === '') {
+            return ['error' => 'field_key_required'];
+        }
+        if (!in_array(strtolower((string) ($body['operator'] ?? '')), Alert::OPERATORS, true)) {
+            return ['error' => 'invalid_operator'];
+        }
+        $body['tenant_id'] = self::createTenantId($body);
+        return Alert::createRule($body);
+    }
+
+    public static function updateAlertRule(int $id, array $body): array
+    {
+        $r = Alert::getRule($id);
+        if (!$r) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($r)) {
+            return ['error' => 'forbidden: rule not in your tenant'];
+        }
+        return Alert::updateRule($id, $body);
+    }
+
+    public static function deleteAlertRule(int $id): array
+    {
+        $r = Alert::getRule($id);
+        if (!$r) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($r)) {
+            return ['error' => 'forbidden: rule not in your tenant'];
+        }
+        return Alert::deleteRule($id);
+    }
+
+    public static function listAlerts(int $limit, int $offset, ?int $deviceId = null, string $status = ''): array
+    {
+        return [
+            'data' => Alert::listAlerts(self::effectiveTenant(), $limit, $offset, $deviceId, $status),
+            'counts' => Alert::counts(self::effectiveTenant()),
+        ];
+    }
+
+    public static function activeAlerts(int $limit = 100): array
+    {
+        return ['data' => Alert::activeAlerts(self::effectiveTenant(), $limit)];
+    }
+
+    public static function alertCounts(): array
+    {
+        return Alert::counts(self::effectiveTenant());
+    }
+
+    public static function resolveAlert(int $alertId): array
+    {
+        $a = Database::fetch("SELECT tenant_id FROM alerts WHERE id=?", [$alertId]);
+        if (!$a || !self::canAccess($a)) {
+            return ['error' => 'forbidden'];
+        }
+        return Alert::resolve($alertId);
+    }
+
+    public static function listNotificationGroups(): array
+    {
+        return ['data' => Alert::listGroups(self::effectiveTenant())];
+    }
+
+    public static function createNotificationGroup(array $body): array
+    {
+        $body['tenant_id'] = self::createTenantId($body);
+        $r = Alert::createGroup($body);
+        if (isset($r['error'])) {
+            return $r;
+        }
+        return ['id' => $r['id']];
+    }
+
+    public static function updateNotificationGroup(int $id, array $body): array
+    {
+        $g = Alert::getGroup($id);
+        if (!$g) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($g)) {
+            return ['error' => 'forbidden: group not in your tenant'];
+        }
+        return Alert::updateGroup($id, $body);
+    }
+
+    public static function deleteNotificationGroup(int $id): array
+    {
+        $g = Alert::getGroup($id);
+        if (!$g) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($g)) {
+            return ['error' => 'forbidden: group not in your tenant'];
+        }
+        return Alert::deleteGroup($id);
+    }
+
+    // ---------------- 定时任务 ----------------
+
+    public static function listScheduledTasks(): array
+    {
+        $rows = ScheduledTask::list(self::effectiveTenant());
+        $now = time();
+        foreach ($rows as &$row) {
+            $row['enabled_fmt'] = $row['enabled'] ? 1 : 0;
+            $row['next_run_at'] = (int) ($row['next_run_at'] ?? 0);
+            $row['last_run_at'] = (int) ($row['last_run_at'] ?? 0);
+        }
+        return ['data' => $rows];
+    }
+
+    public static function createScheduledTask(array $body): array
+    {
+        $deviceId = (int) ($body['device_id'] ?? 0);
+        $d = $deviceId > 0 ? Database::fetch("SELECT id, app_id, tenant_id FROM devices WHERE id=?", [$deviceId]) : null;
+        if (!$d || !self::appInScope((int) $d['app_id'])) {
+            return ['error' => 'device_out_of_scope'];
+        }
+        $body['tenant_id'] = self::createTenantId($body);
+        $r = ScheduledTask::create($body);
+        if (isset($r['error'])) {
+            return $r;
+        }
+        return $r;
+    }
+
+    public static function updateScheduledTask(int $id, array $body): array
+    {
+        $task = ScheduledTask::get($id);
+        if (!$task) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($task)) {
+            return ['error' => 'forbidden: task not in your tenant'];
+        }
+        if (isset($body['device_id']) && (int) $body['device_id'] > 0) {
+            $d = Database::fetch("SELECT app_id, tenant_id FROM devices WHERE id=?", [(int) $body['device_id']]);
+            if (!$d || !self::appInScope((int) $d['app_id'])) {
+                return ['error' => 'device_out_of_scope'];
+            }
+        }
+        return ScheduledTask::update($id, $body);
+    }
+
+    public static function deleteScheduledTask(int $id): array
+    {
+        $task = ScheduledTask::get($id);
+        if (!$task) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($task)) {
+            return ['error' => 'forbidden: task not in your tenant'];
+        }
+        return ScheduledTask::delete($id);
+    }
+
+    public static function toggleScheduledTask(int $id, bool $enabled): array
+    {
+        $task = ScheduledTask::get($id);
+        if (!$task) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($task)) {
+            return ['error' => 'forbidden: task not in your tenant'];
+        }
+        return ScheduledTask::setEnabled($id, $enabled);
+    }
+
+    public static function runScheduledTask(int $id): array
+    {
+        $task = ScheduledTask::get($id);
+        if (!$task) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($task)) {
+            return ['error' => 'forbidden: task not in your tenant'];
+        }
+        $r = ScheduledTask::run($task);
+        if (isset($r['error'])) {
+            return $r;
+        }
+        return ['id' => $r['id'], 'downlink_id' => $r['downlink_id'], 'next_run_at' => $r['next_run_at'], 'ok' => 1];
+    }
+
+    // ---------------- 联动模型（自动化） ----------------
+
+    public static function listAutomations(): array
+    {
+        $rows = Automation::list(self::effectiveTenant());
+        foreach ($rows as &$row) {
+            $row['fired_count'] = (int) ($row['fired_count'] ?? 0);
+            $row['last_fired_at'] = (int) ($row['last_fired_at'] ?? 0);
+        }
+        return ['data' => $rows];
+    }
+
+    public static function createAutomation(array $body): array
+    {
+        $appId = (int) ($body['application_id'] ?? 0);
+        if (isset($body['trigger_device_id']) && (int) $body['trigger_device_id'] > 0) {
+            $d = Database::fetch("SELECT app_id FROM devices WHERE id=?", [(int) $body['trigger_device_id']]);
+            if (!$d || !self::appInScope((int) $d['app_id'])) {
+                return ['error' => 'trigger_device_out_of_scope'];
+            }
+        }
+        if (!self::appInScope($appId)) {
+            return ['error' => 'application_out_of_scope'];
+        }
+        $body['tenant_id'] = self::createTenantId($body);
+        return Automation::create($body);
+    }
+
+    public static function updateAutomation(int $id, array $body): array
+    {
+        $row = Automation::get($id);
+        if (!$row) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($row)) {
+            return ['error' => 'forbidden: automation not in your tenant'];
+        }
+        return Automation::update($id, $body);
+    }
+
+    public static function deleteAutomation(int $id): array
+    {
+        $row = Automation::get($id);
+        if (!$row) {
+            return ['error' => 'not_found'];
+        }
+        if (!self::canAccess($row)) {
+            return ['error' => 'forbidden: automation not in your tenant'];
+        }
+        return Automation::delete($id);
+    }
 
     public static function listTenants(): array
     {
@@ -1372,6 +1756,79 @@ class WebApp
     public static function deleteTenant(int $id): array
     {
         return Tenant::delete($id);
+    }
+
+    public static function permissionCatalog(): array
+    {
+        return Auth::PERMISSION_CATALOG;
+    }
+
+    public static function listRoles(): array
+    {
+        $s = self::scope();
+        $rows = Role::list($s['is_admin'] ? null : $s['tenant_id']);
+        foreach ($rows as &$row) {
+            $row['permissions'] = json_decode((string) ($row['permissions'] ?? ''), true) ?: [];
+        }
+        unset($row);
+        return ['data' => $rows, 'catalog' => Auth::PERMISSION_CATALOG];
+    }
+    public static function createRole(array $p): array
+    {
+        $s = self::scope();
+        if (!$s['can_write']) {
+            return ['error' => 'forbidden'];
+        }
+        $p['tenant_id'] = $s['is_admin'] ? (int) ($p['tenant_id'] ?? 0) : $s['tenant_id'];
+        return Role::create($p);
+    }
+    public static function updateRole(int $id, array $p): array
+    {
+        $s = self::scope();
+        if (!$s['can_write']) {
+            return ['error' => 'forbidden'];
+        }
+        return Role::update($id, $p);
+    }
+    public static function deleteRole(int $id): array
+    {
+        $s = self::scope();
+        if (!$s['can_write']) {
+            return ['error' => 'forbidden'];
+        }
+        return Role::delete($id);
+    }
+
+    public static function listDepartments(): array
+    {
+        $s = self::scope();
+        $rows = Department::list($s['is_admin'] ? null : $s['tenant_id']);
+        return ['data' => Department::tree($rows)];
+    }
+    public static function createDepartment(array $p): array
+    {
+        $s = self::scope();
+        if (!$s['can_write']) {
+            return ['error' => 'forbidden'];
+        }
+        $p['tenant_id'] = (int) ($p['tenant_id'] ?? ($s['is_admin'] ? 0 : $s['tenant_id']));
+        return Department::create($p);
+    }
+    public static function updateDepartment(int $id, array $p): array
+    {
+        $s = self::scope();
+        if (!$s['can_write']) {
+            return ['error' => 'forbidden'];
+        }
+        return Department::update($id, $p);
+    }
+    public static function deleteDepartment(int $id): array
+    {
+        $s = self::scope();
+        if (!$s['can_write']) {
+            return ['error' => 'forbidden'];
+        }
+        return Department::delete($id);
     }
 
     
@@ -1708,7 +2165,7 @@ class WebApp
         
 
         $inGroup = Database::fetch(
-            "SELECT id FROM multicast_group_devices WHERE multicast_group_id=? AND LOWER(dev_eui)=?",
+            "SELECT multicast_group_id FROM multicast_group_devices WHERE multicast_group_id=? AND LOWER(dev_eui)=?",
             [(int) $camp['multicast_group_id'], strtolower($dev['dev_eui'] ?? '')]
         );
         if (!$inGroup) {

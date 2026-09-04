@@ -47,6 +47,14 @@ class Database
         return $st->fetchAll();
     }
 
+    public static function fetchOne(string $sql, array $params = [])
+    {
+        $st = self::pdo()->prepare($sql);
+        $st->execute($params);
+        $v = $st->fetch(\PDO::FETCH_NUM);
+        return $v === false ? null : $v[0];
+    }
+
     public static function execute(string $sql, array $params = []): int
     {
         $st = self::pdo()->prepare($sql);
@@ -143,6 +151,8 @@ class Database
                 ['events', 'raw_json', 'TEXT DEFAULT \'\''],
                 ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['users', 'email', 'TEXT DEFAULT \'\''],
+                ['users', 'role_id', 'INTEGER DEFAULT 0'],
+                ['users', 'department_id', 'INTEGER DEFAULT 0'],
                 ['applications', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['devices', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INTEGER DEFAULT 0'],
@@ -162,6 +172,7 @@ class Database
                 ['roaming_servers', 'validate_mic', 'INTEGER NOT NULL DEFAULT 1'],
                 ['devices', 'relay_state', 'TEXT DEFAULT \'\''],
                 ['devices', 'codec', 'TEXT DEFAULT \'\''],
+                ['devices', 'latest_fields', 'TEXT DEFAULT \'\''],
                 ['device_profiles', 'relay_params', 'TEXT DEFAULT \'\''],
                 
 
@@ -226,6 +237,19 @@ class Database
             
 
             $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path TEXT DEFAULT \'\', status INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0, ip TEXT DEFAULT \'\', user_id INTEGER NOT NULL DEFAULT 0, username TEXT DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INTEGER NOT NULL DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, query TEXT DEFAULT \'\', body_size INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS thing_models (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', fields_json TEXT DEFAULT \'\', codec TEXT NOT NULL DEFAULT \'SEGMENT\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS device_readings (id INTEGER PRIMARY KEY AUTOINCREMENT, dev_id INTEGER NOT NULL DEFAULT 0, app_id INTEGER NOT NULL DEFAULT 0, field_key TEXT NOT NULL DEFAULT \'\', value REAL NOT NULL DEFAULT 0, text_value TEXT NOT NULL DEFAULT \'\', fcnt INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_notification_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', webhook_url TEXT DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', field_key TEXT NOT NULL DEFAULT \'\', operator TEXT NOT NULL DEFAULT \'gt\', threshold TEXT NOT NULL DEFAULT \'\', severity TEXT NOT NULL DEFAULT \'warn\', notify_group_id INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, device_name TEXT DEFAULT \'\', rule_id INTEGER NOT NULL DEFAULT 0, rule_name TEXT DEFAULT \'\', field_key TEXT DEFAULT \'\', value REAL NOT NULL DEFAULT 0, text_value TEXT DEFAULT \'\', severity TEXT NOT NULL DEFAULT \'warn\', status TEXT NOT NULL DEFAULT \'triggered\', message TEXT DEFAULT \'\', ts INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_alerts_dev_status ON alerts(device_id, status)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, port INTEGER NOT NULL DEFAULT 1, payload_hex TEXT NOT NULL DEFAULT \'\', confirmed INTEGER NOT NULL DEFAULT 0, cron TEXT NOT NULL DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, next_run_at INTEGER NOT NULL DEFAULT 0, last_run_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_st_next ON scheduled_tasks(enabled, next_run_at)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', description TEXT DEFAULT \'\', permissions TEXT DEFAULT \'\', is_system INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', parent_id INTEGER NOT NULL DEFAULT 0, description TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', trigger_device_id INTEGER NOT NULL DEFAULT 0, trigger_field TEXT NOT NULL DEFAULT \'\', trigger_operator TEXT NOT NULL DEFAULT \'gt\', trigger_value TEXT NOT NULL DEFAULT \'\', cooldown_seconds INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1, action_type TEXT NOT NULL DEFAULT \'downlink\', action_device_id INTEGER NOT NULL DEFAULT 0, action_port INTEGER NOT NULL DEFAULT 1, action_payload_hex TEXT NOT NULL DEFAULT \'\', action_confirmed INTEGER NOT NULL DEFAULT 0, notify_group_id INTEGER NOT NULL DEFAULT 0, fired_count INTEGER NOT NULL DEFAULT 0, last_fired_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_au_app ON automations(application_id, enabled)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at)');
@@ -273,6 +297,15 @@ class Database
             
 
             $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INT AUTO_INCREMENT PRIMARY KEY, created_at INT NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path VARCHAR(255) DEFAULT \'\', status INT NOT NULL DEFAULT 0, latency_ms INT NOT NULL DEFAULT 0, ip VARCHAR(64) DEFAULT \'\', user_id INT NOT NULL DEFAULT 0, username VARCHAR(64) DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INT NOT NULL DEFAULT 0, application_id INT NOT NULL DEFAULT 0, query VARCHAR(512) DEFAULT \'\', body_size INT NOT NULL DEFAULT 0, INDEX idx_api_logs_tenant (tenant_id), INDEX idx_api_logs_app (application_id), INDEX idx_api_logs_created (created_at))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS thing_models (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', fields_json TEXT, codec VARCHAR(16) NOT NULL DEFAULT \'SEGMENT\', created_at INT NOT NULL DEFAULT 0, INDEX idx_tm_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS device_readings (id BIGINT AUTO_INCREMENT PRIMARY KEY, dev_id INT NOT NULL DEFAULT 0, app_id INT NOT NULL DEFAULT 0, field_key VARCHAR(64) NOT NULL DEFAULT \'\', value DOUBLE NOT NULL DEFAULT 0, text_value VARCHAR(255) NOT NULL DEFAULT \'\', fcnt INT NOT NULL DEFAULT 0, ts INT NOT NULL DEFAULT 0, INDEX idx_rd_dev_key (dev_id, field_key, ts))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_notification_groups (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', webhook_url VARCHAR(512) DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_rules (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', field_key VARCHAR(64) NOT NULL DEFAULT \'\', operator VARCHAR(8) NOT NULL DEFAULT \'gt\', threshold VARCHAR(64) NOT NULL DEFAULT \'\', severity VARCHAR(16) NOT NULL DEFAULT \'warn\', notify_group_id INT NOT NULL DEFAULT 0, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL DEFAULT 0, INDEX idx_ar_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alerts (id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, device_id INT NOT NULL DEFAULT 0, device_name VARCHAR(128) DEFAULT \'\', rule_id INT NOT NULL DEFAULT 0, rule_name VARCHAR(128) DEFAULT \'\', field_key VARCHAR(64) DEFAULT \'\', value DOUBLE NOT NULL DEFAULT 0, text_value VARCHAR(255) DEFAULT \'\', severity VARCHAR(16) NOT NULL DEFAULT \'warn\', status VARCHAR(16) NOT NULL DEFAULT \'triggered\', message VARCHAR(255) DEFAULT \'\', ts INT NOT NULL DEFAULT 0, INDEX idx_a_dev_status (device_id, status), INDEX idx_a_ts (ts))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, port INT NOT NULL DEFAULT 1, payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', confirmed TINYINT NOT NULL DEFAULT 0, cron VARCHAR(64) NOT NULL DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, next_run_at INT NOT NULL DEFAULT 0, last_run_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_st_next (enabled, next_run_at))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', description VARCHAR(255) DEFAULT \'\', permissions TEXT, is_system TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL DEFAULT 0, INDEX idx_roles_tenant (tenant_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', trigger_device_id INT NOT NULL DEFAULT 0, trigger_field VARCHAR(64) NOT NULL DEFAULT \'\', trigger_operator VARCHAR(8) NOT NULL DEFAULT \'gt\', trigger_value VARCHAR(64) NOT NULL DEFAULT \'\', cooldown_seconds INT NOT NULL DEFAULT 60, enabled TINYINT NOT NULL DEFAULT 1, action_type VARCHAR(16) NOT NULL DEFAULT \'downlink\', action_device_id INT NOT NULL DEFAULT 0, action_port INT NOT NULL DEFAULT 1, action_payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', action_confirmed TINYINT NOT NULL DEFAULT 0, notify_group_id INT NOT NULL DEFAULT 0, fired_count INT NOT NULL DEFAULT 0, last_fired_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_au_app (application_id, enabled))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS departments (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', parent_id INT NOT NULL DEFAULT 0, description VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_dept_tenant (tenant_id))');
             foreach ([
                 ['devices', 'last_seen', 'INT DEFAULT 0'],
                 ['devices', 'last_gw_id', 'VARCHAR(32) DEFAULT \'\''],
@@ -312,6 +345,8 @@ class Database
                 ['events', 'raw_json', 'TEXT'],
                 ['users', 'tenant_id', 'INT DEFAULT 0'],
                 ['users', 'email', 'VARCHAR(255) DEFAULT \'\''],
+                ['users', 'role_id', 'INT DEFAULT 0'],
+                ['users', 'department_id', 'INT DEFAULT 0'],
                 ['applications', 'tenant_id', 'INT DEFAULT 0'],
                 ['devices', 'tenant_id', 'INT DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INT DEFAULT 0'],
@@ -334,6 +369,7 @@ class Database
                 ['roaming_servers', 'validate_mic', 'TINYINT DEFAULT 1'],
                 ['devices', 'relay_state', 'TEXT'],
                 ['devices', 'codec', 'TEXT'],
+                ['devices', 'latest_fields', 'TEXT'],
                 ['device_profiles', 'relay_params', 'TEXT'],
                 
 
@@ -375,6 +411,21 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INT AUTO_INCREMENT PRIMARY KEY, label VARCHAR(32) NOT NULL UNIQUE, kek VARCHAR(64) DEFAULT \'\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INT AUTO_INCREMENT PRIMARY KEY, kind VARCHAR(16) NOT NULL, dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', gw_id VARCHAR(32) NOT NULL DEFAULT \'\', peer TEXT, ul_tmst INT NOT NULL DEFAULT 0, region VARCHAR(16) NOT NULL DEFAULT \'\', freq DOUBLE NOT NULL DEFAULT 0, datr VARCHAR(16) DEFAULT \'\', dl_delay INT NOT NULL DEFAULT 0, created_at INT NOT NULL, expires_at INT NOT NULL DEFAULT 0, INDEX idx_rp_dev (dev_eui), INDEX idx_rp_addr (dev_addr))');
         }
-        
+
+        self::seedSystemRoles();
+    }
+
+    /**
+     * 系统三档角色（admin/tenant/operator）继续由 users.role 字段控制，不再写入 roles 表。
+     * 同时清理早期版本种入的系统角色，避免「角色管理」与原有角色体系重复/冲突。
+     */
+    public static function seedSystemRoles(): void
+    {
+        $ids = self::pdo()->query('SELECT id FROM roles WHERE is_system=1')->fetchAll(\PDO::FETCH_COLUMN);
+        if ($ids) {
+            $in = implode(',', array_map('intval', $ids));
+            self::pdo()->prepare("UPDATE users SET role_id=0 WHERE role_id IN ($in)")->execute();
+            self::pdo()->prepare('DELETE FROM roles WHERE is_system=1')->execute();
+        }
     }
 }

@@ -96,11 +96,14 @@ class Fuota
 
     public static function listCampaigns(int $tenantId = 0, bool $admin = false): array
     {
+        $sql = "SELECT c.*, g.name AS group_name, g.region AS region, g.mc_addr AS multicast_addr, g.dr AS dr
+                FROM fuota_campaigns c
+                LEFT JOIN multicast_groups g ON g.id = c.multicast_group_id";
         if ($admin || $tenantId <= 0) {
-            return Database::fetchAll("SELECT * FROM fuota_campaigns ORDER BY id DESC");
+            return Database::fetchAll($sql . " ORDER BY c.id DESC");
         }
         return Database::fetchAll(
-            "SELECT * FROM fuota_campaigns WHERE tenant_id IN (0,?) ORDER BY id DESC",
+            $sql . " WHERE c.tenant_id IN (0,?) ORDER BY c.id DESC",
             [$tenantId]
         );
     }
@@ -159,6 +162,13 @@ class Fuota
         $camp = self::getCampaign($id);
         if (!$camp) {
             return null;
+        }
+        $g = Database::fetch("SELECT name, region, mc_addr, dr, group_type FROM multicast_groups WHERE id=?", [(int) ($camp['multicast_group_id'] ?? 0)]);
+        if ($g) {
+            $camp['group_name']    = $g['name'] ?? '';
+            $camp['region']        = $g['region'] ?? '';
+            $camp['multicast_addr'] = $g['mc_addr'] ?? '';
+            $camp['dr']            = $g['dr'] ?? null;
         }
         $camp['deployments'] = Database::fetchAll(
             "SELECT d.*, dv.dev_eui, dv.name AS dev_name
@@ -493,13 +503,13 @@ class Fuota
         $timeout  = max(1, (int) ($opts['timeout'] ?? $camp['timeout'] ?? 3600));
         Database::execute(
             "UPDATE fuota_campaigns SET state=?, mc_ke_key=?, min_delay=?, max_delay=?, timeout=?,
-             frames_sent=0, total_frames=?, next_frame_at=?, started_at=?, updated_at=?,
+             frames_sent=0, total_frames=?, fw_length=?, next_frame_at=?, started_at=?, updated_at=?,
              firmware_sha256=?, firmware_crc=?, status_req_sent=0 WHERE id=?",
             [
                 self::STATE_SETUP,
                 strtolower(preg_replace('/[^0-9a-fA-F]/', '', $opts['mc_ke_key'] ?? $camp['mc_ke_key'] ?? '')),
                 $minDelay, $maxDelay, $timeout,
-                $fragN, $now, $now, $now,
+                $fragN, strlen($firmwareBin), $now, $now, $now,
                 hash('sha256', $firmwareBin),
                 crc32($firmwareBin) & 0xFFFFFFFF,
                 $campaignId,

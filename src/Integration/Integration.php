@@ -15,7 +15,7 @@ class Integration
     public const KIND_HTTP = 'HTTP';
     public const KIND_INFLUX_DB = 'INFLUX_DB';
     public const KIND_MQTT = 'MQTT_GLOBAL';
-    
+    public const KIND_MODBUS = 'MODBUS_TCP';
 
     public const KIND_AWS_SNS = 'AWS_SNS';
     public const KIND_AZURE_SB = 'AZURE_SERVICE_BUS';
@@ -29,6 +29,7 @@ class Integration
             self::KIND_HTTP,
             self::KIND_INFLUX_DB,
             self::KIND_MQTT,
+            self::KIND_MODBUS,
             self::KIND_AWS_SNS,
             self::KIND_AZURE_SB,
             self::KIND_GCP_PUBSUB,
@@ -141,6 +142,9 @@ class Integration
                     case self::KIND_KAFKA:
                         self::handleKafka($cfg, $data, $log, $eventType);
                         break;
+                    case self::KIND_MODBUS:
+                        self::handleModbus($cfg, $data, $log);
+                        break;
                     default:
                         $log("INTEGRATION: unsupported kind {$it['kind']}");
                 }
@@ -172,6 +176,14 @@ class Integration
             }
         }
 
+        // datr 形如 "SF11BW125" / "SF7BW250"，拆成 ChirpStack 风格的 spreading_factor/bandwidth
+        $bandwidth = 0;
+        $spreadingFactor = 0;
+        if (preg_match('/SF(\d+)\s*BW\s*(\d+)/i', (string) ($uplinkData['datr'] ?? ''), $m)) {
+            $spreadingFactor = (int) $m[1];
+            $bandwidth = (int) $m[2];
+        }
+
         return [
             'event' => $eventType,
             'end_device_ids' => [
@@ -185,7 +197,8 @@ class Integration
                 'f_port'          => (int) ($uplinkData['port'] ?? 0),
                 'f_cnt'           => (int) ($uplinkData['fcnt'] ?? 0),
                 'frm_payload'     => $uplinkData['frm_payload'] ?? '',
-                'decoded_payload' => $decoded, 
+                'decoded_payload' => $decoded,
+                'telemetry'       => $tele ?: new \stdClass(),
 
                 'confirmed'       => !empty($uplinkData['confirmed']),
                 'rx_metadata'     => [[
@@ -195,7 +208,7 @@ class Integration
                     'snr'          => (float) ($uplinkData['snr'] ?? 0),
                 ]],
                 'settings' => [
-                    'data_rate' => ['lora' => ['bandwidth' => 0, 'spreading_factor' => 0]],
+                    'data_rate' => ['lora' => ['bandwidth' => $bandwidth, 'spreading_factor' => $spreadingFactor]],
                     'frequency' => (string) ($uplinkData['frequency'] ?? ''),
                     'timestamp' => (int) ($uplinkData['tmst'] ?? 0),
                 ],
@@ -618,5 +631,195 @@ class Integration
         } catch (\Throwable $e) {
             $log("INTEGRATION KAFKA: " . $e->getMessage());
         }
+    }
+
+    // MODBUS_TCP：把上行数据中的某个值经 Modbus TCP 写入 PLC 寄存器（FC06 单寄存器 / FC16 双寄存器）
+    private static function handleModbus(array $cfg, array $data, callable $log): void
+    {
+        $server = (string) ($cfg['server'] ?? '');
+        $path = (string) ($cfg['value_path'] ?? '');
+        if ($server === '' || $path === '') {
+            $log("INTEGRATION MODBUS: missing server/value_path");
+            return;
+        }
+        $value = self::modbusExtractValue($data, $path);
+        if ($value === null) {
+            $log("INTEGRATION MODBUS: value not found at path $path");
+            return;
+        }
+        if (!is_scalar($value)) {
+            $log("INTEGRATION MODBUS: value at path $path is not scalar");
+            return;
+        }
+        $type = strtolower((string) ($cfg['type'] ?? 'u16'));
+        $order = strtoupper((string) ($cfg['byte_order'] ?? 'ABCD'));
+        $regs = self::modbusEncodeRegisters($value, $type, $order);
+        if ($regs === null) {
+            $log("INTEGRATION MODBUS: unsupported type $type (u16/i16/u32/i32/f32)");
+            return;
+        }
+        $parts = parse_url($server);
+        $scheme = strtolower($parts['scheme'] ?? 'tcp');
+        $host = $parts['host'] ?? '';
+        $port = (int) ($parts['port'] ?? 502);
+        if ($host === '' || !in_array($scheme, ['tcp', 'modbus'], true)) {
+            $log("INTEGRATION MODBUS: bad server url $server");
+            return;
+        }
+        $unitId = (int) ($cfg['unit_id'] ?? 1);
+        $address = (int) ($cfg['address'] ?? 0);
+
+        $fp = @stream_socket_client("tcp://$host:$port", $errno, $errstr, 3.0);
+        if (!$fp) {
+            $log("INTEGRATION MODBUS: connect failed $host:$port ($errstr #$errno)");
+            return;
+        }
+        stream_set_timeout($fp, 3);
+
+        $tid = random_int(1, 60000);
+        if (count($regs) === 1) {
+            // FC06 写单寄存器：func(1) addr(2) value(2)
+            $pdu = chr(6) . pack('n', $address) . $regs[0];
+            $fc = 6;
+        } else {
+            // FC16 写多寄存器：func(1) addr(2) quantity(2) byteCount(1) data(4)
+            $pdu = chr(16) . pack('n', $address) . pack('n', 2) . chr(4) . $regs[0] . $regs[1];
+            $fc = 16;
+        }
+        // MBAP: tid(2) pid(2)=0 len(2)=unit+PDU, unit(1)
+        $frame = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($unitId & 0xFF) . $pdu;
+        if (@fwrite($fp, $frame) !== strlen($frame)) {
+            $log("INTEGRATION MODBUS: write failed $host:$port");
+            fclose($fp);
+            return;
+        }
+
+        // 读响应：7B 头（MBAP6+unit1），再按 length 读 PDU
+        $head = '';
+        while (strlen($head) < 7) {
+            $chunk = fread($fp, 7 - strlen($head));
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $head .= $chunk;
+        }
+        $resp = '';
+        if (strlen($head) === 7) {
+            $rlen = (int) unpack('n', substr($head, 4, 2))[1] - 1;
+            while (strlen($resp) < $rlen) {
+                $chunk = fread($fp, $rlen - strlen($resp));
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                $resp .= $chunk;
+            }
+        }
+        fclose($fp);
+        if (strlen($head) < 7 || strlen($resp) < 2) {
+            $log("INTEGRATION MODBUS: no/truncated response from $host:$port");
+            return;
+        }
+        $rc = ord($resp[0]);
+        if ($rc === (0x80 | $fc)) {
+            $code = ord($resp[1]);
+            $log("INTEGRATION MODBUS: exception response fc=$fc code=$code");
+            return;
+        }
+        $log("INTEGRATION MODBUS: wrote $value ($type/$order) unit=$unitId addr=$address via FC$fc");
+    }
+
+    // 按点路径提取值。支持别名前缀：
+    //   decoded.<type>          → Cayenne 解码结果中按 type 匹配的第一个 value（如 decoded.temperature）
+    //   decoded.<channel>.value → 按 channel 匹配（如 decoded.1.value）
+    //   telemetry.<key>         → uplink_message.telemetry（如 telemetry.battery）
+    //   uplink.<key...>         → uplink_message（如 uplink.f_cnt）
+    // 其余按原始点路径深入 $data。
+    private static function modbusExtractValue(array $data, string $path)
+    {
+        $path = trim($path);
+        if ($path === '') {
+            return null;
+        }
+        $decoded = $data['uplink_message']['decoded_payload'] ?? null;
+        if (preg_match('/^decoded\.([A-Za-z_]\w*)(?:\.value)?$/', $path, $m)) {
+            if (is_array($decoded)) {
+                foreach ($decoded as $d) {
+                    if (($d['type'] ?? '') === $m[1] && array_key_exists('value', $d)) {
+                        return $d['value'];
+                    }
+                }
+            }
+            return null;
+        }
+        if (preg_match('/^decoded\.(\d+)\.value$/', $path, $m)) {
+            if (is_array($decoded)) {
+                foreach ($decoded as $d) {
+                    if ((string) ($d['channel'] ?? '') === $m[1] && array_key_exists('value', $d)) {
+                        return $d['value'];
+                    }
+                }
+            }
+            return null;
+        }
+        if (preg_match('/^telemetry\.([A-Za-z_]\w*)$/', $path, $m)) {
+            return $data['uplink_message']['telemetry'][$m[1]] ?? null;
+        }
+        if (strpos($path, 'uplink.') === 0) {
+            $path = 'uplink_message.' . substr($path, strlen('uplink.'));
+        }
+        $cur = $data;
+        foreach (explode('.', $path) as $seg) {
+            if (is_array($cur) && array_key_exists($seg, $cur)) {
+                $cur = $cur[$seg];
+            } else {
+                return null;
+            }
+        }
+        return is_array($cur) || is_object($cur) ? null : $cur;
+    }
+
+    // 编码为寄存器数据。16-bit 固定大端（1 寄存器）；32-bit 支持 4 种字序（2 寄存器）。
+    // 返回 [reg1, reg2]（每项 2 字节二进制串），不支持类型返回 null。
+    private static function modbusEncodeRegisters($value, string $type, string $order): ?array
+    {
+        $num = is_numeric($value) ? (float) $value : 0.0;
+        $order = strtoupper($order ?: 'ABCD');
+        switch ($type) {
+            case 'u16':
+                $v = max(0, min(65535, (int) round($num)));
+                return [pack('n', $v)];
+            case 'i16':
+                $v = max(-32768, min(32767, (int) round($num)));
+                return [pack('n', $v & 0xFFFF)];
+            case 'u32':
+                $raw = pack('N', (int) $num);
+                break;
+            case 'i32':
+                $raw = pack('N', sprintf('%d', $num));
+                break;
+            case 'f32':
+                $raw = pack('G', $num); // big-endian float: A B C D
+                break;
+            default:
+                return null;
+        }
+        if (!in_array($order, ['ABCD', 'CDAB', 'BADC', 'DCBA'], true)) {
+            $order = 'ABCD';
+        }
+        $b = [$raw[0], $raw[1], $raw[2], $raw[3]];
+        switch ($order) {
+            case 'CDAB':
+                $bytes = $b[2] . $b[3] . $b[0] . $b[1];
+                break;
+            case 'BADC':
+                $bytes = $b[1] . $b[0] . $b[3] . $b[2];
+                break;
+            case 'DCBA':
+                $bytes = $b[3] . $b[2] . $b[1] . $b[0];
+                break;
+            default:
+                $bytes = $b[0] . $b[1] . $b[2] . $b[3];
+        }
+        return [substr($bytes, 0, 2), substr($bytes, 2, 2)];
     }
 }

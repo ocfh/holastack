@@ -325,16 +325,21 @@ function hexToBytes(hex){
 function decodeCayenneLpp(hex){
   const b=hexToBytes(hex); let i=0; const out=[];
   const need=(n)=>{ if(b.length-i<n) return null; const s=b.slice(i,i+n); i+=n; return s; };
+  // Cayenne LPP 规范：多字节字段一律大端（MSB first），有符号需手动扩号
+  const s16=(x)=>{ const v=(x[0]<<8)|x[1]; return (v&0x8000)?(v-0x10000):v; };
   while(i+2<=b.length){
     const chan=b[i], type=b[i+1]; i+=2;
     let r=null;
     if(type===0x00||type===0x01){ const x=need(1); if(x===null)break; r={type:(type===0?'digital_in':'digital_out'), value:x[0]}; }
-    else if(type===0x02||type===0x03){ const x=need(2); if(x===null)break; r={type:(type===0x02?'analog_in':'analog_out'), value:((x[0]*256+x[1])/100)}; }
+    else if(type===0x02||type===0x03){ const x=need(2); if(x===null)break; r={type:(type===0x02?'analog_in':'analog_out'), value:+(s16(x)/100).toFixed(2)}; }
     else if(type===0x65){ const x=need(2); if(x===null)break; r={type:'luminosity', value:(x[0]*256+x[1])}; }
     else if(type===0x66){ const x=need(1); if(x===null)break; r={type:'presence', value:x[0]}; }
-    else if(type===0x67){ const x=need(2); if(x===null)break; const v=(x[0]<<8)|x[1]; const s=(v&0x8000)?(v-0x10000):v; r={type:'temperature', value:+(s/10).toFixed(1)}; }
+    else if(type===0x67){ const x=need(2); if(x===null)break; r={type:'temperature', value:+(s16(x)/10).toFixed(1)}; }
     else if(type===0x68){ const x=need(1); if(x===null)break; r={type:'humidity', value:+(x[0]/2).toFixed(1)}; }
-    else if(type===0x71){ const x=need(3); if(x===null)break; const v=(x[0]<<16)|(x[1]<<8)|x[2]; r={type:'barometric_pressure', value:+((v/10)-6553.6).toFixed(1)}; }
+    else if(type===0x71){ const x=need(6); if(x===null)break; r={type:'accelerometer', value:[+(s16(x.slice(0,2))/1000).toFixed(3),+(s16(x.slice(2,4))/1000).toFixed(3),+(s16(x.slice(4,6))/1000).toFixed(3)]}; }
+    else if(type===0x72){ const x=need(2); if(x===null)break; r={type:'barometer', value:+((x[0]*256+x[1])/10).toFixed(1)}; }
+    else if(type===0x73){ const x=need(6); if(x===null)break; r={type:'gyrometer', value:[+(s16(x.slice(0,2))/100).toFixed(2),+(s16(x.slice(2,4))/100).toFixed(2),+(s16(x.slice(4,6))/100).toFixed(2)]}; }
+    else if(type===0x88){ const x=need(11); if(x===null)break; const s32=(q)=>{ const v=((q[0]<<24)|(q[1]<<16)|(q[2]<<8)|q[3])>>>0; return (v&0x80000000)?(v-0x100000000):v; }; let alt=(x[8]<<16)|(x[9]<<8)|x[10]; if(alt&0x800000) alt-=0x1000000; r={type:'gps', value:{latitude:+(s32(x.slice(0,4))/1e7).toFixed(7), longitude:+(s32(x.slice(4,8))/1e7).toFixed(7), altitude:+(alt/100).toFixed(2)}}; }
     else break;
     if(r) out.push({type:String(chan)+'.'+r.type, value:r.value});
   }
@@ -872,7 +877,7 @@ async function viewUsers(){
       {key:'_raw',     label:'',         type:'raw'},
     ],
     rows: state.users,
-    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span></td>
+    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span>${u.role_id?` <span class="tag" title="角色">${esc(u.role_name||('#'+u.role_id))}</span>`:''}${u.department_id?` <span class="chip" title="部门">${esc(u.department_name||('#'+u.department_id))}</span>`:''}</td>
      <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
      <td><button class="btn ghost" onclick="editUser(${u.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">${ICON.trash}删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">${ICON.key}改密</button></td></tr>`,
@@ -1480,7 +1485,7 @@ async function viewIntegrations(){
   state.intMap = Object.fromEntries((its||[]).map(x=>[x.id,x]));
   const summaryOf = it => {
     let cfg={}; try{ if(it.config_json) cfg=JSON.parse(it.config_json)||{}; }catch(e){}
-    return it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : '';
+    return it.kind==='HTTP' ? (cfg.url||'') : it.kind==='INFLUX_DB' ? (cfg.endpoint||'') : it.kind==='MQTT_GLOBAL' ? (cfg.server||'') : it.kind==='AWS_SNS' ? (cfg.topic_arn||'') : it.kind==='AZURE_SERVICE_BUS' ? (cfg.publish_name||'') : it.kind==='GCP_PUBSUB' ? (cfg.topic_name||'') : it.kind==='AMQP' ? (cfg.url||'') : it.kind==='KAFKA' ? (cfg.topic||'') : it.kind==='MODBUS_TCP' ? ((cfg.server||'')+' unit='+(cfg.unit_id??1)+' addr='+(cfg.address??0)+' ← '+(cfg.value_path||'')) : '';
   };
   const intgCfg = {
     state, stateKey:'intgSort',
@@ -1549,6 +1554,217 @@ async function mcDetail(id){
    <div class="row"><div><input id="m_mcgw" placeholder="Gateway ID" oninput="hexOnly(this)"></div><button onclick="addMcGw(${id})">${ICON.plus}添加网关</button></div>
    <table style="margin-top:8px"><thead><tr><th>GatewayID</th><th></th></tr></thead><tbody>${gwList}</tbody></table>
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+
+/* ----------------------------------------------------------------------------
+ * 固件升级（FUOTA / Multicast Firmware Update）
+ * ------------------------------------------------------------------------- */
+const FUOTA_STATES = ['PENDING','SETUP','FRAGMENTATION','STATUS','DONE','FAILED'];
+const FUOTA_STATE_CLS = {PENDING:'',SETUP:'ok',FRAGMENTATION:'ok',STATUS:'ok',DONE:'ok',FAILED:'err'};
+const FUOTA_STATE_LABEL = {PENDING:'待启动',SETUP:'参数下发',FRAGMENTATION:'分包传输',STATUS:'状态查询',DONE:'已完成',FAILED:'失败'};
+
+async function viewFuota(){
+  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
+  const [ra, rmc, tf] = await Promise.all([
+    api('GET','/api/applications'+(tq?'?'+tq:'')),
+    api('GET','/api/multicast-groups'+(tq?'?'+tq:'')),
+    tenantFilterHtml(),
+  ]);
+  state.apps = ra.data || [];
+  const groups = rmc.data || [];
+  const appOpts = `<option value="">选择应用…</option>` + state.apps.map(a=>`<option value="${a.id}">#${a.id} ${esc(a.name)}</option>`).join('');
+  const grpOpts = `<option value="">选择组播组…</option>` + groups.map(g=>`<option value="${g.id}">#${g.id} ${esc(g.name)} · ${esc(g.region)} · ${esc(g.mc_addr||'')}</option>`).join('');
+
+  const campR = await api('GET','/api/fuota'+(tq?'?'+tq:''));
+  const camps = (campR && campR.data) || [];
+
+  const stateColor = (s) => {
+    const c = FUOTA_STATE_CLS[s] || '';
+    return `<span class="tag ${c}">${FUOTA_STATE_LABEL[s] || esc(s)}</span>`;
+  };
+  const progress = (camp) => {
+    if (camp.state === 'DONE' || camp.state === 'FAILED' || camp.state === 'PENDING') {
+      return `<span class="muted">${camp.frames_sent||0}/${camp.total_frames||0} 帧</span>`;
+    }
+    const total = Math.max(1, camp.total_frames||0);
+    const pct = Math.min(100, Math.round(((camp.frames_sent||0) / total) * 100));
+    return `<div class="bar"><span style="width:${pct}%;background:var(--acc)"></span></div><span class="muted" style="font-size:12px;margin-left:6px">${pct}% · ${camp.frames_sent||0}/${total}</span>`;
+  };
+  const rowHtml = c => `<tr>
+    <td>${c.id}</td>
+    <td>${esc(c.name||'')}</td>
+    <td class="muted">${esc(c.region||'')}</td>
+    <td class="muted"><code>${esc(c.multicast_addr||'')}</code></td>
+    <td>${stateColor(c.state||'PENDING')}</td>
+    <td>${progress(c)}</td>
+    <td class="muted">${c.started_at?new Date(c.started_at*1000).toLocaleString():'—'}</td>
+    <td>${adminBtn(`
+      <button class="btn ghost" onclick="fuotaDetail(${c.id})">${ICON.bookOpen}详情</button>
+      ${c.state==='PENDING' ? `<button class="btn ghost" onclick="fuotaStart(${c.id})">${ICON.cloudArrowUp}上传固件并启动</button>` : ''}
+      <button class="btn danger" onclick="busy('删除中…', ()=>delFuota(${c.id}))">${ICON.trash}删除</button>
+    `)}</td>
+  </tr>`;
+
+  const rows = (camps.length ? camps.map(rowHtml).join('') : `<tr><td colspan="8" class="muted" style="text-align:center;padding:24px">暂无 FUOTA 升级任务。先在上方创建新活动。</td></tr>`).trim();
+
+  document.getElementById('view').innerHTML = `<div class="view-head">
+      <h2>${ICON[VIEW_ICONS['fuota']]||''}固件升级 (FUOTA)</h2>
+      <div class="muted" style="margin-left:12px;font-size:12px">基于 LoRaWAN Fragmentation / Multicast 的批量固件下发 · 上行通过 FUOTA Test 端口 224</div>
+    </div>
+    <div class="card" style="margin-bottom:14px;padding:14px">
+      <h4 style="margin:0 0 8px">${ICON.plus}新建 FUOTA 升级活动</h4>
+      <div class="row" style="gap:10px;align-items:flex-end">
+        <div style="flex:1;min-width:200px"><label>名称</label><input id="fu_name" placeholder="例如：v1.2.3 全网升级"></div>
+        <div style="flex:1;min-width:200px"><label>应用</label><select id="fu_app">${appOpts}</select></div>
+        <div style="flex:1;min-width:240px"><label>组播组</label><select id="fu_grp">${grpOpts}</select></div>
+        <button onclick="createFuota()">${ICON.plus}创建活动</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0;font-size:12px">活动创建后状态为 PENDING，需要先添加组播组成员设备，再上传固件启动。</p>
+    </div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}</div>
+    <table class="tbl">
+      <thead><tr><th>ID</th><th>名称</th><th>区域</th><th>MC Addr</th><th>状态</th><th>进度</th><th>开始时间</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function createFuota(){
+  const name = (document.getElementById('fu_name').value||'').trim();
+  const appId = parseInt(document.getElementById('fu_app').value||'0', 10);
+  const mgId  = parseInt(document.getElementById('fu_grp').value||'0', 10);
+  if (!name){ toast('请填写活动名称','warn'); return; }
+  if (!appId){ toast('请选择应用','warn'); return; }
+  if (!mgId){ toast('请选择组播组','warn'); return; }
+  const r = await api('POST','/api/fuota',{ name, application_id:appId, multicast_group_id:mgId });
+  if (r && r.error){ toast(r.error,'err'); return; }
+  toast('已创建活动 #'+(r.id||'')+'，请在详情中添加设备并上传固件','ok');
+  nav('fuota');
+}
+
+async function delFuota(id){
+  if (!confirm('确认删除该 FUOTA 活动？相关设备部署、帧、片段将一并清除。')) return;
+  const r = await api('DELETE','/api/fuota/'+id);
+  if (r && r.error){ toast(r.error,'err'); return; }
+  toast('已删除','ok');
+  nav('fuota');
+}
+
+async function fuotaDetail(id){
+  const r = await api('GET','/api/fuota/'+id);
+  if (!r || r.error){ toast(r.error||'未找到','err'); return; }
+  const c = r;
+  const groups = (await api('GET','/api/multicast-groups')).data || [];
+  const grp = groups.find(g => g.id === c.multicast_group_id) || {};
+  const stateColor = (s) => `<span class="tag ${FUOTA_STATE_CLS[s]||''}">${FUOTA_STATE_LABEL[s]||esc(s)}</span>`;
+
+  const devs = (c.deployments||[]);
+  const devList = devs.length
+    ? devs.map(d => `<tr>
+        <td>${d.dev_id}</td>
+        <td><code>${esc(d.dev_eui||'')}</code></td>
+        <td>${esc(d.dev_name||'')}</td>
+        <td>${stateColor(d.state||'PENDING')}</td>
+        <td class="muted">${d.fragments_received||0} / ${d.frag_nb_missing||'?'} 缺</td>
+        <td class="muted">${d.mc_group_ans?'✓':'—'}</td>
+        <td class="muted">${d.status_ans?'✓':'—'}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="7" class="muted" style="text-align:center;padding:12px">尚未添加任何设备</td></tr>`;
+
+  const canAdd = c.state === 'PENDING';
+  const isActive = c.state === 'SETUP' || c.state === 'FRAGMENTATION' || c.state === 'STATUS';
+
+  openModal(`<h3>${ICON.cloudArrowUp} FUOTA #${id} · ${esc(c.name||'')}</h3>
+    <div class="row" style="gap:14px;margin:6px 0 12px">
+      <div><span class="muted">状态：</span>${stateColor(c.state)}</div>
+      <div><span class="muted">应用：</span>#${c.application_id}</div>
+      <div><span class="muted">组播组：</span>#${c.multicast_group_id} ${esc(grp.name||'')}</div>
+      <div><span class="muted">MC Addr：</span><code>${esc(c.multicast_addr||'')}</code></div>
+      <div><span class="muted">区域：</span>${esc(c.region||'')}</div>
+    </div>
+    <div class="row" style="gap:14px;margin:4px 0 10px">
+      <div><span class="muted">进度：</span>${c.frames_sent||0} / ${c.total_frames||0} 帧</div>
+      <div><span class="muted">设备数：</span>${(c.deployments||[]).length}</div>
+      <div><span class="muted">帧队列：</span>${c.frames_total||0} 条</div>
+      <div><span class="muted">最小/最大间隔：</span>${c.min_delay||200} / ${c.max_delay||1000} ms</div>
+      <div><span class="muted">超时：</span>${c.timeout||3600} s</div>
+    </div>
+    ${canAdd ? `
+    <h4 style="margin:14px 0 6px">${ICON.plus}添加设备（须在组播组成员中）</h4>
+    <div class="row" style="gap:10px">
+      <div style="flex:1"><input id="fu_devid" placeholder="设备 ID" type="number" min="1"></div>
+      <button onclick="fuotaAddDev(${id})">添加</button>
+    </div>` : ''}
+    <h4 style="margin:14px 0 6px">设备部署进度</h4>
+    <table class="tbl">
+      <thead><tr><th>ID</th><th>DevEUI</th><th>名称</th><th>状态</th><th>已收片段</th><th>MC Group</th><th>Status</th></tr></thead>
+      <tbody>${devList}</tbody>
+    </table>
+    ${canAdd ? `
+    <h4 style="margin:14px 0 6px">${ICON.cloudArrowUp}上传固件并启动</h4>
+    <p class="muted" style="font-size:12px;margin:0 0 6px">选择 .bin 固件文件（最大 5MB）。系统将分片并通过组播下行通道推送到所有已添加设备。</p>
+    <div class="row" style="gap:10px;align-items:flex-end">
+      <div style="flex:1"><label>固件文件</label><input id="fu_fwfile" type="file" accept=".bin,application/octet-stream"></div>
+      <div style="flex:0 0 120px"><label>版本号 (可选)</label><input id="fu_fwver" placeholder="1.2.3"></div>
+      <div style="flex:0 0 100px"><label>分包大小</label><input id="fu_frag" value="200" type="number" min="50" max="200"></div>
+      <button onclick="fuotaUpload(${id})" id="fuUploadBtn">${ICON.cloudArrowUp}上传并启动</button>
+    </div>
+    <div id="fuUploadProgress" style="display:none;margin-top:10px"><div class="bar"><span id="fuUploadBar" style="width:0%;background:var(--acc)"></span></div><span class="muted" id="fuUploadText" style="font-size:12px;margin-left:6px">准备中…</span></div>
+    ` : isActive ? `<p class="muted" style="margin-top:14px">活动已启动，状态：${stateColor(c.state)}。可在大表中查看整体进度。</p>` : ''}
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+
+async function fuotaAddDev(campId){
+  const v = parseInt(document.getElementById('fu_devid').value||'0', 10);
+  if (!v){ toast('请输入设备 ID','warn'); return; }
+  const r = await api('POST','/api/fuota/'+campId+'/devices',{ dev_id:v });
+  if (r && r.error){ toast(r.error,'err'); return; }
+  toast('设备已加入活动','ok');
+  fuotaDetail(campId);
+}
+
+async function fuotaStart(campId){
+  fuotaDetail(campId);
+}
+
+async function fuotaUpload(campId){
+  const file = document.getElementById('fu_fwfile').files[0];
+  if (!file){ toast('请选择固件文件','warn'); return; }
+  if (file.size > 5*1024*1024){ toast('固件超过 5MB 上限','err'); return; }
+  const ver = (document.getElementById('fu_fwver').value||'').trim();
+  const frag = parseInt(document.getElementById('fu_frag').value||'200', 10);
+  const prog = document.getElementById('fuUploadProgress');
+  const bar  = document.getElementById('fuUploadBar');
+  const txt  = document.getElementById('fuUploadText');
+  const btn  = document.getElementById('fuUploadBtn');
+  prog.style.display = 'block';
+  btn.disabled = true; btn.textContent = '上传中…';
+  bar.style.width = '5%'; txt.textContent = '读取文件…';
+  let b64;
+  try {
+    b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const s = String(r.result||'');
+        const comma = s.indexOf(',');
+        res(comma >= 0 ? s.slice(comma+1) : s);
+      };
+      r.onerror = () => rej(r.error || new Error('read failed'));
+      r.readAsDataURL(file);
+    });
+  } catch(e){ toast('读取文件失败：'+(e.message||e),'err'); btn.disabled=false; btn.textContent='上传并启动'; return; }
+  bar.style.width = '25%'; txt.textContent = '正在上送 ('+Math.round(file.size/1024)+' KB)…';
+  // 固件分片计数（用于进度条粗略显示）
+  const fragN = Math.max(1, Math.ceil(file.size / Math.max(1, frag)));
+  const r = await api('POST','/api/fuota/'+campId+'/start',{
+    firmware_base64: b64,
+    min_delay: 200,
+    max_delay: 1000,
+    timeout: 3600,
+  });
+  if (r && r.error){ toast(r.error,'err'); btn.disabled=false; btn.textContent='上传并启动'; return; }
+  bar.style.width = '100%'; txt.textContent = '启动成功，预计推送 '+fragN+' 个分片';
+  toast('FUOTA 已启动','ok');
+  setTimeout(()=>{ closeModal(); nav('fuota'); }, 1200);
 }
 
 /* ----------------------------------------------------------------------------
@@ -1973,12 +2189,37 @@ function parseLoraFrame(hexPlain){
 }
 
 async function frameInspector(id){
-  const rec = (state.ups||[]).find(x=>x.id===id) || (state.dls||[]).find(x=>x.id===id);
-  if (!rec){ toast('未找到该记录','err'); return; }
+  // 1) 优先从内存列表找（响应最快）
+  let rec = (state.ups||[]).find(x=>x.id===id) || (state.dls||[]).find(x=>x.id===id);
+  let kind = rec ? ((state.ups||[]).includes(rec) ? 'uplink' : 'downlink') : '';
+  // 2) 内存没有则从 API 取单条（避免 SPA 跨页面点击时丢上下文）
+  // 单条端点返回 {uplink:{...}} / {downlink:{...}}（原生 snake_case，csAdapt 透传）
+  if (!rec){
+    try {
+      const up = await api('GET', '/api/uplinks/' + id);
+      const u1 = up && !up.error ? (up.data || up.uplink) : null;
+      if (u1) { rec = u1; kind = 'uplink'; }
+    } catch(e){}
+    if (!rec){
+      try {
+        const dl = await api('GET', '/api/downlinks/' + id);
+        const d1 = dl && !dl.error ? (dl.data || dl.downlink) : null;
+        if (d1) { rec = d1; kind = 'downlink'; }
+      } catch(e){}
+    }
+  }
+  if (!rec){
+    openModal(`<h3>帧结构检视 #${id}</h3>
+      <p class="muted">未找到该记录（可能已被清理或不在当前租户可见范围）。</p>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    return;
+  }
   let phy = rec.phy_payload || '';
   if (!phy && rec.raw_json){ try{ const j=JSON.parse(rec.raw_json); phy = j.phy_payload || (j.txpk&&j.txpk.data) || ''; }catch(e){} }
   if (!phy){
-    openModal(`<h3>帧结构检视 #${id}</h3><p class="muted">该记录没有原始帧（phy_payload）可供解析。上行记录通常包含空口帧；若为空，可能是 NS 未记录原始帧。</p><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    openModal(`<h3>帧结构检视 #${id}（${kind||'记录'}）</h3>
+      <p class="muted">该记录没有原始帧（phy_payload）可供解析。上行记录通常包含空口帧；若为空，可能是 NS 未记录原始帧。</p>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
     return;
   }
   const parsed = parseLoraFrame(phy);
@@ -1986,7 +2227,7 @@ async function frameInspector(id){
     ? `<tr><td colspan="3" class="warn-box" style="border:0">${esc(parsed.error)}</td></tr>`
     : parsed.rows.map(r=>`<tr><td class="mono">${esc(r.k)}</td><td class="mono">${esc(r.v)}</td><td class="muted">${esc(r.d||'')}</td></tr>`).join('');
   const noteHtml = parsed.note ? `<p class="muted" style="margin-top:10px">${esc(parsed.note)}</p>` : '';
-  openModal(`<h3>帧结构检视 #${id}</h3>
+  openModal(`<h3>帧结构检视 #${id}（${kind||'记录'}）</h3>
     <p class="muted" style="word-break:break-all">完整帧 (hex)：<code>${esc(phy)}</code></p>
     <div style="position:relative"><button class="ad-copy" onclick="copyText('${phy}')">复制帧</button></div>
     <table class="tbl" style="margin-top:8px"><thead><tr><th>字段</th><th>值 (hex)</th><th>说明</th></tr></thead><tbody>${rowsHtml}</tbody></table>
@@ -2087,3 +2328,1293 @@ async function useDecoderTemplate(i){
   toast('已填入模板，记得点「保存解码配置」','ok');
   closeModal();
 }
+
+// ===================== 物模型 =====================
+let __tm = { id:0, fields:[] };
+
+async function viewThingModels(){
+  const view = document.getElementById('view');
+  const apps = (await api('GET','/api/applications')).data || [];
+  view.innerHTML = `
+    <div class="view-head"><h2>${ICON.codeBracket||''}${t('物模型')}</h2></div>
+    <div class="card" style="padding:16px;max-width:1000px;margin-top:4px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <label style="margin:0">${t('应用')}</label>
+        <select id="tm_app" onchange="tmLoad()" style="max-width:340px;flex:1">
+          <option value="0">${t('请选择应用')}</option>
+          ${apps.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}
+        </select>
+        <button class="btn" onclick="tmNew(${esc(JSON.stringify(apps))})">${ICON.plus}${t('新建物模型')}</button>
+      </div>
+      <div id="tm_list">${t('请先选择应用以查看或配置其物模型')}</div>
+    </div>
+    <div class="muted" style="margin-top:14px;max-width:1000px;font-size:12px">${t('物模型说明')}</div>`;
+}
+
+function tmFieldsOf(m){
+  try{ const a = m.fields || JSON.parse(m.fields_json||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; }
+}
+
+async function tmLoad(){
+  const id = document.getElementById('tm_app').value;
+  const host = document.getElementById('tm_list');
+  if(!id || id==='0'){ host.innerHTML = '<div class="muted">请先选择应用</div>'; return; }
+  host.innerHTML = t('加载中…');
+  const list = (await api('GET','/api/thing-models?app_id='+id)).data || [];
+  host.innerHTML = list.length ? list.map(m=>{
+    const fs = tmFieldsOf(m);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <b>${esc(m.name)}</b> <span class="muted" style="font-size:12px">· ${esc(m.codec)}</span>
+        <div class="muted" style="font-size:12px;margin-top:2px">${fs.slice(0,5).map(f=>esc(f.name||f.key)).join('、')}${fs.length>5?'…':''}</div>
+      </div>
+      <button class="ghost" onclick="tmEdit(${m.id})">${ICON.pencilSquare}${t('编辑')}</button>
+      <button class="btn err" onclick="tmDel(${m.id})">${ICON.trash}${t('删除')}</button>
+    </div>`;
+  }).join('') : '<div class="muted">暂无物模型，点击右上角「新建物模型」</div>';
+}
+
+async function tmNew(apps){
+  __tm = { id:0, fields:[] };
+  tmOpenModal(apps, 0, 'SEGMENT', '');
+}
+async function tmEdit(id){
+  const r = await api('GET','/api/thing-models/'+id);
+  const m = r.thing_model;
+  $$ = __tm;
+  __tm = { id:+m.id, fields: tmFieldsOf(m) };
+  const apps = (await api('GET','/api/applications')).data || [];
+  tmOpenModal(apps, +m.application_id, m.codec, m.name);
+}
+function tmOpenModal(apps, appId, codec, name){
+  openModal(`
+    <h3>${__tm.id?t('编辑物模型'):t('新建物模型')}</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <label style="margin:0;min-width:56px">${t('应用')}</label>
+        <select id="tmf_app" style="flex:1">
+          ${apps.map(a=>`<option value="${a.id}" ${+a.id===+appId?'selected':''}>${esc(a.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <label style="margin:0;min-width:56px">${t('名称')}</label>
+        <input id="tmf_name" value="${esc(name)}" placeholder="${t('如：温湿度传感器')}" style="flex:1">
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <label style="margin:0;min-width:56px">${t('解码方式')}</label>
+        <select id="tmf_codec" onchange="tmRenderFields()">
+          <option value="SEGMENT" ${codec==='SEGMENT'?'selected':''}>${t('二进制分段')}</option>
+          <option value="JSON" ${codec==='JSON'?'selected':''}>JSON</option>
+          <option value="LPP" ${codec==='LPP'?'selected':''}>Cayenne LPP</option>
+        </select>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <b>${t('字段定义')}</b>
+          <button class="btn ghost" onclick="tmAddField()" style="margin-left:auto">${ICON.plus}${t('添加字段')}</button>
+        </div>
+        <div id="tmf_fields"></div>
+      </div>
+      <div>
+        <label style="font-weight:600">${t('测试解码')}</label>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <input id="tmf_hex" placeholder="${t('十六进制数据，如 0167D00168C3')}" style="flex:1" value="">
+          <button class="btn ghost" onclick="tmTest()">${t('测试')}</button>
+        </div>
+        <pre id="tmf_out" class="muted" style="white-space:pre-wrap;background:var(--bg2,#0e1420);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;max-height:200px;overflow:auto">${t('（输入 hex，点击测试查看解码结果）')}</pre>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button class="btn" onclick="tmSave()">${t('保存')}</button>
+    </div>`);
+  tmRenderFields();
+}
+
+function tmAddField(){
+  __tm.fields.push({key:'',name:'',type:'number',unit:'',dataType:'uint16',offset:0,endian:'be',scale:'1',add:'0',decimals:'0'});
+  tmRenderFields();
+  const rows = document.querySelectorAll('#tmf_fields .tmf-row');
+  if(rows.length) { const r = rows[rows.length-1].querySelector('input'); if(r) r.focus(); }
+}
+function tmRenderFields(){
+  const box = document.getElementById('tmf_fields');
+  if(!box) return;
+  const codec = (document.getElementById('tmf_codec')||{}).value || 'SEGMENT';
+  box.innerHTML = __tm.fields.map((f,i)=>`
+    <div class="tmf-row" data-i="${i}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--bg2,#0e1420)">
+      <button class="ghost" title="删除" onclick="tmRmField(${i})" style="padding:4px 8px">${ICON.xMark}</button>
+      <input class="tmf-k" value="${esc(f.key)}" placeholder="key" title="key（英文/下划线）" style="width:90px">
+      <input class="tmf-n" value="${esc(f.name)}" placeholder="${t('字段名')}" style="width:110px">
+      <select class="tmf-t">
+        ${['number','string','bool','enum'].map(t=>`<option value="${t}" ${f.type===t?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <input class="tmf-u" value="${esc(f.unit)}" placeholder="${t('单位')}" style="width:60px">
+      ${codec==='SEGMENT'? `
+        <select class="tmf-dt">
+          ${['uint8','int8','uint16','int16','uint32','int32','float32'].map(d=>`<option value="${d}" ${f.dataType===d?'selected':''}>${d}</option>`).join('')}
+        </select>
+        <input class="tmf-of" type="number" value="${f.offset}" placeholder="offset" title="offset" style="width:70px">
+        <select class="tmf-en">${['be','le'].map(e=>`<option value="${e}" ${f.endian===e?'selected':''}>${e}</option>`).join('')}</select>
+        <input class="tmf-sc" type="text" value="${esc(f.scale)}" placeholder="scale" title="scale（倍率）" style="width:60px">
+        <input class="tmf-ad" type="text" value="${esc(f.add)}" placeholder="add" title="add（偏移）" style="width:60px">
+        <input class="tmf-dc" type="text" value="${esc(f.decimals)}" placeholder="小数位" style="width:60px">
+      `:''}
+      ${codec==='JSON'?'<input class="tmf-jk" value="'+(f.jsonKey||'')+'" placeholder="JSON key（可用点号路径）" style="flex:1">':''}
+      ${(codec==='SEGMENT'||codec==='JSON') && f.type==='enum' ? `<input class="tmf-map" value="${esc(f.map?JSON.stringify(f.map):'')}" placeholder='{"0":"正常","1":"告警"}' style="min-width:200px">`:''}
+    </div>`).join('') || '<div class="muted">暂无字段，点击「添加字段」</div>';
+}
+function tmRmField(i){ __tm.fields.splice(i,1); tmRenderFields(); }
+
+function tmCollectFields(){
+  const codec = (document.getElementById('tmf_codec')||{}).value || 'SEGMENT';
+  const rows = document.querySelectorAll('#tmf_fields .tmf-row');
+  const out = [];
+  rows.forEach(tr=>{
+    const q = c => (tr.querySelector(c)||{}).value || '';
+    const f = {
+      key: q('.tmf-k').trim().replace(/[^A-Za-z0-9_\-]/g,'_'),
+      name: q('.tmf-n') || q('.tmf-k'),
+      type: q('.tmf-t') || 'number',
+      unit: q('.tmf-u'),
+    };
+    if(!f.key) return;
+    if(codec==='SEGMENT'){
+      f.dataType = q('.tmf-dt') || 'uint16';
+      f.offset = +q('.tmf-of') || 0;
+      f.endian = q('.tmf-en') || 'be';
+      f.scale = parseFloat(q('.tmf-sc'))||1;
+      f.add = parseFloat(q('.tmf-ad'))||0;
+      f.decimals = +(q('.tmf-dc')||0)||0;
+    }
+    if(codec==='JSON') f.jsonKey = q('.tmf-jk') || f.key;
+    const map = tr.querySelector('.tmf-map');
+    if(map && map.value.trim()){
+      try{ f.map = JSON.parse(map.value.trim()); }catch(e){ toast(t('枚举映射 JSON 格式错误')+'：'+map.value, 'err'); return null; }
+    }
+    if(f.key) out.push(f);
+  });
+  if(out.includes(null) !== true){ /* ok */ }
+  return out.filter(Boolean);
+}
+
+async function tmSave(){
+  const appId = +document.getElementById('tmf_app').value;
+  const name = document.getElementById('tmf_name').value.trim();
+  const codec = document.getElementById('tmf_codec').value;
+  if(!appId){ toast(t('请选择应用'),'err'); return; }
+  if(!name){ toast(t('请输入物模型名称'),'err'); return; }
+  const fields = [];
+  document.querySelectorAll('#tmf_fields .tmf-row').forEach(tr=>{
+    const q = c => (tr.querySelector(c)||{}).value || '';
+    const f = { key:q('.tmf-k').trim(), name:q('.tmf-n')||q('.tmf-k').trim(), type:q('.tmf-t')||'number', unit:q('.tmf-u') };
+    if(!f.key) return;
+    const codec2 = codec;
+    if(codec2==='SEGMENT'){ f.dataType=q('.tmf-dt')||'uint16'; f.offset=+q('.tmf-of')||0; f.endian=q('.tmf-en')||'be'; f.scale=parseFloat(q('.tmf-sc'))||1; f.add=parseFloat(q('.tmf-ad'))||0; f.decimals=+(q('.tmf-dc')||0)||0; }
+    if(codec2==='JSON') f.jsonKey = q('.tmf-jk') || f.key;
+    const map = tr.querySelector('.tmf-map');
+    if(map && map.value.trim()){ try{ f.map = JSON.parse(map.value.trim()); }catch(e){ toast('枚举映射 JSON 格式错误：'+map.value,'err'); return; } }
+    fields.push(f);
+  });
+  const body = { application_id: appId, name, codec, fields_json: fields };
+  try{
+    const r = __tm.id
+      ? await api('PUT','/api/thing-models/'+__tm.id, body)
+      : await api('POST','/api/thing-models', body);
+    if(r && r.error){ toast(String(r.error),'err'); return; }
+    toast(t('已保存'),'ok');
+    closeModal();
+    tmLoad();
+  }catch(e){ toast('保存失败：'+e.message,'err'); }
+}
+
+async function tmDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该物模型？删除后设备将不再解码，历史读数保留。'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/thing-models/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok');
+  tmLoad();
+}
+
+// 仅用于「测试解码」的前端预览（SEGMENT/JSON）。真实入库以上行时服务器解码为准。
+function tmTest(){
+  const hex = (document.getElementById('tmf_hex')||{}).value || '';
+  const codec = (document.getElementById('tmf_codec')||{}).value || 'SEGMENT';
+  const out = document.getElementById('tmf_out');
+  if(!hex){ out.textContent = '请输入十六进制数据'; return; }
+  try{
+    const fields = [];
+    document.querySelectorAll('#tmf_fields .tmf-row').forEach(tr=>{
+      const q = c => (tr.querySelector(c)||{}).value || '';
+      const f = { key:q('.tmf-k').trim(), type:q('.tmf-t')||'number', unit:q('.tmf-u') };
+      if(!f.key) return;
+      if(codec==='SEGMENT'){ f.dataType=q('.tmf-dt')||'uint16'; f.offset=+q('.tmf-of')||0; f.endian=q('.tmf-en')||'be'; f.scale=parseFloat(q('.tmf-sc'))||1; f.add=parseFloat(q('.tmf-ad'))||0; f.decimals=+(q('.tmf-dc')||0)||0; }
+      if(codec==='JSON') f.jsonKey = q('.tmf-jk') || f.key;
+      const map = tr.querySelector('.tmf-map');
+      if(map && map.value.trim()){ try{ f.map=JSON.parse(map.value.trim()); }catch(e){} }
+      fields.push(f);
+    });
+    const res = codec==='JSON' ? tmDecodeJson(fields, hex) : codec==='LPP' ? { info:'LPP 解码在服务器上行时进行，此处请直接参考 Cayenne LPP 规范。'} : tmDecodeSegment(fields, hex);
+    out.textContent = JSON.stringify(res, null, 2);
+  }catch(e){ out.textContent = '解码出错：'+e.message; }
+}
+function tmHexToBin(hex){
+  hex = (hex||'').replace(/[^0-9a-fA-F]/g,'');
+  if(hex.length%2) hex = '0'+hex;
+  return hex.match(/.{2}/g).map(b=>parseInt(b,16));
+}
+function tmReadNum(bin, off, dt, le){
+  const bytes = bin.slice(off, off + ({uint8:1,int8:1,uint16:2,int16:2,uint32:4,int32:4,float32:4}[dt]||2));
+  if(bytes.length < bytes.length) { }
+  const need = {uint8:1,int8:1,uint16:2,int16:2,uint32:4,int32:4,float32:4}[dt]||2;
+  if(bytes.length < need) throw new Error('数据越界 offset='+off+' len='+need);
+  if(dt==='uint8') return bytes[0];
+  if(dt==='int8'){ const v=bytes[0]; return v>=128?v-256:v; }
+  if(dt==='uint16'){ return le? (bytes[0]|(bytes[1]<<8)) : ((bytes[0]<<8)|bytes[1]); }
+  if(dt==='int16'){ const v = le? (bytes[0]|(bytes[1]<<8)) : ((bytes[0]<<8)|bytes[1]); return v>=32768?v-65536:v; }
+  if(dt==='uint32'){ const v = le? (bytes[0]|(bytes[1]<<8)|(bytes[2]<<16)|(bytes[3]<<24)) : ((bytes[0]<<24)|(bytes[1]<<16)|(bytes[2]<<8)|bytes[3]); return (v>>>0); }
+  if(dt==='int32'){ const v = le? (bytes[0]|(bytes[1]<<8)|(bytes[2]<<16)|(bytes[3]<<24)) : ((bytes[0]<<24)|(bytes[1]<<16)|(bytes[2]<<8)|bytes[3]); return v|0; }
+  if(dt==='float32'){ const buf=new ArrayBuffer(4); const dv=new DataView(buf); bytes.forEach((b,i)=>dv.setUint8(i,b)); return le? dv.getFloat32(0,true) : dv.getFloat32(0,false); }
+  throw new Error('未知类型 '+dt);
+}
+function tmDecodeSegment(fields, hex){
+  const bin = tmHexToBin(hex);
+  const out = {};
+  fields.forEach(f=>{
+    const off = +f.offset||0;
+    if(off<0) return;
+    if(f.type==='string'){
+      const len = f.len|| (bin.length-off);
+      out[f.key] = bin.slice(off,off+len).map(b=>String.fromCharCode(b)).join('').replace(/[\x00-\x1F]/g,'');
+      return;
+    }
+    if(f.type==='bool'){
+      const v = bin[off];
+      out[f.key] = v? f.trueText||('on') : f.falseText||('off');
+      return;
+    }
+    if(f.type==='enum'){
+      const u = tmReadNum(bin, off, f.dataType||'uint8', f.endian==='le');
+      out[f.key+' ('+u+')'] = (f.map&&f.map[u]!=null)? f.map[u] : String(u);
+      return;
+    }
+    const num = tmReadNum(bin, off, f.dataType||'uint16', f.endian==='le');
+    const val = num*(+f.scale||1)+(+f.add||0);
+    const dec = (f.decimals!=null)? +f.decimals : (Math.abs(val)%1>0? +f.scale<1? +f.scale<0.1?2:1:0 :0);
+    out[f.key] = Number(val.toFixed(dec)) + (f.unit?(' '+f.unit):'');
+  });
+  return out;
+}
+function tmDecodeJson(fields, hex){
+  const bin = tmHexToBin(hex);
+  const str = bin.map(b=>String.fromCharCode(b)).join('');
+  let obj;
+  try{ obj = JSON.parse(str.trim()); }catch(e){ /* 可能带 BOM/格式 */ try{ obj = JSON.parse(str.replace(/^\uFEFF/,'')); }catch(e2){ return {error:'JSON 解析失败：'+str}; } }
+  const out = {};
+  fields.forEach(f=>{
+    const path = (f.jsonKey||f.key).split('.');
+    let v = obj;
+    for(const k of path){ if(v&&typeof v==='object'&&k in v) v=v[k]; else { v=undefined; break; } }
+    if(v===undefined) return;
+    if(f.type==='enum' && f.map){ v = f.map[String(v)]!=null? f.map[String(v)] : v; }
+    out[f.key] = v + (f.unit && fnNum(v)?(' '+f.unit):'');
+  });
+  function fnNum(x){ return typeof x==='number'; }
+  return out;
+}
+
+// ===================== 数据看板 =====================
+window.__dd = { dev:0 };
+
+async function viewDashboardData(){
+  const view = document.getElementById('view');
+  const [apps, devs] = await Promise.all([
+    api('GET','/api/applications').then(r=>r.data||[]),
+    api('GET','/api/devices').then(r=>r.data||[]),
+  ]);
+  view.innerHTML = `
+    <div class="view-head"><h2>${ICON.chartBar||''}${t('数据看板')}</h2></div>
+    <div class="card" style="padding:16px;max-width:1100px;margin-top:4px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <label style="margin:0">${t('设备')}</label>
+        <select id="dd_dev" style="max-width:280px;flex:1" onchange="ddLoadField()">
+          <option value="0">${t('请选择设备')}</option>
+          ${devs.map(d=>`<option value="${d.id}">${esc(d.name)} (${esc(d.dev_eui||d.dev_addr||'')})</option>`).join('')}
+        </select>
+        <label style="margin:0">${t('字段')}</label>
+        <select id="dd_field" style="max-width:200px" onchange="ddLoad()">
+          <option value="">${t('请选择字段')}</option>
+        </select>
+        <label style="margin:0">${t('范围')}</label>
+        <select id="dd_range" style="width:120px" onchange="ddLoad()">
+          <option value="3600">${t('近1小时')}</option>
+          <option value="86400" selected>${t('近24小时')}</option>
+          <option value="604800">${t('近7天')}</option>
+          <option value="2592000">${t('近30天')}</option>
+        </select>
+        <button class="btn ghost" onclick="ddLoad()">${ICON.arrowPath}${t('刷新')}</button>
+      </div>
+      <div id="dd_chart" style="margin-top:16px">${t('请选择设备和字段查看历史曲线')}</div>
+      <div id="dd_table" style="margin-top:16px"></div>
+    </div>`;
+}
+
+async function ddLoadField(){
+  const devId = +document.getElementById('dd_dev').value;
+  const field = document.getElementById('dd_field');
+  window.__dd.dev = devId;
+  field.innerHTML = '<option value="">加载字段…</option>';
+  if(!devId){ field.innerHTML='<option value="">请选择字段</option>'; document.getElementById('dd_chart').innerHTML='请选择设备'; document.getElementById('dd_table').innerHTML=''; return; }
+  const r = await api('GET','/api/devices/'+devId+'/fields');
+  const model = r.model||null;
+  const fs = (model && model.fields) ? model.fields : [];
+  const latest = r.fields||{};
+  field.innerHTML = '<option value="">（选择字段）</option>' + fs.map(f=>`<option value="${f.key}">${esc(f.name||f.key)}${esc((f.unit?' ('+f.unit+')':''))}</option>`).join('')
+    + (Object.keys(latest).length ? '<optgroup label="最新值">'+Object.keys(latest).map(k=>`<option value="${k}">${esc(k)}</option>`).join('')+'</optgroup>':'');
+  if(!fs.length){
+    document.getElementById('dd_chart').innerHTML = '<div class="muted">该设备的应用未配置物模型，或尚未收到可解码的上行。请先到「物模型」页为其应用配置模型。</div>';
+  }
+  ddLoad();
+}
+
+async function ddLoad(){
+  const devId = +document.getElementById('dd_dev').value;
+  const field = document.getElementById('dd_field').value;
+  const range = +document.getElementById('dd_range').value || 86400;
+  const chartHost = document.getElementById('dd_chart');
+  const tableHost = document.getElementById('dd_table');
+  if(!devId || !field){ return; }
+  chartHost.innerHTML = t('加载中…');
+  const now = Math.floor(Date.now()/1000);
+  const r = await api('GET','/api/device-readings?dev_id='+devId+'&field='+encodeURIComponent(field)+'&from='+(now-range)+'&to='+now);
+  if(r && r.error){ chartHost.innerHTML = '<div class="err-box">'+esc(r.error)+'</div>'; return; }
+  const data = (r && r.data) ? r.data : [];
+  if(!data.length){ chartHost.innerHTML = '<div class="muted">该时间范围内没有「'+esc(field)+'」的读数</div>'; tableHost.innerHTML=''; return; }
+  chartHost.innerHTML = ddSvgChart(data, field);
+  tableHost.innerHTML = `<b style="display:block;margin-bottom:6px">${t('历史明细')}</b>` + buildHistTable(data);
+}
+
+function buildHistTable(data){
+  return `<table class="table sortable" style="width:100%">
+    <thead><tr><th>${t('时间')}</th><th>${t('数值')}</th><th>fcnt</th></tr></thead>
+    <tbody>${data.slice(-100).reverse().map(d=>`<tr><td>${esc(new Date(d.ts*1000).toLocaleString())}</td><td>${esc(d.t||d.v)}</td><td>${d.fcnt}</td></tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function ddSvgChart(data, field){
+  const w = 800, h = 200, L = 44, R = 12, T = 12, B = 28;
+  const cOk = getCSS('--ok','#36d399'), cTxt=getCSS('--txt','#e6ecf5'), cMut=getCSS('--mut','#8b97ad'), cLine=getCSS('--line','#2b3650'), cAcc=getCSS('--acc','#3da9fc');
+  const vals = data.map(d=>+d.v || 0);
+  let mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+  if(mn===mx){ mn-=1; mx+=1; }
+  const pad=(mx-mn)*0.08 || 1; mn-=pad; mx+=pad;
+  const X = i => L + (w-L-R) * (data.length===1?0.5:(i/(data.length-1)));
+  const Y = v => h-B - (h-T-B) * ((v-mn)/(mx-mn));
+  const pts = data.map((d,i)=>`${X(i).toFixed(1)},${Y(+d.v).toFixed(1)}`).join(' ');
+  let grid='';
+  for(let g=0; g<=4; g++){ const v=mn+(mx-mn)*g/4; const yy=Y(v); grid+=`<line x1="${L}" y1="${yy}" x2="${w-R}" y2="${yy}" stroke="${cLine}" stroke-width="1" stroke-dasharray="3 4"/><text x="${L-6}" y="${yy+4}" fill="${cMut}" font-size="10" text-anchor="end">${fmtNum(v)}</text>`; }
+  const t0 = data[0].ts*1000, t1 = data[data.length-1].ts*1000;
+  const timeLabels = [t0, (t0+t1)/2, t1].map(ts=>new Date(ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
+  const timeXs = [L, L+(w-L-R)/2, w-R];
+  const timeTxt = timeXs.map((x,i)=>`<text x="${x}" y="${h-8}" fill="${cMut}" font-size="10" text-anchor="${i===0?'start':i===2?'end':'middle'}">${timeLabels[i]}</text>`).join('');
+  const dots = data.map((d,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(+d.v).toFixed(1)}" r="2.6" fill="${cAcc}"/>`).join('');
+  return `<div style="font-weight:600;margin-bottom:6px">${esc(field)} <span class="muted" style="font-weight:400;font-size:12px">(${data.length} 点 · 最近值 ${esc(data[data.length-1].t||data[data.length-1].v)})</span></div>
+    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block;background:var(--bg2,#0e1420);border:1px solid ${cLine};border-radius:8px" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(field)} trend">
+      <rect x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
+      ${grid}
+      ${timeTxt}
+      <polyline points="${pts}" fill="none" stroke="${cOk}" stroke-width="1.6"/>
+      ${dots}
+    </svg>`;
+}
+function getCSS(name, fallback){
+  try{ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }catch(e){ return fallback; }
+}
+function fmtNum(v){
+  if(Math.abs(v)>=1000 || Math.abs(v)<0.01) return Number(v).toExponential(1);
+  return Number(v).toFixed(1);
+}
+
+// ==================== 告警管理 ====================
+const __alert = { rules: [], groups: [], devices: [] };
+
+async function viewAlerts(){
+  const view = document.getElementById('view');
+  view.innerHTML = `<div class="view-head"><h2>${ICON.bellAlert||''}${t('告警管理')}</h2></div>
+    <div id="alert_summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px"></div>
+    <div style="display:flex;gap:8px;margin:14px 0 10px;flex-wrap:wrap">
+      <button class="btn ${__alert.tab==='rules'?'':'ghost'}" onclick="__alert.tab='rules';alertRenderTabs()">${ICON.pencilSquare}${t('告警规则')}</button>
+      <button class="btn ${__alert.tab==='open'?'':'ghost'}" onclick="__alert.tab='open';alertRenderTabs()">${ICON.bellAlert}${t('最新告警')}</button>
+      <button class="btn ${__alert.tab==='log'?'':'ghost'}" onclick="__alert.tab='log';alertRenderTabs()">${ICON.clipboardDocumentList}${t('告警日志')}</button>
+      <button class="btn ${__alert.tab==='groups'?'':'ghost'}" onclick="__alert.tab='groups';alertRenderTabs()">${ICON.bell}${t('通知组')}</button>
+    </div>
+    <div id="alert_body" class="card" style="padding:16px;max-width:1000px"></div>`;
+  await alertLoadSummary();
+  await alertRenderTabs();
+}
+
+async function alertLoadSummary(){
+  const host = document.getElementById('alert_summary');
+  const c = await api('GET','/api/alerts?scope=counts').catch(()=>({}));
+  const counts = c && c.counts ? c.counts : {triggered:0,today:0,total:0};
+  host.innerHTML = [
+    {k:'triggered', v:counts.triggered, label:t('触发中'), color:'var(--err,#f87171)', icon:'exclamationTriangle'},
+    {k:'today', v:counts.today, label:t('今日告警'), color:'var(--warn,#fbbf24)', icon:'clock'},
+    {k:'total', v:counts.total, label:t('累计告警'), color:'var(--acc,#3da9fc)', icon:'bellAlert'},
+  ].map(s=>`<div style="flex:1;min-width:160px;background:var(--bg2,#0e1420);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;gap:12px;align-items:center">
+      <div style="color:${s.color}">${ICON[s.icon]||''}</div>
+      <div><div style="font-size:24px;font-weight:700;line-height:1.1">${s.v}</div><div class="muted" style="font-size:12px">${s.label}</div></div>
+    </div>`).join('');
+}
+
+async function alertRenderTabs(){
+  const host = document.getElementById('alert_body');
+  if(!host) return;
+  const tab = __alert.tab || 'open';
+  if(tab === 'rules') return alertRenderRules(host);
+  if(tab === 'groups') return alertRenderGroups(host);
+  return alertRenderLog(host, tab === 'open');
+}
+
+async function alertRenderRules(host){
+  const apps = (await api('GET','/api/applications')).data || [];
+  __alert.apps = apps;
+  host.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn" onclick="alertRuleNew()">${ICON.plus}${t('新建规则')}</button>
+      <div class="muted" style="font-size:12px">${t('告警规则说明')}</div>
+    </div>
+    <div id="alert_rules_list"></div>`;
+  await alertReloadRules();
+}
+
+async function alertReloadRules(){
+  const host = document.getElementById('alert_rules_list');
+  if(!host) return;
+  const list = (await api('GET','/api/alert-rules')).data || [];
+  host.innerHTML = list.length ? list.map(r=>{
+    const dev = r.device_id && r.device_id>0 ? ((__alert.cachedDevs||{})[r.device_id]||('#dev'+r.device_id)) : t('全部设备');
+    const sev = `<span class="sev-${esc(r.severity)}">${sevLabel(r.severity)}</span>`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <b>${esc(r.name)}</b> <span class="muted" style="font-size:12px">${sev} · ${esc(r.field_key)} ${esc(opLabelAlter(String(r.operator)))} ${esc(r.threshold)}</span>
+        <div class="muted" style="font-size:12px;margin-top:2px">${t('触发就绪')}: ${esc(r.field_key)} · 设备 ${dev} ${r.enabled?'':'· <span style="color:var(--mut)">(已停用)</span>'}</div>
+      </div>
+      <button class="ghost" onclick="alertRuleEdit(${r.id})">${ICON.pencilSquare}${t('编辑')}</button>
+      <button class="btn err" onclick="alertRuleToggle(${r.id},${r.enabled?0:1})">${r.enabled?t('停用'):t('启用')}</button>
+      <button class="btn err" onclick="alertRuleDel(${r.id})">${ICON.trash}${t('删除')}</button>
+    </div>`;
+  }).join('') : '<div class="muted">'+t('暂无告警规则，点击「新建规则」')+'</div>';
+  // 预取设备名用于显示
+  if(list.some(r=>r.device_id && r.device_id>0)) alertCacheDevices(list);
+}
+
+let __alertDevCached = false;
+async function alertCacheDevices(list){
+  if(__alertDevCached) return;
+  __alertDevCached = true;
+  const devs = (await api('GET','/api/devices')).data || [];
+  __alert.cachedDevs = {};
+  devs.forEach(d=>__alert.cachedDevs[d.id]=d.name);
+  alertReloadRules();
+}
+
+function sevLabel(s){ return s==='critical'?t('严重'):s==='info'?t('提示'):t('警告'); }
+function opLabelAlter(op){ return {gt:'>',ge:'≥',lt:'<',le:'≤',eq:'=',neq:'≠',in:'∈'}[op]||op; }
+
+function alertRuleNew(){
+  const apps = __alert.apps || [];
+  alertRuleModal(apps, {application_id:0, device_id:0, name:'', field_key:'', operator:'gt', threshold:'', severity:'warn', notify_group_id:0, enabled:1});
+}
+async function alertRuleEdit(id){
+  const list = (await api('GET','/api/alert-rules')).data || [];
+  const r = list.find(x=>+x.id===+id);
+  if(!r){ toast(t('未找到该规则'),'err'); return; }
+  const apps = (await api('GET','/api/applications')).data || [];
+  await alertLoadAppDevices(+r.application_id);
+  alertRuleModal(apps, r);
+}
+
+let __alertModelFields = [];
+async function alertLoadModelFields(appId){
+  __alertModelFields = [];
+  if(appId>0){
+    const r = await api('GET','/api/thing-models?app_id='+appId);
+    const list = r && r.data ? r.data : [];
+    if(list.length) __alertModelFields = (list[0].fields||[]).map(f=>({key:f.key, name:f.name||f.key}));
+  }
+  return __alertModelFields;
+}
+async function alertLoadAppDevices(appId){
+  const r = await api('GET','/api/devices');
+  const all = (r && r.data) || [];
+  __alert.devices = appId>0 ? all.filter(d=>(+d.app_id===+appId)||(+d.application_id===+appId)) : all;
+}
+
+async function alertRuleModal(apps, r){
+  __alertModal = r;
+  const groups = (await api('GET','/api/notification-groups')).data || [];
+  await alertLoadModelFields(+r.application_id);
+  openModal(`
+    <h3>${t('配置告警规则')}</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('应用')}</label>
+        <select id="alr_app" onchange="alertRuleAppChanged()" style="flex:1">
+          <option value="0">${t('请选择应用')}</option>
+          ${apps.map(a=>`<option value="${a.id}" ${+a.id===+r.application_id?'selected':''}>${esc(a.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div id="alr_fields" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('监控字段')}</label>
+        <select id="alr_field" style="flex:1;">${alertFieldsOptions(r.field_key)}</select>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('规则名称')}</label>
+        <input id="alr_name" value="${esc(r.name)}" placeholder="${t('如：温度过高')}" style="flex:1">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('条件')}</label>
+        <select id="alr_op" style="width:90px">
+          ${[{v:'gt',t:'> 大于'},{v:'ge',t:'≥ 大于等于'},{v:'lt',t:'< 小于'},{v:'le',t:'≤ 小于等于'},{v:'eq',t:'= 等于'},{v:'neq',t:'≠ 不等于'},{v:'in',t:'∈ 属于'},].map(o=>`<option value="${o.v}" ${r.operator===o.v?'selected':''}>${o.t}</option>`).join('')}
+        </select>
+        <input id="alr_threshold" value="${esc(r.threshold)}" placeholder="${t('阈值，in 用逗号分隔')}" style="flex:1">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('级别')}</label>
+        <select id="alr_severity">
+          ${[{v:'info',t:t('提示'),c:'--ok'},{v:'warn',t:t('警告'),c:'--warn'},{v:'critical',t:t('严重'),c:'--err'}].map(s=>`<option value="${s.v}" ${r.severity===s.v?'selected':''}>${s.t}</option>`).join('')}
+        </select>
+        <label style="margin:0">${t('设备')}</label>
+        <select id="alr_device" style="flex:1">
+          <option value="0">${t('全部设备（该应用）')}</option>
+          ${__alert.devices.map(d=>`<option value="${d.id}" ${+r.device_id===+d.id?'selected':''}>${esc(d.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('通知组')}</label>
+        <select id="alr_group" style="flex:1">
+          <option value="0">${t('不通知')}</option>
+          ${groups.map(g=>`<option value="${g.id}" ${+r.notify_group_id===+g.id?'selected':''}>${esc(g.name)}</option>`).join('')}
+        </select>
+        <label style="margin:0;display:flex;align-items:center;gap:4px"><input type="checkbox" id="alr_enabled" ${r.enabled?'checked':''}>${t('启用')}</label>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button class="btn" onclick="alertRuleSave()">${t('保存')}</button>
+    </div>`);
+}
+function alertFieldsOptions(selKey){
+  if(!__alertModelFields.length) return `<option value="">${t('（无字段，请先在物模型定义）')}</option>`;
+  return __alertModelFields.map(f=>`<option value="${esc(f.key)}" ${f.key===selKey?'selected':''}>${esc(f.name)}</option>`).join('');
+}
+async function alertRuleAppChanged(){
+  const appId = +document.getElementById('alr_app').value;
+  await alertLoadAppDevices(appId);
+  await alertLoadModelFields(appId);
+  const dv = document.getElementById('alr_device');
+  if(dv) dv.innerHTML = `<option value="0">${t('全部设备（该应用）')}</option>` + __alert.devices.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  const ff = document.getElementById('alr_field');
+  if(ff) ff.innerHTML = alertFieldsOptions('');
+}
+
+async function alertRuleSave(){
+  const appId = +document.getElementById('alr_app').value;
+  const body = {
+    application_id: appId,
+    name: document.getElementById('alr_name').value.trim(),
+    field_key: document.getElementById('alr_field').value,
+    operator: document.getElementById('alr_op').value,
+    threshold: document.getElementById('alr_threshold').value.trim(),
+    severity: document.getElementById('alr_severity').value,
+    device_id: +document.getElementById('alr_device').value || 0,
+    notify_group_id: +document.getElementById('alr_group').value || 0,
+    enabled: document.getElementById('alr_enabled').checked ? 1 : 0,
+  };
+  if(!appId){ toast(t('请选择应用'),'err'); return; }
+  if(!body.field_key){ toast(t('请选择监控字段'),'err'); return; }
+  try{
+    const r = __alertModal.id
+      ? await api('PUT','/api/alert-rules/'+__alertModal.id, body)
+      : await api('POST','/api/alert-rules', body);
+    if(r && r.error){ toast(String(r.error),'err'); return; }
+    toast(t('已保存'),'ok'); closeModal(); alertReloadRules();
+  }catch(e){ toast(t('保存失败')+'：'+e.message,'err'); }
+}
+async function alertRuleToggle(id, on){
+  const r = await api('PUT','/api/alert-rules/'+id, {enabled:on});
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已更新'),'ok'); alertReloadRules();
+}
+async function alertRuleDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该规则？已产生的告警记录会保留。'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/alert-rules/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok'); alertReloadRules();
+}
+
+// --- 告警日志/最新告警 ---
+let __alertLogState = {status:'', offset:0};
+async function alertRenderLog(host, activeOnly){
+  __alertLogState = {status: activeOnly?'triggered':'', offset:0, active:activeOnly};
+  host.innerHTML = activeOnly
+    ? `<div class="muted" style="margin-bottom:10px">${t('当前触发中的告警，恢复或手动处理后归入日志')}</div><div id="alert_log_list"></div>`
+    : `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn ${!__alertLogState.status?'':'ghost'}" onclick="alertLogFilter('')">${t('全部')}</button>
+        <button class="btn ${__alertLogState.status==='triggered'?'':'ghost'}" onclick="alertLogFilter('triggered')">${t('触发中')}</button>
+        <button class="btn ${__alertLogState.status==='resolved'?'':'ghost'}" onclick="alertLogFilter('resolved')">${t('已恢复')}</button>
+        <button class="btn ghost" onclick="alertReloadLog()" style="margin-left:auto">${ICON.arrowPath}${t('刷新')}</button>
+      </div><div id="alert_log_list"></div>`;
+  await alertReloadLog();
+}
+function alertLogFilter(s){ __alertLogState.status=s; alertReloadLog(); }
+async function alertReloadLog(){
+  const host = document.getElementById('alert_log_list');
+  if(!host) return;
+  const q = '/api/alerts?limit=100' + (__alertLogState.status?'&status='+__alertLogState.status:'');
+  const r = await api('GET', q).catch(()=>({data:[]}));
+  const list = (r && r.data) || [];
+  host.innerHTML = list.length ? list.map(a=>{
+    const sevC = a.severity==='critical'?'var(--err,#f87171)':a.severity==='info'?'var(--ok,#36d399)':'var(--warn,#fbbf24)';
+    const active = a.status==='triggered';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid ${active?'': 'var(--line)'};border-left:3px solid ${active?sevC:'var(--line)'};border-radius:8px;margin-bottom:8px;flex-wrap:wrap;background:${active?'color-mix(in srgb,'+sevC+' 8%, transparent)':'var(--bg2,#0e1420)'}">
+      <div style="flex:1;min-width:200px">
+        <b>${esc(a.rule_name||a.rule_id)}</b>
+        <span class="sev-${esc(a.severity)}">${sevLabel(a.severity)}</span>
+        ${active?`<span style="color:${sevC};font-size:12px">● ${t('触发中')}</span>`:`<span class="muted" style="font-size:12px">✓ ${t('已恢复')}</span>`}
+        <div style="font-size:12px;margin-top:2px">${esc(a.device_name)} · ${esc(a.field_key||'')} = ${esc(a.text_value!==''?a.text_value:a.value)}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">${esc(a.message||'')}</div>
+      </div>
+      <div class="muted" style="font-size:12px">${esc(new Date(a.ts*1000).toLocaleString())}</div>
+      ${active?`<button class="ghost" onclick="alertResolve(${a.id})">${ICON.checkCircle}${t('手动处理')}</button>`:''}
+    </div>`;
+  }).join('') : '<div class="muted">'+t('暂无告警记录')+'</div>';
+  const counts = (r && r.counts) || {};
+  if(counts.triggered!==undefined && (document.getElementById('alert_summary'))) alertLoadSummary();
+}
+async function alertResolve(id){
+  const ok = await new Promise(res=>confirmDlg(t('标记该告警为已处理？'), res));
+  if(!ok) return;
+  const r = await api('POST','/api/alerts/'+id+'?action=resolve');
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已处理'),'ok'); alertReloadLog(); alertLoadSummary();
+}
+async function alertRenderGroups(host){
+  host.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <button class="btn" onclick="grpNew()">${ICON.plus}${t('新建通知组')}</button>
+      <div class="muted" style="font-size:12px">${t('通知组说明')}</div>
+    </div>
+    <div id="grp_list" class="muted">${t('加载中…')}</div>`;
+  await grpReload();
+}
+
+// --- 通知组 ---
+let __grpModal = null;
+async function viewNotificationGroups(){
+  const view = document.getElementById('view');
+  view.innerHTML = `<div class="view-head"><h2>${ICON.bell||''}${t('通知组')}</h2></div>
+    <div class="card" style="padding:16px;max-width:1000px;margin-top:4px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <button class="btn" onclick="grpNew()">${ICON.plus}${t('新建通知组')}</button>
+        <div class="muted" style="font-size:12px">${t('通知组说明')}</div>
+      </div>
+      <div id="grp_list" class="muted">${t('加载中…')}</div>
+    </div>`;
+  await grpReload();
+}
+async function grpReload(){
+  const host = document.getElementById('grp_list');
+  if(!host) return;
+  const r = await api('GET','/api/notification-groups').catch(()=>({data:[]}));
+  const list = (r && r.data) || [];
+  host.innerHTML = list.length ? list.map(g=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <b>${esc(g.name)}</b> ${g.enabled?'':'<span class="muted" style="font-size:12px">(已停用)</span>'}
+        <div class="muted" style="font-size:12px;margin-top:2px;word-break:break-all">${esc(g.webhook_url||t('未配置 Webhook'))}</div>
+      </div>
+      <button class="ghost" onclick="grpEdit(${JSON.stringify(g)})">${ICON.pencilSquare}${t('编辑')}</button>
+      <button class="btn err" onclick="grpDel(${g.id})">${ICON.trash}${t('删除')}</button>
+    </div>`).join('') : '<div class="muted">'+t('暂无通知组，点击「新建通知组」')+'</div>';
+}
+function grpNew(){ grpModal({id:0,name:'',webhook_url:'',enabled:1}); }
+function grpEdit(g){ grpModal(g); }
+function grpModal(g){
+  __grpModal = g;
+  openModal(`
+    <h3>${g.id?t('编辑通知组'):t('新建通知组')}</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('名称')}</label>
+        <input id="grp_name" value="${esc(g.name)}" placeholder="${t('如：运维群')}" style="flex:1">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">Webhook</label>
+        <input id="grp_url" value="${esc(g.webhook_url)}" placeholder="https://…（告警触达/恢复时 POST JSON）" style="flex:1">
+      </div>
+      <div><label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="grp_enabled" ${g.enabled?'checked':''}>${t('启用该通知组')}</label></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button class="btn" onclick="grpSave()">${t('保存')}</button>
+    </div>`);
+}
+async function grpSave(){
+  const g = {
+    name: document.getElementById('grp_name').value.trim(),
+    webhook_url: document.getElementById('grp_url').value.trim(),
+    enabled: document.getElementById('grp_enabled').checked ? 1 : 0,
+  };
+  if(!g.name){ toast(t('请输入通知组名称'),'err'); return; }
+  try{
+    const r = __grpModal.id
+      ? await api('PUT','/api/notification-groups/'+__grpModal.id, g)
+      : await api('POST','/api/notification-groups', g);
+    if(r && r.error){ toast(String(r.error),'err'); return; }
+    toast(t('已保存'),'ok'); closeModal(); grpReload();
+  }catch(e){ toast(t('保存失败')+'：'+e.message,'err'); }
+}
+async function grpDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该通知组？引用它的规则将不再通知。'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/notification-groups/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok'); grpReload();
+}
+
+// --- 定时任务 ---
+let __sched = { devices: [] };
+function schedFmtTS(ts){ return ts ? new Date(ts*1000).toLocaleString() : '—'; }
+function schedCronDesc(expr){
+  expr = (expr||'').trim();
+  const p = expr.split(/\s+/);
+  if(p.length!==5) return expr||'—';
+  const [min,h,d,m,dow] = p;
+  const pad = s=>String(s).padStart(2,'0');
+  const mk = (mm,hh)=>mm+':'+hh;
+  if(min==='*' && h==='*' && d==='*' && m==='*' && dow==='*') return t('每分钟');
+  if(min.indexOf('*/')===0 && h==='*' && d==='*'&&m==='*'&&dow==='*') return t('每')+min.slice(1)+t('分钟');
+  if(min==='*/1' && h==='*'&&d==='*'&&m==='*'&&dow==='*') return t('每分钟');
+  if(h!=='*' && d==='*' && m==='*' && dow==='*' && min.indexOf(',')<0 && min.indexOf('*/')<0) return t('每天')+mk(pad(min),pad(h));
+  if(h!=='*' && d==='*' && m==='*' && dow!=='*' && min.indexOf(',')<0 && min.indexOf('*/')<0){
+    const week=['周日','周一','周二','周三','周四','周五','周六'];
+    const parts = dow.split(',');
+    return (parts.map(x=>week[+x]).join('/'))+' '+mk(pad(min),pad(h));
+  }
+  return expr;
+}
+async function viewScheduledTasks(){
+  const view = document.getElementById('view');
+  view.innerHTML = `<div class="view-head"><h2>${ICON.clock||''}${t('定时任务')}</h2></div>
+    <div class="card" style="padding:16px;max-width:1100px;margin-top:4px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn" onclick="schedNew()">${ICON.plus}${t('新建定时任务')}</button>
+        <div class="muted" style="font-size:12px">${t('定时任务说明')}</div>
+      </div>
+      <div id="sched_list" class="muted">${t('加载中…')}</div>
+    </div>`;
+  const [appR, devR] = await Promise.all([
+    api('GET','/api/applications').catch(()=>({data:[]})),
+    api('GET','/api/devices').catch(()=>({data:[]})),
+  ]);
+  __sched.apps = (appR&&appR.data)||[];
+  __sched.devices = (devR&&devR.data)||[];
+  await schedReload();
+}
+async function schedReload(){
+  const host = document.getElementById('sched_list');
+  if(!host) return;
+  const r = await api('GET','/api/scheduled-tasks').catch(()=>({data:[]}));
+  const list = (r && r.data) || [];
+  const devName = id => { const d = (__sched.devices||[]).find(x=>+x.id===+id); return d?d.name:('#id'+id); };
+  host.innerHTML = list.length ? list.map(x=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">
+        <b>${esc(x.name)}</b>
+        ${x.enabled?'':'<span class="muted" style="font-size:12px">('+t('已停用')+')</span>'}
+        <div class="muted" style="font-size:12px;margin-top:2px">
+          ${t('设备')}: ${esc(devName(x.device_id))} · ${t('端口')} ${x.port} · ${x.confirmed?'● '+t('确认'):''} ·
+          payload <code>${esc(x.payload_hex)}</code>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:2px">
+          cron <code>${esc(x.cron)}</code> (${esc(schedCronDesc(x.cron))})
+          · ${t('下次')}: ${schedFmtTS(x.next_run_at)} · ${t('上次')}: ${schedFmtTS(x.last_run_at)}
+          ${x.last_result?(' · '+esc(x.last_result)):''}
+        </div>
+      </div>
+      <button class="ghost" onclick="schedRun(${x.id})" title="${t('立即执行')}">${ICON.play||'▶'}${t('执行')}</button>
+      <button class="ghost" onclick="schedEdit(${JSON.stringify(x)})">${ICON.pencilSquare}${t('编辑')}</button>
+      <button class="btn ${x.enabled?'ghost err':'ghost'}" onclick="schedToggle(${x.id},${x.enabled?0:1})">${x.enabled?'⏸':t('启用')}</button>
+      <button class="btn err ghost" onclick="schedDel(${x.id})">${ICON.trash}${t('删除')}</button>
+    </div>`).join('') : '<div class="muted">'+t('暂无定时任务，点击「新建定时任务」')+'</div>';
+}
+// cron 预设生成
+function schedBuildCron(){
+  const mode = document.getElementById('st_mode').value;
+  if(mode==='custom') return (document.getElementById('st_cron').value||'').trim();
+  if(mode==='interval'){
+    const n = Math.max(1, parseInt(document.getElementById('st_min').value,10)||0);
+    return '*/'+n+' * * * *';
+  }
+  if(mode==='daily'){
+    const hm = (document.getElementById('st_hm').value||'08:00').split(':');
+    return hm[1]+' '+hm[0]+' * * *';
+  }
+  if(mode==='weekly'){
+    const hm = (document.getElementById('st_wd_hm').value||'08:00').split(':');
+    const dow = document.getElementById('st_dow').value;
+    return hm[1]+' '+hm[0]+' * * '+dow;
+  }
+  return '';
+}
+function schedModal(x){
+  __schedModal = x;
+  const isNew = !x.id;
+  const devs = __sched.devices||[];
+  const cronMode = (x.cron||'').indexOf('*/')===0 ? 'interval'
+    : /^\d+ \d+ \* \* \*$/.test(x.cron||'') ? 'daily'
+    : /^\d+ \d+ \* \* [0-6]$/.test(x.cron||'') ? 'weekly' : 'custom';
+  openModal(`
+    <h3>${isNew?t('新建定时任务'):t('编辑定时任务')}</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('任务名称')}</label>
+        <input id="st_name" value="${esc(x.name||'')}" placeholder="${t('如：每小时上报继电器状态')}" style="flex:1">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('目标设备')}</label>
+        <select id="st_dev" style="flex:1">
+          <option value="0">${t('请选择设备')}</option>
+          ${devs.map(d=>`<option value="${d.id}" ${+d.id===+x.device_id?'selected':''}>${esc(d.name)} (${esc(d.dev_eui||'')})</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('下行内容')}</label>
+        <input id="st_payload" value="${esc(x.payload_hex||'')}" placeholder="HEX，如 010203" style="flex:1;font-family:monospace">
+        <input id="st_port" type="number" min="1" max="223" value="${x.port||1}" style="width:70px" title="${t('端口')}">
+        <label style="margin:0;display:flex;align-items:center;gap:4px"><input type="checkbox" id="st_confirmed" ${x.confirmed?'checked':''}>${t('确认')}</label>
+      </div>
+      <div style="border-top:1px solid var(--line);padding-top:12px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="st_mode" id="st_mode" value="interval" ${cronMode==='interval'?'checked':''} onchange="schedModeUI()">${t('每N分钟')}</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="st_mode" id="st_mode" value="daily" ${cronMode==='daily'?'checked':''} onchange="schedModeUI()">${t('每天')}</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="st_mode" id="st_mode" value="weekly" ${cronMode==='weekly'?'checked':''} onchange="schedModeUI()">${t('每周')}</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="st_mode" id="st_mode" value="custom" ${cronMode==='custom'?'checked':''} onchange="schedModeUI()">${t('自定义 cron')}</label>
+        </div>
+        <div id="st_mode_body" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          ${/* filled by schedModeUI */''}
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:6px">${t('cron')}: <code id="st_cron_preview">${esc(x.cron||'*/5 * * * *')}</code></div>
+      </div>
+      <div><label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="st_enabled" ${x.enabled?'checked':''}>${t('启用')}</label></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button class="btn" onclick="schedSave()">${t('保存')}</button>
+    </div>`);
+  const m = document.getElementById('st_mode');
+  const fns = { device:null };
+  document.getElementById('st_mode_body')._applied = false;
+  schedModeApply(cronMode, (x.cron||'').trim());
+  document.getElementById('st_mode').value = cronMode;
+  document.getElementById('st_cron_hidden') && schedRefreshPreview();
+}
+function schedModeUI(){
+  const m = document.querySelector('input[name="st_mode"]:checked').value;
+  schedModeApply(m, '');
+  schedRefreshPreview();
+}
+function schedModeApply(mode, cron){
+  const body = document.getElementById('st_mode_body');
+  const def = { daily:['08:00'], weekly:['08:00','1'], interval:[(cron||'*/5').replace(/[^0-9]/g,'')||'5'] };
+  let hm = def[mode]&&def[mode][0]; let dow = def[mode]&&def[mode][1];
+  const mm = { daily:'', weekly:'', interval:'' };
+  if(mode==='custom'){
+    body.innerHTML = `<label style="margin:0;min-width:64px">cron</label><input id="st_cron" value="${esc(cron)}" placeholder="分 时 日 月 周，如 */15 * * * *" style="flex:1;font-family:monospace">`;
+    return;
+  }
+  if(mode==='daily'){
+    body.innerHTML = `<label style="margin:0">${t('每天')}</label><input type="time" id="st_hm" value="${hm}">`;
+  } else if(mode==='weekly'){
+    const week=['周日','周一','周二','周三','周四','周五','周六'];
+    body.innerHTML = `<label style="margin:0">${t('每周')}</label>
+      <select id="st_dow">${week.map((w,i)=>`<option value="${i}" ${String(i)===String(dow?'1':'') || +i===(dow||1)?'selected':''}>${w}</option>`).join('')}</select>
+      <input type="time" id="st_wd_hm" value="${hm}">`;
+  } else {
+    body.innerHTML = `<label style="margin:0">${t('每')}</label>
+      <input type="number" id="st_min" min="1" max="59" value="${def.interval[0]}" style="width:70px">${t('分钟')}`;
+  }
+}
+function schedRefreshPreview(){
+  const pre = document.getElementById('st_cron_preview');
+  if(pre) pre.textContent = schedBuildCron();
+}
+async function schedSave(){
+  try{
+    const devId = parseInt(document.getElementById('st_dev').value,10);
+    if(!devId){ toast(t('请选择设备'),'err'); return; }
+    const payload = (document.getElementById('st_payload').value||'').replace(/[\s:]/g,'');
+    if(!payload || payload.length%2){ toast(t('下行内容需为偶数个 HEX 字符'),'err'); return; }
+    const cron = schedBuildCron();
+    if(!cron){ toast(t('cron 表达式无效'),'err'); return; }
+    const d = __schedModal;
+    const body = {
+      name: document.getElementById('st_name').value,
+      device_id: devId,
+      payload_hex: payload,
+      port: parseInt(document.getElementById('st_port').value,10)||1,
+      confirmed: document.getElementById('st_confirmed').checked?1:0,
+      cron,
+      enabled: document.getElementById('st_enabled').checked?1:0,
+    };
+    const r = d.id
+      ? await api('PUT','/api/scheduled-tasks/'+d.id, body)
+      : await api('POST','/api/scheduled-tasks', body);
+    if(r && r.error){ toast(String(r.error),'err'); return; }
+    toast(t('已保存'),'ok'); closeModal(); schedReload();
+  }catch(e){ toast(t('保存失败')+'：'+e.message,'err'); }
+}
+async function schedRun(id){
+  const r = await api('POST','/api/scheduled-tasks/'+id+'?action=run', {});
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已入队，等待下行窗口发送'),'ok'); schedReload();
+}
+async function schedToggle(id,enabled){
+  const r = await api('POST','/api/scheduled-tasks/'+id+'?action=toggle&enabled='+(enabled?1:0), {});
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  schedReload();
+}
+async function schedDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该定时任务？'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/scheduled-tasks/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok'); schedReload();
+}
+function schedNew(){ schedModal({id:0,name:'',device_id:0,port:1,payload_hex:'',confirmed:0,cron:'*/5 * * * *',enabled:1}); }
+function schedEdit(x){ schedModal(x); }
+document.addEventListener('input', ev=>{ if(ev.target && /^st_(min|hm|wd_hm|dow|cron)$/.test(ev.target.id)) schedRefreshPreview(); });
+
+/* ================= 联动模型 / 自动化 (P6) ================= */
+var __au = { apps:[], devices:[], groups:[], list:[], modal:null };
+async function viewAutomations(){
+  const view = document.getElementById('view');
+  view.innerHTML = `<div class="view-head"><h2>${ICON.bolt||''}${t('联动模型')}</h2>
+    <button class="btn" onclick="autoNew()">${ICON.plus}${t('新建联动')}</button></div>
+    <div class="card" style="padding:16px;max-width:1100px;margin-top:4px">
+      <div class="muted" style="font-size:12px;margin-bottom:12px">${t('联动模型说明')}</div>
+      <div id="auto_list" class="muted">${t('加载中…')}</div>
+    </div>`;
+  const [appR, devR, grpR] = await Promise.all([
+    api('GET','/api/applications').catch(()=>({data:[]})),
+    api('GET','/api/devices').catch(()=>({data:[]})),
+    api('GET','/api/notification-groups').catch(()=>({data:[]})),
+  ]);
+  __au.apps = (appR&&appR.data)||[];
+  __au.devices = (devR&&devR.data)||[];
+  __au.groups = (grpR&&grpR.data)||[];
+  await autoReload();
+}
+async function autoReload(){
+  const host = document.getElementById('auto_list');
+  if(!host) return;
+  const r = await api('GET','/api/automations').catch(()=>({data:[]}));
+  __au.list = (r && r.data) || [];
+  const devName = id => { const d=(__au.devices||[]).find(x=>+x.id===+id); return d?d.name:('#id'+id); };
+  const opLabel = op => ({gt:'>',ge:'≥',lt:'<',le:'≤',eq:'=',neq:'≠',in:'∈'})[op]||op;
+  host.innerHTML = __au.list.length ? __au.list.map(x=>{
+    const src = (+x.trigger_device_id===0)?t('任意设备'):devName(x.trigger_device_id);
+    const act = x.action_type==='notify'
+      ? t('通知组')+': '+(__au.groups.find(g=>+g.id===+x.notify_group_id)?.name||('#grp'+x.notify_group_id))
+      : t('下发命令')+' → '+devName(x.action_device_id)+' '+(x.action_payload_hex||'');
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <b>${esc(x.name)}</b>
+        ${x.enabled?'':'<span class="muted" style="font-size:12px">('+t('已停用')+')</span>'}
+        <div class="muted" style="font-size:12px;margin-top:2px">
+          <code>${esc(src)}</code> · <code>${esc(x.trigger_field)}</code> ${opLabel(x.trigger_operator)} <code>${esc(x.trigger_value)}</code>
+          <span style="opacity:.6">→</span> ${act}
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:2px">
+          ${t('冷却')} ${x.cooldown_seconds}s · ${t('触发')} ${x.fired_count||0} ${t('次')} · ${t('最近触发')}: ${autoFmtTS(x.last_fired_at)}
+          ${x.last_result?(' · '+esc(String(x.last_result).slice(0,60))):''}
+        </div>
+      </div>
+      <button class="ghost" onclick="autoEdit(${x.id})">${ICON.pencilSquare}${t('编辑')}</button>
+      <button class="btn ${x.enabled?'ghost err':'ghost'}" onclick="autoToggle(${x.id},${x.enabled?0:1})">${x.enabled?'⏸':'▶ '+t('启用')}</button>
+      <button class="btn err ghost" onclick="autoDel(${x.id})">${ICON.trash}${t('删除')}</button>
+    </div>`;
+  }).join('') : '<div class="muted">'+t('暂无联动，点击「新建联动」')+'</div>';
+}
+function autoFmtTS(ts){
+  if(!ts) return '-';
+  const d = new Date(ts*1000);
+  const p = n => String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function autoNew(){ autoModal({id:0,name:'',application_id:(__au.apps[0]||{}).id||0,trigger_device_id:0,trigger_field:'',trigger_operator:'gt',trigger_value:'',cooldown_seconds:60,enabled:1,action_type:'downlink',action_device_id:0,action_port:1,action_payload_hex:'',action_confirmed:0,notify_group_id:0}); }
+function autoEdit(id){ const x=__au.list.find(r=>+r.id===+id); if(!x) return; autoModal(x); }
+function autoModal(x){
+  __au.modal = x;
+  const isNew = !x.id;
+  const devsByApp = appId => (__au.devices||[]).filter(d=>+d.application_id===+appId);
+  openModal(`
+    <h3>${isNew?t('新建联动'):t('编辑联动')}</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('名称')}</label>
+        <input id="au_name" value="${esc(x.name||'')}" placeholder="${t('如：温度过高自动关阀')}" style="flex:1">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('应用')}</label>
+        <select id="au_app" onchange="autoAppChange()" style="flex:1">
+          ${(__au.apps||[]).map(a=>`<option value="${a.id}" ${+a.id===+x.application_id?'selected':''}>${esc(a.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('触发设备')}</label>
+        <select id="au_tdev" style="flex:1">
+          <option value="0">${t('任意设备')}</option>
+        </select>
+        <label style="margin:0;min-width:40px">字段</label>
+        <input id="au_field" value="${esc(x.trigger_field||'')}" placeholder="${t('字段名，如 temperature')}" style="flex:1;font-family:monospace">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('触发条件')}</label>
+        <select id="au_op" style="width:70px">
+          ${['gt','ge','lt','le','eq','neq','in'].map(o=>`<option value="${o}" ${x.trigger_operator===o?'selected':''}>${({gt:'>',ge:'≥',lt:'<',le:'≤',eq:'=',neq:'≠',in:'∈'})[o]||o}</option>`).join('')}
+        </select>
+        <input id="au_val" value="${esc(x.trigger_value||'')}" placeholder="阈值，如 30 或 in:on,off" style="flex:1">
+        <label style="margin:0;min-width:56px">${t('冷却秒数')}</label>
+        <input id="au_cd" type="number" min="0" value="${x.cooldown_seconds||60}" style="width:90px">
+      </div>
+      <div style="border-top:1px solid var(--line);padding-top:12px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="au_atype" value="downlink" ${x.action_type!=='notify'?'checked':''} onchange="autoAtypeUI()">${t('下发命令')}</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="radio" name="au_atype" value="notify" ${x.action_type==='notify'?'checked':''} onchange="autoAtypeUI()">${t('通知推送')}</label>
+        </div>
+        <div id="au_action_body"></div>
+      </div>
+      <div><label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="au_enabled" ${x.enabled?'checked':''}>${t('启用')}</label></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button class="btn" onclick="autoSave()">${t('保存')}</button>
+    </div>`);
+  autoFillApp(x, devsByApp(x.application_id||0));
+  autoAtypeUI();
+}
+function autoFillApp(x, devs){
+  const tsel = document.getElementById('au_tdev');
+  if(!tsel) return;
+  tsel.innerHTML = '<option value="0">'+t('任意设备')+'</option>' +
+    devs.map(d=>`<option value="${d.id}" ${+d.id===(+x.trigger_device_id||0)?'selected':''}>${esc(d.name)} (${esc(d.dev_eui||'')})</option>`).join('');
+}
+function autoAppChange(){
+  const appId = +document.getElementById('au_app').value;
+  autoFillApp(__au.modal, (__au.devices||[]).filter(d=>+d.application_id===appId));
+  autoAtypeUI();
+}
+function autoActionDeviceOptions(devs, sel){
+  return '<option value="0">'+t('请选择设备')+'</option>' +
+    (devs||[]).map(d=>`<option value="${d.id}" ${String(d.id)===String(sel||0)?'selected':''}>${esc(d.name)} (${esc(d.dev_eui||'')})</option>`).join('');
+}
+function autoAtypeUI(){
+  const body = document.getElementById('au_action_body');
+  if(!body) return;
+  const x = __au.modal||{};
+  const type = document.querySelector('input[name="au_atype"]:checked').value;
+  const appId = +((document.getElementById('au_app')||{}).value || x.application_id||0);
+  const devs = (__au.devices||[]).filter(d=>+d.application_id===appId);
+  if(type==='downlink'){
+    body.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('目标设备')}</label>
+        <select id="au_adev" style="flex:1">${autoActionDeviceOptions(devs, x.action_device_id)}</select>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <label style="margin:0;min-width:64px">${t('下行内容')}</label>
+        <input id="au_payload" value="${esc(x.action_payload_hex||'')}" placeholder="HEX，如 010203" style="flex:1;font-family:monospace">
+        <input id="au_port" type="number" min="1" max="223" value="${x.action_port||1}" style="width:70px" title="${t('端口')}">
+        <label style="margin:0;display:flex;align-items:center;gap:4px"><input type="checkbox" id="au_confirmed" ${x.action_confirmed?'checked':''}>${t('确认')}</label>
+      </div>`;
+  } else {
+    body.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="margin:0;min-width:64px">${t('通知组')}</label>
+        <select id="au_grp" style="flex:1">
+          <option value="0">${t('请选择通知组')}</option>
+          ${(__au.groups||[]).map(g=>`<option value="${g.id}" ${String(g.id)===String(x.notify_group_id||0)?'selected':''}>${esc(g.name)}</option>`).join('')}
+        </select>
+      </div>`;
+  }
+}
+async function autoSave(){
+  try{
+    const d = __au.modal;
+    const body = {
+      name: document.getElementById('au_name').value,
+      application_id: +document.getElementById('au_app').value,
+      trigger_device_id: +document.getElementById('au_tdev').value,
+      trigger_field: (document.getElementById('au_field').value||'').trim(),
+      trigger_operator: document.getElementById('au_op').value,
+      trigger_value: (document.getElementById('au_val').value||'').trim(),
+      cooldown_seconds: parseInt(document.getElementById('au_cd').value,10)||60,
+      action_type: document.querySelector('input[name="au_atype"]:checked').value,
+      action_device_id: +((document.getElementById('au_adev')||{}).value||0),
+      action_port: parseInt((document.getElementById('au_port')||{value:1}).value,10)||1,
+      action_payload_hex: ((document.getElementById('au_payload')||{value:''}).value||'').replace(/[\s:]/g,''),
+      action_confirmed: (document.getElementById('au_confirmed')||{}).checked?1:0,
+      notify_group_id: +((document.getElementById('au_grp')||{value:0}).value||0),
+      enabled: document.getElementById('au_enabled').checked?1:0,
+    };
+    if(!body.trigger_field){ toast(t('请填写触发字段'),'err'); return; }
+    if(body.action_type==='notify' && !body.notify_group_id){ toast(t('请选择通知组'),'err'); return; }
+    const r = d.id
+      ? await api('PUT','/api/automations/'+d.id, body)
+      : await api('POST','/api/automations', body);
+    if(r && r.error){ toast(String(r.error),'err'); return; }
+    toast(t('已保存'),'ok'); closeModal(); autoReload();
+  }catch(e){ toast(t('保存失败')+'：'+e.message,'err'); }
+}
+async function autoToggle(id,enabled){
+  const x = __au.list.find(r=>+r.id===+id); if(!x) return;
+  const r = await api('PUT','/api/automations/'+id, {enabled: enabled?1:0});
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  autoReload();
+}
+async function autoDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该联动？'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/automations/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok'); autoReload();
+}
+
+/* ================= 角色管理 (P5) ================= */
+async function viewRoles(){
+  const r = await api('GET','/api/roles'); const roles=r.data||[]; const catalog=r.catalog||{};
+  __rbc.catalog = catalog; __rbc.roles = roles;
+  const rows = roles.map(row=>{
+    const tags = row.is_system ? `<span class="chip muted">${t('内置')}</span>` : `<span class="chip">${t('自定义')}</span>`;
+    const permChips = Array.isArray(row.permissions) ? row.permissions.map(p=>`<span class="chip">${esc(catalog[p]||p)}</span>`).join('') : '';
+    const actions = row.is_system
+      ? '' 
+      : `<button class="btn ghost" onclick="roleEdit(${row.id})">${ICON.pencilSquare}${t('编辑')}</button> <button class="btn danger" onclick="roleDel(${row.id})">${ICON.trash}${t('删除')}</button>`;
+    return `<tr><td>${esc(row.name)}${tags}</td><td class="muted">${esc(row.description||'')}</td><td>${permChips}</td><td class="muted">${row.user_count||0}</td><td>${adminBtn(actions)}</td></tr>`;
+  }).join('')||`<tr><td colspan="5" class="muted">${t('暂无角色')}</td></tr>`;
+  document.getElementById('view').innerHTML = `
+    <div class="view-head"><h2>${ICON.shieldCheck||''}${t('角色管理')}</h2>${adminBtn(`<button onclick="roleNew()">${ICON.plus}${t('新建角色')}</button>`)}</div>
+    <div class="card" style="padding:4px 0"><table><thead><tr><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('权限')}</th><th>${t('用户数')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">${t('角色提示')}</div>`;
+}
+function roleNew(){ roleModal({id:0,name:'',description:'',permissions:['dashboard','devices','alerts','uplinks','downlinks']}); }
+function roleEdit(id){ const x=__rbc.roles.find(r=>r.id===id); if(!x) return; roleModal(x); }
+function roleModal(x){
+  const isNew = !x.id;
+  const cats = __rbc.catalog||{};
+  const groups = [
+    ['运行监控', ['dashboard','uplinks','downlinks','events','noc','map']],
+    ['设备管理', ['applications','devices','gateways','device-profiles','multicast-groups']],
+    ['数据管理', ['thing-models','dashboard-data','alerts','notification-groups','scheduled','automations']],
+    ['工具集成', ['integrations','api-keys','api-logs','apidocs','loracalc']],
+  ];
+  const has = (k)=>Array.isArray(x.permissions) && x.permissions.indexOf(k)!==-1;
+  const boxes = groups.map(([glabel,ks])=>`
+    <div style="margin-bottom:8px">
+      <div class="muted" style="font-weight:600;font-size:12px;margin-bottom:4px">${t(glabel)}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${ks.map(k=>`<label style="margin:0;display:flex;align-items:center;gap:4px;font-weight:400"><input type="checkbox" class="rl_perm" value="${k}" ${has(k)?'checked':''}>${esc(cats[k]||k)}</label>`).join('')}</div>
+    </div>`).join('');
+  openModal(`<h3>${isNew?t('新建角色'):t('编辑角色')}</h3>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div><label>${t('角色名称')}</label><input id="rl_name" value="${esc(x.name||'')}"></div>
+      <div><label>${t('描述')}</label><input id="rl_desc" value="${esc(x.description||'')}"></div>
+      <div><label>${t('权限')}</label>${boxes}</div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button onclick="busy('保存中…', ()=>roleSave(${x.id||0}))">${t('保存')}</button>
+    </div>`);
+}
+async function roleSave(id){
+  const perms = Array.from(document.querySelectorAll('.rl_perm')).filter(c=>c.checked).map(c=>c.value);
+  if(!perms.length){ toast(t('至少勾选一项权限'),'err'); return; }
+  const body = { name: v('rl_name'), description: v('rl_desc'), permissions: perms };
+  const r = id ? await api('PUT','/api/roles/'+id, body) : await api('POST','/api/roles', body);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  closeModal(); toast(t('已保存'),'ok'); viewRoles();
+}
+async function roleDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该角色？'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/roles/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok'); viewRoles();
+}
+
+/* ================= 部门管理 (P5) ================= */
+async function viewDepartments(){
+  const r = await api('GET','/api/departments'); const tree=r.data||[];
+  __rbc.deptTree = tree;
+  const flat=[];
+  (function walk(nodes, depth){ (nodes||[]).forEach(n=>{ flat.push({...n, depth}); walk(n.children, depth+1); }); })(tree, 0);
+  const nameMap={}; flat.forEach(n=>nameMap[n.id]=n.name);
+  const rows = flat.map(row=>`
+    <tr>
+      <td><span style="padding-left:${row.depth*22}px">${row.depth?ICON.chevronDown||'':'·'}${esc(row.name)}</span></td>
+      <td class="muted">${row.parent_id?esc(nameMap[row.parent_id]||'#'+row.parent_id):'—'}</td>
+      <td class="muted">${esc(row.description||'')}</td>
+      <td>${adminBtn(`
+        <button class="btn ghost" onclick="deptNew(${row.id})">${ICON.plus}${t('子部门')}</button>
+        <button class="btn ghost" onclick="deptEdit(${row.id})">${ICON.pencilSquare}${t('编辑')}</button>
+        <button class="btn danger" onclick="deptDel(${row.id})">${ICON.trash}${t('删除')}</button>`)}
+      </td>
+    </tr>`).join('')||`<tr><td colspan="4" class="muted">${t('暂无部门')}</td></tr>`;
+  document.getElementById('view').innerHTML = `
+    <div class="view-head"><h2>${ICON.buildingOffice||''}${t('部门管理')}</h2>${adminBtn(`<button onclick="deptNew(0)">${ICON.plus}${t('新建部门')}</button>`)}</div>
+    <div class="card" style="padding:4px 0"><table><thead><tr><th>${t('名称')}</th><th>${t('上级部门')}</th><th>${t('描述')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">${t('部门提示')}</div>`;
+}
+function deptParentOptions(selId){
+  const flat=[]; (function walk(nodes,d){ (nodes||[]).forEach(n=>{ flat.push({...n,d}); walk(n.children,d+1); }); })(__rbc.deptTree||[], 0);
+  return `<option value="0">${t('顶级部门')}</option>`+flat.filter(n=>n.id!==+selId).map(n=>{
+    const indent = n.d? '　'.repeat(n.d):'';
+    return `<option value="${n.id}" ${+n.id===+selId?'selected':''}>${indent}${esc(n.name)}</option>`;
+  }).join('');
+}
+function deptNew(parentId){ deptModal({id:0,name:'',parent_id:parentId||0,description:''}); }
+function deptEdit(id){
+  const flat=[]; (function walk(nodes){ (nodes||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(__rbc.deptTree||[],0);
+  const x=flat.find(n=>n.id===id); if(x) deptModal(x);
+}
+function deptModal(x){
+  const isNew = !x.id;
+  openModal(`<h3>${isNew?t('新建部门'):t('编辑部门')}</h3>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div><label>${t('部门名称')}</label><input id="dept_name" value="${esc(x.name||'')}"></div>
+      <div><label>${t('上级部门')}</label><select id="dept_parent">${deptParentOptions(x.parent_id||0)}</select></div>
+      <div><label>${t('描述')}</label><input id="dept_desc" value="${esc(x.description||'')}"></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
+      <button onclick="busy('保存中…', ()=>deptSave(${x.id||0}))">${t('保存')}</button>
+    </div>`);
+}
+async function deptSave(id){
+  const body = { name: v('dept_name'), parent_id: +v('dept_parent')||0, description: v('dept_desc') };
+  const r = id ? await api('PUT','/api/departments/'+id, body) : await api('POST','/api/departments', body);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  closeModal(); toast(t('已保存'),'ok'); viewDepartments();
+}
+async function deptDel(id){
+  const ok = await new Promise(res=>confirmDlg(t('确定删除该部门？'), res));
+  if(!ok) return;
+  const r = await api('DELETE','/api/departments/'+id);
+  if(r && r.error){ toast(String(r.error),'err'); return; }
+  toast(t('已删除'),'ok'); viewDepartments();
+}
+window.__rbc = window.__rbc || { roles:[], catalog:{}, deptTree:[] };

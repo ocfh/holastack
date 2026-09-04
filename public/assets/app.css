@@ -6,6 +6,7 @@
     --bg-deep:#0d1320;    
     --bg-hover:#1f2740;   
     --bg-subtle:#161d2c;  
+    --bg2:#101722;        
     --bg-chip:#243049;    
     --shadow-rgba:0,0,0;  
     --txt-on-acc:#04121f; 
@@ -20,6 +21,7 @@
     --bg-deep:#eef1f6;
     --bg-hover:#f0f3f8;
     --bg-subtle:#f7f9fc;
+    --bg2:#eef1f6;
     --bg-chip:#e8edf4;
     --shadow-rgba:0,0,0;
     --txt-on-acc:#ffffff;
@@ -397,3 +399,10 @@
 .tpl-head{font-weight:600;font-size:14px;color:var(--txt,#e6edf3)}
 .tpl-code{background:#0c0f14;border:1px solid var(--line,#222b36);border-radius:8px;padding:10px;max-height:220px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#9fd0ff;white-space:pre;margin:0}
 @media (max-width:760px){ .tpl-grid{grid-template-columns:1fr} }
+
+/* 告警：级别徽标 */
+.sev-info,.sev-warn,.sev-critical{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.6;vertical-align:middle}
+.sev-info{background:rgba(54,211,153,.14);color:var(--ok,#36d399);border:1px solid rgba(54,211,153,.4)}
+.sev-warn{background:rgba(251,189,35,.14);color:var(--warn,#fbbd23);border:1px solid rgba(251,189,35,.4)}
+.sev-critical{background:rgba(248,114,114,.14);color:var(--err,#f87272);border:1px solid rgba(248,114,114,.4)}
+#alert_log_list{max-height:60vh;overflow:auto;padding-right:2px}

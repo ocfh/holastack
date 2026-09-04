@@ -73,16 +73,18 @@ class Region
             ],
         ],
         'CN470' => [
-            // RP002-1.0.1（L2 1.0.4 / RP 2-1.0.1）通道计划 Type A / 20 MHz（简称 A20）。
-            // ⚠️ 上行分【两段】，不是连续的 470.3+0.2N：
-            //   上行 ch0..31 : 470.3 + ch*0.2        → 470.3 ~ 476.5 MHz（TX1 段）
-            //   上行 ch32..63: 503.5 + (ch-32)*0.2   → 503.5 ~ 509.7 MHz（TX2 段，500MHz 频段）
-            // 下行只有一段，按同一个 ch 号映射：
-            //   下行 ch0..31 : 483.9 + ch*0.2        → 483.9 ~ 490.1 MHz
-            //   下行 ch32..63: 490.3 + (ch-32)*0.2   → 490.3 ~ 496.5 MHz
+            // RP002-1.0.1（L2 1.0.4 / RP 2-1.0.1）通道计划 Type A / 20MHz（简称 A20）。
+            // 默认上行两段：
+            //   ch0..31  : 470.3 + ch*0.2   → 470.3 ~ 476.5 MHz
+            //   ch32..63 : 503.5 + (ch-32)*0.2 → 503.5 ~ 509.7 MHz
+            // 默认 RX1（按 ch 号）走同一规则：
+            //   ch<32  : 483.9 + ch*0.2  → 483.9 ~ 490.1 MHz
+            //   ch≥32  : 490.3 + (ch-32)*0.2 → 490.3 ~ 496.5 MHz
+            // RX2 默认 = 486.9 MHz（ABP/未入网）；OTAA 入网后由 otaaFrequencies[joinIdx] 决定。
             // 依据：Middlewares/.../Mac/Region/RegionCN470A20.c
             //       RegionCN470A20InitializeChannels() / RegionCN470A20GetRx1Frequency()
-            // 旧版 RP001 的 96 信道（下行 500.3 起）已废弃，勿再使用。
+            // 2026-09-03：曾切到 B26（480.3-489.7 / 502.5 RX2）尝试对齐网关 481.5-482.9，
+            // 联调不通，已回退 A20。保留 cn470_b26 分支作备用。 */
             'rx2_frequency' => 486900000,
             'rx2_dr' => 1,
             'beacon_frequency' => 508300000,
@@ -91,8 +93,7 @@ class Region
             'beacon_rfu2' => 1,
             'beacon_nb_channels' => 8,
             'beacon_channel_step' => 200000,
-            // 数据上行的 RX1/RX2 延迟是标准值 1s/2s（实测：txDone 22.901s → RX_1 23.878s、RX_2 24.906s）。
-            // 只有 Join 请求才用 5s/6s（join_accept_delay），二者不可混用。
+            // 数据上行的 RX1/RX2 延迟是标准值 1s/2s。
             'receive_delay1' => 1000,
             'receive_delay2' => 2000,
             'join_accept_delay1' => 5000,
@@ -100,35 +101,37 @@ class Region
             'rx1_dr_offset' => 0,
             'cf_list' => null,
             'max_ul_dr' => 5,
-            // OTAA 设备入网后的 RX2 频点 = 本表[入网时使用的 Join 信道号 % 8]
-            // 依据：RegionCN470A20.h CN470_A20_RX_WND_2_FREQ_OTAA + RegionCN470A20GetRx2Frequency()
+            // OTAA 入网后的 RX2 频点 = A20 设备级表 RegionCN470A20OtaaFrequencies[]，
+            // 与 Join idx 绑定。2026-09-04 对照 RP002-1.0.1 §2.9.7.1 Table 52 官方值修正：
+            //   idx0=485.3 / idx1=486.9 / idx2=488.5 / idx3=490.1
+            //   idx4=491.7 / idx5=493.3 / idx6=494.0 / idx7=496.5
+            // （idx6 规范印 494.9，SDK 实现为 494.0，两端统一用 494.0。）
+            // 本工程 Join 走 idx1 → RX2/RX_C = 486.9（与 ABP 默认同值）。
             'rx2_frequency_otaa' => [485.3, 486.9, 488.5, 490.1, 491.7, 493.3, 494.0, 496.5],
 
             // Join 信道表（[上行频点 MHz, 下行 RX1 频点 MHz]）。
-            // 固件侧已把 CN470_JOIN_CHANNELS 掩码收窄为 { 0x000F, 0x0000 }，只用 CN470_COMMON_JOIN_CHANNELS
-            // 的前 4 条（RegionCN470.h）。这 4 条的下行恰好满足常规 A20 公式 483.9 + ch*0.2：
-            //   470.9(ch=3)→484.5  472.5(ch=11)→486.1  474.1(ch=19)→487.7  475.7(ch=27)→489.3
-            // 若固件掩码改回 20 条全开，需同步补回后 16 条（其中 479.9/499.9 为上下行同频）。
+            // 2026-09-03：79 工程把协议常量 FIRST_TX1 改成了 481.5（ch0..7 = 481.5..482.9），
+            // 公共 Join 表 idx 0..3 上行也跟着改为 481.5/481.7/481.9/482.1。
+            // 设备掩码 {0x0002,0x0000} 只开 idx 1 → Join 阶段发 481.7，期望 RX1=486.1。
+            // 下列 8 条对应 idx 0~7（A20 计划 + 79 工程改后上行段）：
             'join_channels' => [
-                [470.9, 484.5], [472.5, 486.1], [474.1, 487.7], [475.7, 489.3],
+                [481.5, 484.5], [481.7, 486.1], [481.9, 487.7], [482.1, 489.3],
+                [504.1, 490.9], [505.7, 492.5], [507.3, 494.1], [508.9, 495.7],
             ],
             'rx1' => [
-                // CN470 下行 RX1 用「配对频点」而非上行同频，A20 计划分两段映射（见上方注释）。
-                // 注意：本设备固件把 RECEIVE_DELAY1/2 与 JOIN_ACCEPT_DELAY1/2 的语义对调了——
-                // 数据下行 RX1 实际在 txDone 后 ~5s 开窗（非标准 1s），故这里 receive_delay 也取 5000/6000 迁就设备；
-                // 若以后接标准设备（1s）需改回 1000/2000。
+                // A20 计划：双段上行 ch0..63，下行按 (ch 与 31) 映射。
                 'type' => 'cn470_a20',
-                // 上行两段：ch0..31 从 ul_start 起，ch32..63 从 ul_start2 起（500MHz 频段）
                 'ul_start' => 470.3, 'ul_step' => 0.2, 'ul_count' => 64,
-                'ul_start2' => 503.5,
-                'dl_start' => 483.9, 'dl_step' => 0.2,
-                'dl_split' => 32, 'dl_start2' => 490.3,
+                'ul_start2' => 503.5, 'dl_split' => 32,
+                'dl_start' => 483.9, 'dl_start2' => 490.3, 'dl_step' => 0.2,
             ],
-            // Class C 的 RX_C 频点必须用「区域默认 RX2」(486.9)，不能用设备级 rx2_frequency。
-            // 依据 LoRaMac.c:4557 —— Reset 时 RxCChannel.Frequency = PHY_DEF_RX2_FREQUENCY；
-            // 只有切回 Class A 才会把 RxCChannel 同步成 Rx2Channel（LoRaMac.c:2544）。
-            // 而 CN470 入网后 Rx2Channel 会被改成 OTAA 值（485.3），与 RX_C 不同。
-            'rx2_class_c_ignores_device' => true,
+            // Class C 的 RX_C 频点改用「设备级 rx2_frequency」（即 OTAA 入网后存的
+            // otaaFrequencies[joinChannelIndex] 值），不再固定走「区域默认 RX2」。
+            // 原因：CN470 A20 设备入网后，Class A RX2 / Class C RX_C 都是设备按
+            // RegionCN470A20GetRx2Frequency(joinIdx, true) 拿的设备级值（如 79 工程 idx1=486.1），
+            // 而 NS 区域默认 rx2_frequency=486900000，差 0.8 MHz → Class C 永远收不到。
+            // 2026-09-04 改：true → false，让 Class C 走设备级（与设备 RX_C 完美对齐）。
+            'rx2_class_c_ignores_device' => false,
             'data_rates' => [
                 0 => ['sf' => 12, 'bw' => 125, 'desc' => 'SF12BW125'],
                 1 => ['sf' => 11, 'bw' => 125, 'desc' => 'SF11BW125'],
@@ -430,6 +433,17 @@ class Region
             $split = (int) ($r['dl_split'] ?? 32);
             $dlStep = (float) ($r['dl_step'] ?: 0.2);
             $start2 = (float) ($r['ul_start2'] ?? 0);
+            // 2026-09-03：79 工程把协议常量 FIRST_TX1 改成了 481.5（ch0..7 = 481.5..482.9），
+            // 让设备能发到网关 UG67 8 频点。但 A20 默认 RX1 公式按 ul_start=470.3 算，
+            // 收到 481.5 时算 ch=56→RX1=495.1（与设备按 A20 公式期望的 483.9 错位 11.2 MHz，
+            // 设备 RX1 永远 timeout）。
+            // 修复：检测 ul ∈ [481.5, 482.9] 时直接返回 A20 公式 ch0..7 对应的 RX1
+            //   ch0=481.5 → 483.9, ch1=481.7 → 484.1, ..., ch7=482.9 → 485.3
+            // 公式 RX1 = 483.9 + (ul - 481.5) / 0.2 * 0.2 = 481.5 + 2.4 + (ul-481.5)
+            //        = ul + 2.4  （RX1 比 UL 高 2.4 MHz，匹配 A20 上下行偏移）
+            if ($ulFreqMHz >= 481.0 && $ulFreqMHz < 483.0) {
+                return round($ulFreqMHz + 2.4, 1);
+            }
             // 500MHz 段（TX2）：ch = split + (freq - ul_start2)/step
             if ($start2 > 0 && $ulFreqMHz >= $start2 - $step / 2) {
                 $ch = (int) round(($ulFreqMHz - $start2) / $step);
@@ -449,6 +463,14 @@ class Region
                 $ch = $split - 1;
             }
             return (float) $r['dl_start'] + $ch * $dlStep;
+        }
+
+        if ($type === 'cn470_b26') {
+            // B26 计划：单段上行 480.3 + ch*0.2 (ch0..47)；下行 500.1 + (ch%24)*0.2。
+            $ch = (int) round(($ulFreqMHz - (float) $r['ul_start']) / (float) $r['ul_step']);
+            $ch = max(0, min($ch, 47));
+            $dlIdx = $ch % 24;
+            return (float) $r['dl_start'] + $dlIdx * (float) $r['dl_step'];
         }
 
         if ($type !== 'paired') {

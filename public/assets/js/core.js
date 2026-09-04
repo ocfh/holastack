@@ -177,33 +177,44 @@ const adminBtn = (html) => html;
 
 const NAV_GROUPS = [
   { label:'运行监控', icon:'chartBar', items:[
-    {v:'dashboard', text:'概览', icon:'chartBar'},
-    {v:'uplinks', text:'上行消息日志', icon:'signal'},
-    {v:'downlinks', text:'下行消息日志', icon:'arrowDownTray'},
-    {v:'events', text:'网关日志', icon:'server'},
-    {v:'noc', text:'运维仪表盘', icon:'chartBar'},
-    {v:'map', text:'位置地图', icon:'map'},
+    {v:'dashboard', perm:'dashboard', text:'概览', icon:'chartBar'},
+    {v:'uplinks', perm:'uplinks', text:'上行消息日志', icon:'signal'},
+    {v:'downlinks', perm:'downlinks', text:'下行消息日志', icon:'arrowDownTray'},
+    {v:'events', perm:'events', text:'网关日志', icon:'server'},
+    {v:'noc', perm:'noc', text:'运维仪表盘', icon:'chartBar'},
+    {v:'map', perm:'map', text:'位置地图', icon:'map'},
   ]},
   { label:'设备管理', icon:'cpuChip', items:[
-    {v:'applications', text:'应用', icon:'squares2x2'},
-    {v:'devices', text:'设备', icon:'cpuChip'},
-    {v:'gateways', text:'网关', icon:'radio'},
-    {v:'device-profiles', text:'设备模板', icon:'rectangleStack'},
-    {v:'multicast-groups', text:'组播组', icon:'userGroup'},
+    {v:'applications', perm:'applications', text:'应用', icon:'squares2x2'},
+    {v:'devices', perm:'devices', text:'设备', icon:'cpuChip'},
+    {v:'gateways', perm:'gateways', text:'网关', icon:'radio'},
+    {v:'device-profiles', perm:'device-profiles', text:'设备模板', icon:'rectangleStack'},
+    {v:'multicast-groups', perm:'multicast-groups', text:'组播组', icon:'userGroup'},
+  ]},
+  { label:'数据管理', icon:'chartBar', items:[
+    {v:'thing-models', perm:'thing-models', text:'物模型', icon:'codeBracket'},
+    {v:'dashboard-data', perm:'dashboard-data', text:'数据看板', icon:'chartBar'},
+    {v:'alerts', perm:'alerts', text:'告警管理', icon:'bellAlert'},
+    {v:'scheduled', perm:'scheduled', text:'定时任务', icon:'clock'},
+    {v:'automations', perm:'automations', text:'联动模型', icon:'bolt'},
+    {v:'notification-groups', perm:'notification-groups', text:'通知组', icon:'bell'},
   ]},
   { label:'工具集成', icon:'puzzlePiece', items:[
-    {v:'integrations', text:'外部集成', icon:'puzzlePiece'},
-    {v:'api-keys', text:'API 密钥', icon:'key'},
-    {v:'api-logs', text:'API 调用日志', icon:'clipboardDocumentList'},
-    {v:'apidocs', text:'API 文档', icon:'bookOpen'},
-    {v:'loracalc', text:'LoRa 计算器', icon:'calculator'},
+    {v:'integrations', perm:'integrations', text:'外部集成', icon:'puzzlePiece'},
+    {v:'api-keys', perm:'api-keys', text:'API 密钥', icon:'key'},
+    {v:'api-logs', perm:'api-logs', text:'API 调用日志', icon:'clipboardDocumentList'},
+    {v:'apidocs', perm:'apidocs', text:'API 文档', icon:'bookOpen'},
+    {v:'loracalc', perm:'loracalc', text:'LoRa 计算器', icon:'calculator'},
   ]},
   { label:'系统管理', admin:true, icon:'cog6Tooth', items:[
-    {v:'tenants', text:'用户配置', icon:'users'},
-    {v:'users', text:'用户管理', icon:'user'},
-    {v:'settings', text:'站点设置', icon:'cog6Tooth'},
+    {v:'tenants', perm:'tenants', text:'用户配置', icon:'users'},
+    {v:'users', perm:'users', text:'用户管理', icon:'user'},
+    {v:'roles', perm:'roles', text:'角色管理', icon:'shieldCheck'},
+    {v:'departments', perm:'departments', text:'部门管理', icon:'buildingOffice'},
+    {v:'settings', perm:'settings', text:'站点设置', icon:'cog6Tooth'},
   ]},
 ];
+const hasPerm = (p) => !!state.user && (state.user.role === 'admin' || (state.user.permissions||[]).indexOf(p) !== -1);
 const VIEW_TITLES = {};
 NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => { VIEW_TITLES[it.v] = it.text; }));
 const VIEW_ICONS = {};
@@ -213,7 +224,10 @@ function renderNav(){
   const desk = document.getElementById('deskNav');
   const mob = document.getElementById('mobilePanel');
   if (!desk || !mob) return;
-  const groups = NAV_GROUPS.filter(g => !g.admin || isAdmin());
+  const groups = NAV_GROUPS
+    .filter(g => !g.admin || isAdmin())
+    .map(g => ({ ...g, items: (g.items||[]).filter(it => !it.perm || hasPerm(it.perm)) }))
+    .filter(g => g.items.length);
   desk.innerHTML = groups.map(g => {
     const sub = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${ICON[it.icon]||''}<span>${it.text}</span></a>`).join('');
     return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${ICON[g.icon]||''}<span>${g.label}</span><span class="caret">${ICON.chevronDown}</span></button><div class="navsub">${sub}</div></div>`;
@@ -272,7 +286,7 @@ async function logout(){
 
 const api = async (m,p,body) => {
   const opt = {method:m, headers:{'Content-Type':'application/json'}};
-  if (state.token) opt.headers['X-Elw-Token'] = state.token;
+  if (state.token) opt.headers['Grpc-Metadata-Authorization'] = 'Bearer ' + state.token;
   if (body) opt.body = JSON.stringify(body);
   const r = await fetch(p, opt);
   const ct = r.headers.get('content-type') || '';
@@ -280,7 +294,7 @@ const api = async (m,p,body) => {
   if (r.status === 401) { state.token = null; state.user = null; localStorage.removeItem('elw_token'); renderShell(); throw new Error('unauthorized'); }
   if (r.status === 403) {
     
-    try { const ej = JSON.parse(text); if (ej.error && ej.error.indexOf('forbidden') !== -1) toast(t('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'), 'warn'); } catch(e) {}
+    try { const ej = JSON.parse(text); if (ej.error && String(ej.error).indexOf('forbidden') !== -1) toast(t('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'), 'warn'); } catch(e) {}
   }
   if (r.status < 200 || r.status >= 300) {
     throw new Error('HTTP ' + r.status + '：' + text.slice(0, 300));
@@ -291,10 +305,135 @@ const api = async (m,p,body) => {
   let j;
   try { j = JSON.parse(text); } catch (e) { throw new Error('JSON 解析失败：' + text.slice(0, 300)); }
   
-  
-  if (j && j.error) return j;
-  return j;
+  return csAdapt(j, p);
 };
+
+/* =====================================================
+ * ChirpStack 风格响应适配层
+ * 后端 /api/* 已统一为 ChirpStack v4 REST 形状：
+ *   - 列表 {totalCount, result:[...]}（camelCase 字段）
+ *   - 错误 {error, code, message, details}
+ * 本层把 camelCase → snake_case，使既有 140+ 处
+ * r.data||[] 与 d.dev_eui 等消费代码无需逐处修改；
+ * 同时兼容 login/stats 等未改形状的端点（原样透传）。
+ * ===================================================== */
+const _SNAKE_CACHE = {};
+const _camel2snake = k => {
+  let s = _SNAKE_CACHE[k];
+  if (s === undefined) { s = k.replace(/[A-Z]/g, c => '_' + c.toLowerCase()); _SNAKE_CACHE[k] = s; }
+  return s;
+};
+const _ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-([0-9a-f]{12})$/;
+const _csTs = iso => { const t = Date.parse(iso); return isNaN(t) ? 0 : Math.floor(t / 1000); };
+const _csUuidInt = u => { const m = _UUID_RE.exec(u || ''); return m ? parseInt(m[1], 16) : 0; };
+function _csDeep(v) {
+  if (Array.isArray(v)) return v.map(_csDeep);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const k of Object.keys(v)) {
+      out[_camel2snake(k)] = _csDeep(v[k]);
+    }
+    return out;
+  }
+  return v;
+}
+/** 行级规范化：ISO 时间→unix 秒、UUID 外键→整数、枚举小写化 */
+function _csNormalizeRow(r) {
+  if (!r || typeof r !== 'object') return r;
+  const out = _csDeep(r);
+  for (const k of Object.keys(out)) {
+    const v = out[k];
+    if (typeof v === 'string' && _ISO_RE.test(v)) {
+      out[k] = _csTs(v);  // RFC3339 → unix 秒（前端 new Date(x*1000) 消费）
+    } else if (typeof v === 'string' && _UUID_RE.test(v) && /_id$/.test(k)) {
+      out[k] = _csUuidInt(v);  // 外键 UUID → 整数（与行数字 id 对齐）
+    }
+  }
+  if (out.last_seen === undefined && out.last_seen_at !== undefined) { out.last_seen = out.last_seen_at; }
+  // 主键：优先 numericId（后端同时接受数字/UUID 定位资源）
+  if (out.numeric_id !== undefined && out.numeric_id !== null) {
+    out.id = out.numeric_id;
+  } else if (typeof out.id === 'string' && _UUID_RE.test(out.id)) {
+    out.id = _csUuidInt(out.id);
+  } else if (typeof out.id === 'string' && /^\d+$/.test(out.id)) {
+    out.id = parseInt(out.id, 10);  // 日志类行（uplinks/downlinks/events）数字字符串 id → 数值，兼容既有 x.id===id 比较
+  }
+  if (typeof out.online === 'string') out.online = out.online.toLowerCase();
+  // hex 字段统一小写（前端展示/比对按小写约定）
+  for (const hk of ['payload_hex', 'decrypted_hex', 'phy_payload', 'dev_eui', 'dev_addr', 'dev_addr', 'mc_addr', 'mc_nwk_s_key', 'mc_app_s_key', 'app_eui', 'join_eui', 'nwk_s_key', 'app_s_key', 'nwk_key', 'app_key', 'gateway_id', 'gw_id']) {
+    if (typeof out[hk] === 'string' && out[hk] && /^[0-9a-fA-F]+$/.test(out[hk])) out[hk] = out[hk].toLowerCase();
+  }
+  // ---- 资源级别名（ChirpStack 字段 → 前端既有 snake_case 消费字段）----
+  // Base64 data → hex
+  const b6h = b => { try { const s = atob(b || ''); let h = ''; for (let i = 0; i < s.length; i++) h += ('0' + s.charCodeAt(i).toString(16)).slice(-2); return h; } catch (e) { return ''; } };
+  if (typeof out.f_cnt_up === 'number')   out.fcnt = out.f_cnt_up;
+  if (typeof out.f_cnt_down === 'number') out.fcnt = out.f_cnt_down;
+  if (typeof out.f_port === 'number')     out.port = out.f_port;
+  if (typeof out.time === 'number' && out.received_at === undefined) out.received_at = out.time;
+  if (typeof out.time === 'number' && out.created_at === undefined && out.state !== undefined) out.created_at = out.time;  // downlinks
+  if (typeof out.decrypted_hex !== 'string' || out.decrypted_hex === '') {
+    if (typeof out.decrypted_hex === 'undefined' && typeof out.payload_hex === 'string' && out.payload_hex !== '') { /* hex 扩展字段已有 */ }
+    else if (typeof out.decrypted === 'string' && out.decrypted !== '') out.decrypted_hex = b6h(out.decrypted);
+    else if (typeof out.data === 'string' && out.data !== '') { const h = b6h(out.data); if (out.decrypted_hex === undefined || out.decrypted_hex === '') out.decrypted_hex = h; }
+  }
+  if ((typeof out.phy_payload === 'undefined' || out.phy_payload === '') && typeof out.payload_hex === 'string' && out.payload_hex !== '') out.phy_payload = out.payload_hex;
+  if ((typeof out.payload_hex === 'undefined' || out.payload_hex === '') && typeof out.data === 'string' && out.data !== '') out.payload_hex = b6h(out.data);
+  if (typeof out.gateway_id === 'string' && out.gw_id === undefined) out.gw_id = out.gateway_id;
+  // applicationId/appId 别名
+  if (out.app_id === undefined && typeof out.application_id === 'number') out.app_id = out.application_id;
+  // device 行：classEnabled → class；status 由 is_disabled 推导；last_seen_fmt
+  if (typeof out.class_enabled === 'string' && out.class === undefined) out.class = out.class_enabled.replace('CLASS_', '');
+  if (out.status === undefined && out.is_disabled !== undefined) out.status = out.is_disabled ? 'disabled' : 'active';
+  if (typeof out.activation === 'string' && out.activation === '') out.activation = 'OTAA';
+  if (out.online === 'offline' && typeof out.last_seen === 'number' && out.last_seen > 0) {
+    // 后端用 ChirpStack 语义（从未上行=OFFLINE），前端把有 last_seen 的都显示原逻辑即可
+  }
+  if (typeof out.last_seen === 'number' && out.last_seen_fmt === undefined) out.last_seen_fmt = out.last_seen > 0 ? new Date(out.last_seen * 1000).toLocaleString('sv-SE').replace('T', ' ') : '-';
+  // gateways：state → status；lastSeenFmt
+  if (typeof out.state === 'string' && out.status === undefined && out.gateway_id !== undefined) out.status = out.state === 'ONLINE' ? 'online' : 'offline';
+  // device-profiles：ChirpStack 枚举 → 前端展示文本
+  if (typeof out.mac_version === 'string' && /^LORAWAN_/.test(out.mac_version)) out.mac_version = out.mac_version.replace('LORAWAN_', '').replaceAll('_', '.');
+  if (typeof out.reg_params_revision === 'string' && /^RP002_/.test(out.reg_params_revision)) out.reg_params_revision = out.reg_params_revision.replace(/^RP002_/, '').replaceAll('_', '.');
+  if (out.adr_algorithm === undefined) out.adr_algorithm = 'default';
+  if (typeof out.payload_codec_runtime === 'string' && out.payload_codec_runtime === '') out.payload_codec_runtime = 'NONE';
+  if (typeof out.supports_otaa === 'boolean') out.supports_otaa = out.supports_otaa ? 1 : 0;
+  if (typeof out.supports_class_b === 'boolean') out.supports_class_b = out.supports_class_b ? 1 : 0;
+  if (typeof out.supports_class_c === 'boolean') out.supports_class_c = out.supports_class_c ? 1 : 0;
+  // api-keys：token_preview（后端已给 tokenPreview）+ application_id
+  if (out.application_id === undefined && typeof out.app_id === 'number') out.application_id = out.app_id;
+  if (out.app_id === undefined && typeof out.application_id === 'number') out.app_id = out.application_id;
+  return out;
+}
+function csAdapt(j, path) {
+  if (!j || typeof j !== 'object') return j;
+  if (j.error !== undefined && j.error !== null) return j;  // 错误（含 gRPC 形状）原样透传
+  // 列表：{totalCount, result} → 补 data/total 别名（snake_case 化 + 行规范化的 result），
+  // 使既有 r.data||[] 与 r.total 消费代码无需逐处修改
+  if (typeof j.totalCount === 'number' && Array.isArray(j.result)) {
+    const norm = j.result.map(_csNormalizeRow);
+    const out = { totalCount: j.totalCount, result: norm, data: norm, total: j.totalCount };
+    for (const k of Object.keys(j)) {
+      if (k !== 'totalCount' && k !== 'result') out[_camel2snake(k)] = _csDeep(j[k]);
+    }
+    return out;
+  }
+  // 非列表业务对象：若对象所有键都是 snake_case（如 stats/settings/regions），原样透传
+  if (typeof path === 'string' && path.indexOf('/api/') === 0 && j.data === undefined && !j.ok) {
+    const hasCamel = Object.keys(j).some(k => /[A-Z]/.test(k));
+    if (!hasCamel) return j;
+    // 设备单体等嵌套包装（device/deviceProfile/...）：转换后取出展平，便于 d.xxx 消费
+    const nested = ['device', 'device_profile', 'gateway', 'application', 'tenant', 'multicast_group', 'thing_model', 'uplink', 'downlink'];
+    const conv = _csDeep(j);
+    for (const nk of nested) {
+      if (conv[nk] && typeof conv[nk] === 'object' && !Array.isArray(conv[nk])) {
+        return _csNormalizeRow(conv[nk]);
+      }
+    }
+    return conv;
+  }
+  return j;
+}
 const hex = s => s || '-';
 // DevAddr 显示按 4 字节倒序（与 AT 模块输出一致，仅展示用，不改变存储值）
 const revAddr = s => (/^[0-9a-fA-F]{8}$/.test(s||'') ? s.slice(6,8)+s.slice(4,6)+s.slice(2,4)+s.slice(0,2) : (s||'-'));
@@ -410,6 +549,19 @@ function resetFilters(clearPageState, viewFn){
 
 async function nav(v, silent=false){
   state.view = v;
+  const _navItem = NAV_GROUPS.flatMap(g => g.items||[]).find(i => i.v === v);
+  if (!state.user) return;
+  if (_navItem && _navItem.perm && !hasPerm(_navItem.perm)) {
+    if (v !== 'dashboard') {
+      state.view = 'dashboard';
+      nav('dashboard', true);
+    } else {
+      state.view = 'dashboard';
+      const _view = document.getElementById('view');
+      if (_view) _view.innerHTML = '<div class="muted">' + t('无访问权限') + '</div>';
+    }
+    return;
+  }
   const openSelId = silent ? captureOpenSelId() : null;
   if (openSelId) closeAllSelMenus(true); else closeAllSelMenus();
   if(!silent){ closeNav(); closeGrps(); }
@@ -438,12 +590,21 @@ async function nav(v, silent=false){
     else if (v==='integrations') await viewIntegrations();
     else if (v==='api-keys') await viewApiKeys();
     else if (v==='multicast-groups') await viewMulticastGroups();
+    else if (v==='fuota') await viewFuota();
     else if (v==='users') await viewUsers();
     else if (v==='api-logs') await viewApiLogs();
     else if (v==='loracalc') await viewLoraCalc();
     else if (v==='apidocs') { await applyPublicSettings(); await viewApiDocs(); }
     else if (v==='noc') await viewNoc();
     else if (v==='map') await viewMap();
+    else if (v==='thing-models') await viewThingModels();
+    else if (v==='dashboard-data') await viewDashboardData();
+    else if (v==='alerts') await viewAlerts();
+    else if (v==='scheduled') await viewScheduledTasks();
+    else if (v==='automations') await viewAutomations();
+    else if (v==='notification-groups') await viewNotificationGroups();
+    else if (v==='roles') await viewRoles();
+    else if (v==='departments') await viewDepartments();
     else if (v==='settings') await viewSettings();
     else document.getElementById('view').innerHTML = '<div class="muted">未知页面</div>';
     

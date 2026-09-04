@@ -205,17 +205,22 @@ async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId
 async function newUser(){
   let tenants = '';
   try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join(''); } catch(e){}
-  openModal(`<h3>新建用户</h3><label>用户名</label><input id="m_user"><label>密码（≥6 位）</label><input id="m_pass" type="password">
-    <label>邮箱（可选，用于头像）</label><input id="m_email" type="email" placeholder="user@example.com">
-    <label>角色</label><select id="m_role" onchange="roleTenantToggle()">
-      <option value="operator">operator（演示：只读 + 模拟数据）</option>
-      <option value="tenant">用户配置（仅本用户配置数据，可写）</option>
-      <option value="admin">admin（全部权限）</option>
+  let roles = '', depts = '';
+  try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!x.is_system).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
+  try { const dr = await api('GET','/api/departments'); const flat=[]; (function walk(ns){ (ns||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(dr.data||[],0); depts = flat.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
+  openModal(`<h3>${t('新建用户')}</h3><label>${t('用户名')}</label><input id="m_user"><label>${t('密码')}（≥6 位）</label><input id="m_pass" type="password">
+    <label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" placeholder="user@example.com">
+    <label>${t('角色')}</label><select id="m_role" onchange="roleTenantToggle()">
+      <option value="operator">operator（${t('演示：只读 + 模拟数据')}）</option>
+      <option value="tenant">${t('用户配置')}（${t('仅本用户配置数据，可写')}）</option>
+      <option value="admin">admin（${t('全部权限')}）</option>
     </select>
-    <div id="m_tenant_box" class="hidden"><label>绑定用户配置</label>
-      <select id="m_tenant"><option value="" disabled selected>— 选择用户配置 —</option>${tenants}</select>
+    <div id="m_tenant_box" class="hidden"><label>${t('绑定用户配置')}</label>
+      <select id="m_tenant"><option value="" disabled selected>— ${t('选择用户配置')} —</option>${tenants}</select>
     </div>
-    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveUser)">保存</button></div>`);
+    <label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select>
+    <label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`);
   roleTenantToggle();
 }
 function roleTenantToggle(){
@@ -224,7 +229,7 @@ function roleTenantToggle(){
 }
 async function saveUser(){
   const role = v('m_role');
-  const body = {username:v('m_user'), password:v('m_pass'), role, email:v('m_email')};
+  const body = {username:v('m_user'), password:v('m_pass'), role, email:v('m_email'), role_id: +v('m_role_custom')||0, department_id: +v('m_dept')||0};
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;
@@ -239,6 +244,9 @@ async function editUser(id){
   const u = (r.data||[]).find(x=>x.id===id); if(!u) return;
   let tenants = '';
   try { const tr = await api('GET','/api/tenants'); tenants = (tr.data||[]).map(row=>`<option value="${row.id}" ${String(row.id)===String(u.tenant_id)?'selected':''}>${esc(row.name)}</option>`).join(''); } catch(e){}
+  let roles = '', depts = '';
+  try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!x.is_system).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.role_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
+  try { const dr = await api('GET','/api/departments'); const flat=[]; (function walk(ns){ (ns||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(dr.data||[],0); depts = flat.map(x=>`<option value="${x.id}" ${String(x.id)===String(u.department_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
   const isSelf = state.user && state.user.id === id;
   openModal(`<h3>编辑用户 #${id}（${esc(u.username)}）</h3>
     <label>用户名</label><input id="m_user" value="${esc(u.username)}" disabled>
@@ -251,12 +259,14 @@ async function editUser(id){
     <div id="m_tenant_box" class="${u.role==='tenant'?'':'hidden'}"><label>绑定用户配置</label>
       <select id="m_tenant">${u.tenant_id ? '' : '<option value="" disabled selected>— 选择用户配置 —</option>'}${tenants}</select>
     </div>
+    <label>自定义角色（覆盖菜单权限）</label><select id="m_role_custom"><option value="0">— 默认 —</option>${roles}</select>
+    <label>部门</label><select id="m_dept"><option value="0">— 无 —</option>${depts}</select>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">保存</button></div>`);
   roleTenantToggle();
 }
 async function saveUserEdit(id){
   const role = v('m_role');
-  const body = {role, email:v('m_email')};
+  const body = {role, email:v('m_email'), role_id: +v('m_role_custom')||0, department_id: +v('m_dept')||0};
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;
@@ -418,19 +428,20 @@ function newIntegration(it){
   const gcpFields=`<div id="f_gcp" class="hidden"><label>Project ID</label><input id="m_gcp_project"><label>Topic Name</label><input id="m_gcp_topic"><label>Credentials JSON (服务账号)</label><textarea id="m_gcp_cred" placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'></textarea><label>或 Credentials 文件</label><input id="m_gcp_credfile" placeholder="/path/to/sa.json"></div>`;
   const amqpFields=`<div id="f_amqp" class="hidden"><label>AMQP URL</label><input id="m_amqp_url" placeholder="amqp://user:pass@host:5672"><label>Exchange</label><input id="m_amqp_exchange" placeholder="amq.topic"><label>Routing Key 模板</label><input id="m_amqp_rk" placeholder="application.{app_id}.device.{dev_eui}.event.{event}"></div>`;
   const kafkaFields=`<div id="f_kafka" class="hidden"><label>Brokers</label><input id="m_kafka_brokers" placeholder="host1:9092,host2:9092"><label>Topic</label><input id="m_kafka_topic"><label>TLS</label><select id="m_kafka_tls"><option value="0">否</option><option value="1">是</option></select><label>SASL 用户名(可选)</label><input id="m_kafka_user"><label>SASL 密码(可选)</label><input id="m_kafka_pass" type="password"></div>`;
+  const modbusFields=`<div id="f_modbus" class="hidden"><label>Server</label><input id="m_mb_server" placeholder="tcp://127.0.0.1:502"><label>Unit ID</label><input id="m_mb_unit" placeholder="1"><label>寄存器地址 (十进制)</label><input id="m_mb_addr" placeholder="0"><label>取值路径</label><input id="m_mb_path" placeholder="decoded.temperature 或 telemetry.battery 或 uplink.f_cnt"><label>数据类型</label><select id="m_mb_type"><option value="u16">u16 (1 寄存器, FC06)</option><option value="i16">i16 (1 寄存器, FC06)</option><option value="u32">u32 (2 寄存器, FC16)</option><option value="i32">i32 (2 寄存器, FC16)</option><option value="f32">f32 浮点 (2 寄存器, FC16)</option></select><label>32-bit 字节序</label><select id="m_mb_order"><option value="ABCD">ABCD (大端)</option><option value="CDAB">CDAB (字交换)</option><option value="BADC">BADC (字节交换)</option><option value="DCBA">DCBA (小端)</option></select></div>`;
   const isEdit = !!it;
   const appNo = isEdit ? it.application_id : state.intAppSel;
   openModal(`<h3>${isEdit?t('编辑外部集成'):t('新建外部集成')} (${t('应用')} #${appNo})</h3>
-   <label>类型</label><select id="m_kind" onchange="toggleIntFields()"><option value="HTTP">HTTP</option><option value="INFLUX_DB">InfluxDB</option><option value="MQTT_GLOBAL">MQTT</option><option value="AWS_SNS">AWS SNS</option><option value="AZURE_SERVICE_BUS">Azure Service Bus</option><option value="GCP_PUBSUB">GCP Pub/Sub</option><option value="AMQP">AMQP (RabbitMQ)</option><option value="KAFKA">Kafka</option></select>
+   <label>类型</label><select id="m_kind" onchange="toggleIntFields()"><option value="HTTP">HTTP</option><option value="INFLUX_DB">InfluxDB</option><option value="MQTT_GLOBAL">MQTT</option><option value="AWS_SNS">AWS SNS</option><option value="AZURE_SERVICE_BUS">Azure Service Bus</option><option value="GCP_PUBSUB">GCP Pub/Sub</option><option value="AMQP">AMQP (RabbitMQ)</option><option value="KAFKA">Kafka</option><option value="MODBUS_TCP">Modbus TCP</option></select>
    <label>启用</label><select id="m_enabled"><option value="1" selected>是</option><option value="0">否</option></select>
-   ${httpFields}${influxFields}${mqttFields}${awsFields}${azureFields}${gcpFields}${amqpFields}${kafkaFields}
+   ${httpFields}${influxFields}${mqttFields}${awsFields}${azureFields}${gcpFields}${amqpFields}${kafkaFields}${modbusFields}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveIntegration)">保存</button></div>`);
   if(isEdit){ prefillInt(it); }
 }
 function toggleIntFields(){
   const k=v('m_kind');
-  const map={HTTP:'f_http',INFLUX_DB:'f_influx',MQTT_GLOBAL:'f_mqtt',AWS_SNS:'f_aws',AZURE_SERVICE_BUS:'f_azure',GCP_PUBSUB:'f_gcp',AMQP:'f_amqp',KAFKA:'f_kafka'};
-  for(const id of ['f_http','f_influx','f_mqtt','f_aws','f_azure','f_gcp','f_amqp','f_kafka']){
+  const map={HTTP:'f_http',INFLUX_DB:'f_influx',MQTT_GLOBAL:'f_mqtt',AWS_SNS:'f_aws',AZURE_SERVICE_BUS:'f_azure',GCP_PUBSUB:'f_gcp',AMQP:'f_amqp',KAFKA:'f_kafka',MODBUS_TCP:'f_modbus'};
+  for(const id of ['f_http','f_influx','f_mqtt','f_aws','f_azure','f_gcp','f_amqp','f_kafka','f_modbus']){
     document.getElementById(id).classList.toggle('hidden', map[k]!==id);
   }
 }
@@ -444,6 +455,7 @@ async function saveIntegration(){
   else if(kind==='GCP_PUBSUB'){ config={project_id:v('m_gcp_project'),topic_name:v('m_gcp_topic'),credentials_json:v('m_gcp_cred')||'',credentials_file:v('m_gcp_credfile')||''}; }
   else if(kind==='AMQP'){ config={url:v('m_amqp_url'),exchange:v('m_amqp_exchange'),routing_key_template:v('m_amqp_rk')}; }
   else if(kind==='KAFKA'){ config={brokers:v('m_kafka_brokers'),topic:v('m_kafka_topic'),tls:+v('m_kafka_tls'),username:v('m_kafka_user'),password:v('m_kafka_pass')}; }
+  else if(kind==='MODBUS_TCP'){ config={server:v('m_mb_server'),unit_id:parseInt(v('m_mb_unit')||'1',10)||1,address:parseInt(v('m_mb_addr')||'0',10)||0,value_path:v('m_mb_path'),type:v('m_mb_type')||'u16',byte_order:v('m_mb_order')||'ABCD'}; if(!config.server||!config.value_path){alert('Server 和 取值路径 必填');return;} }
   if(state.editIntId){
     const r=await api('PUT',`/api/integrations/${state.editIntId}`,{enabled:+v('m_enabled'), config});
     if(r.error){alert(t(r.error));return;} closeModal(); state.editIntId=0; viewIntegrations();
@@ -472,6 +484,7 @@ function prefillInt(it){
   else if(it.kind==='GCP_PUBSUB'){ set('m_gcp_project',cfg.project_id); set('m_gcp_topic',cfg.topic_name); set('m_gcp_cred',cfg.credentials_json); set('m_gcp_credfile',cfg.credentials_file); }
   else if(it.kind==='AMQP'){ set('m_amqp_url',cfg.url); set('m_amqp_exchange',cfg.exchange); set('m_amqp_rk',cfg.routing_key_template); }
   else if(it.kind==='KAFKA'){ set('m_kafka_brokers',cfg.brokers); set('m_kafka_topic',cfg.topic); set('m_kafka_tls',cfg.tls); set('m_kafka_user',cfg.username); set('m_kafka_pass',cfg.password); }
+  else if(it.kind==='MODBUS_TCP'){ set('m_mb_server',cfg.server); set('m_mb_unit',cfg.unit_id); set('m_mb_addr',cfg.address); set('m_mb_path',cfg.value_path); set('m_mb_type',cfg.type); set('m_mb_order',cfg.byte_order); }
 }
 
 

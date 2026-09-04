@@ -84,6 +84,11 @@ if ($path === '/install') {
 
 Database::migrate();
 
+// ChirpStack 兼容格式零值时间戳：必须声明在所有 API 分发块之前——
+// const 是运行时语句，/api/、/v1/ 分支处理完即 exit，下方的 cs_* 帮助函数
+//（定义于文件后部）被调用时若还没执行到声明处会报 Undefined constant。
+const CS_ZERO_TS = '1970-01-01T00:00:00Z';
+
 
 
 
@@ -125,11 +130,14 @@ if (strpos($path, '/api/view/') === 0) {
 
 if ($path === '/api' || strpos($path, '/api/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
+
+    // ChirpStack 风格 API（v4 REST 形状：totalCount/result、camelCase、UUID id、gRPC 错误）
+    // 由 handleApi() 原生输出，全部 /api/* 资源统一形状
     try {
         echo json_encode(handleApi($method, $path), JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'server_error: ' . $e->getMessage()]);
+        echo json_encode(cs_err(13, 'internal', $e->getMessage()), JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -154,6 +162,107 @@ function getJsonBody(): array
     return $out;
 }
 
+/* =====================================================
+ * ChirpStack 风格 API 辅助（handleApi 专用）
+ * 列表：{totalCount, result}；字段 camelCase；id 为 UUID；
+ * 时间：RFC3339 UTC（零值 1970-01-01T00:00:00Z）；
+ * 错误：{error, code, message, details}（gRPC code）
+ * ===================================================== */
+
+function cs_intToUuid(int $id): string
+{
+    $hex = str_pad(dechex(max(0, $id)), 12, '0', STR_PAD_LEFT);
+    return '00000000-0000-0000-0000-' . $hex;
+}
+
+function cs_uuidToInt(string $uuid): int
+{
+    $uuid = trim($uuid);
+    if ($uuid === '') {
+        return 0;
+    }
+    if (ctype_digit($uuid)) {
+        return (int) $uuid;  // 兼容前端直接传数字 id
+    }
+    $hex = preg_replace('/[^0-9a-fA-F]/', '', $uuid);
+    if ($hex === '' || strlen($hex) < 12) {
+        return 0;
+    }
+    return (int) hexdec(substr($hex, -12));
+}
+
+function cs_ts($unix): string
+{
+    $unix = (int) $unix;
+    return $unix > 0 ? gmdate('Y-m-d\TH:i:s\Z', $unix) : CS_ZERO_TS;
+}
+
+function cs_err(int $code, string $error, string $message): array
+{
+    return ['error' => $error, 'code' => $code, 'message' => $message, 'details' => []];
+}
+
+function cs_notFound(string $what = 'object does not exist'): array
+{
+    http_response_code(404);
+    return cs_err(5, 'not_found', $what);
+}
+
+function cs_invalid(string $msg): array
+{
+    http_response_code(400);
+    return cs_err(3, 'invalid_argument', $msg);
+}
+
+function cs_forbidden(string $msg = 'permission denied'): array
+{
+    http_response_code(403);
+    return cs_err(7, 'permission_denied', $msg);
+}
+
+/** 列表响应包装 */
+function cs_list(array $result, int $totalCount): array
+{
+    return ['totalCount' => $totalCount, 'result' => $result];
+}
+
+/** 空对象（ChirpStack 对空 map 输出 {}） */
+function cs_obj(): \stdClass
+{
+    return new \stdClass();
+}
+
+/** camelCase 行字段公共部分（id/createdAt/updatedAt） */
+function cs_rowBase(array $row): array
+{
+    $t = (int) ($row['created_at'] ?? 0);
+    return [
+        'id'        => cs_intToUuid((int) $row['id']),
+        'createdAt' => cs_ts($t),
+        'updatedAt' => cs_ts($t),
+    ];
+}
+
+/** 把 WebApp 返回的 ['error'=>...] 统一转 gRPC 错误；非错误返回 null */
+function cs_wrapError(array $r): ?array
+{
+    if (!isset($r['error'])) {
+        return null;
+    }
+    $msg = (string) $r['error'];
+    if (stripos($msg, 'not found') !== false || stripos($msg, '不存在') !== false) {
+        return cs_notFound($msg);
+    }
+    if (stripos($msg, 'forbidden') !== false || stripos($msg, '越权') !== false) {
+        return cs_forbidden($msg);
+    }
+    if (stripos($msg, '已存在') !== false || stripos($msg, 'already exists') !== false) {
+        http_response_code(409);
+        return cs_err(6, 'already_exists', $msg);
+    }
+    return cs_invalid($msg);
+}
+
 function handleApi(string $method, string $path): array
 {
     $segs = explode('/', trim($path, '/'));
@@ -173,6 +282,14 @@ function handleApi(string $method, string $path): array
         return max(0, $n);
     };
 
+    // ChirpStack 风格 camelCase 分页参数（limit/offset 兼容，tenantId→tenant_id 等）
+    $camelParam = static function (array $get, string $camel, string $snake) {
+        return $get[$camel] ?? $get[$snake] ?? null;
+    };
+    $uuidOf = static function ($v): int {
+        return $v !== null ? cs_uuidToInt((string) $v) : 0;
+    };
+
     
 
     if ($resource === 'login') {
@@ -185,7 +302,8 @@ function handleApi(string $method, string $path): array
             return ['error' => 'invalid credentials'];
         }
         $token = Auth::issueToken($u);
-        return ['ok' => true, 'user' => ['id' => $u['id'], 'username' => $u['username'], 'email' => $u['email'] ?? '', 'avatar_url' => WebApp::avatarUrl($u['email'] ?? ''), 'role' => $u['role']], 'token' => $token];
+        $u['permissions'] = Auth::permissionsFor($u);
+        return ['ok' => true, 'user' => ['id' => $u['id'], 'username' => $u['username'], 'email' => $u['email'] ?? '', 'avatar_url' => WebApp::avatarUrl($u['email'] ?? ''), 'role' => $u['role'], 'role_id' => (int) ($u['role_id'] ?? 0), 'department_id' => (int) ($u['department_id'] ?? 0), 'permissions' => $u['permissions']], 'token' => $token];
     }
     if ($resource === 'logout') {
         Auth::logout(Auth::tokenFromRequest());
@@ -198,6 +316,7 @@ function handleApi(string $method, string $path): array
             return ['error' => 'unauthorized'];
         }
         $u['avatar_url'] = WebApp::avatarUrl($u['email'] ?? '');
+        $u['permissions'] = Auth::permissionsFor($u);
         return ['user' => $u];
     }
     
@@ -249,6 +368,132 @@ function handleApi(string $method, string $path): array
         Auth::guardApi(Auth::ROLE_ADMIN);
     }
 
+    /* ---------- ChirpStack 风格行映射器 ---------- */
+
+    // apiApplication
+    $applicationRow = static function (array $a, bool $listItem) use ($camelParam, $get): array {
+        $row = array_merge(cs_rowBase($a), [
+            'name'        => $a['name'] ?? '',
+            'description' => $a['description'] ?? '',
+            'tenantId'    => cs_intToUuid((int) ($a['tenant_id'] ?? 0)),
+            'tags'        => cs_obj(),
+        ]);
+        // holastack 扩展字段保留（camelCase）：appEui / callbackUrl 供前端与既有集成使用
+        $row['appEui'] = $a['app_eui'] ?? '';
+        $row['callbackUrl'] = $a['callback_url'] ?? '';
+        // holastack 扩展：numericId（前端按数字 id 过滤/关联，与 devices/apiKeys 一致）
+        $row['numericId'] = (int) ($a['id'] ?? 0);
+        return $row;
+    };
+
+    // apiDeviceListItem / apiDevice（get 用）
+    $deviceProfileName = static function (int $pid): string {
+        if ($pid <= 0) return '';
+        $r = \holastack\DB\Database::fetch("SELECT name FROM device_profiles WHERE id=?", [$pid]);
+        return $r ? $r['name'] : '';
+    };
+    $deviceStatusOf = static function (array $d) {
+        $lastSeen = (int) ($d['last_seen'] ?? 0);
+        if ($lastSeen <= 0) {
+            return cs_obj();
+        }
+        return [
+            'batteryLevel'        => 255,
+            'externalPowerSource' => false,
+            'margin'              => 0,
+        ];
+    };
+    $deviceRow = static function (array $d, bool $listItem) use ($deviceStatusOf, $deviceProfileName): array {
+        if ($listItem) {
+            $row = [
+                'devEui'            => $d['dev_eui'] ?? '',
+                'name'              => $d['name'] ?? '',
+                'description'       => '',
+                'deviceProfileId'   => cs_intToUuid((int) ($d['device_profile_id'] ?? 0)),
+                'deviceProfileName' => $deviceProfileName((int) ($d['device_profile_id'] ?? 0)),
+                'deviceStatus'      => $deviceStatusOf($d),
+                'lastSeenAt'        => cs_ts($d['last_seen'] ?? 0),
+                'tags'              => cs_obj(),
+            ];
+            // holastack 扩展（camelCase 保留，便于前端继续按 id 过滤/操作）
+            $row['id'] = cs_intToUuid((int) $d['id']);
+            $row['numericId'] = (int) $d['id'];
+            $row['applicationId'] = cs_intToUuid((int) ($d['app_id'] ?? 0));
+            $row['devAddr'] = $d['dev_addr'] ?? '';
+            $row['activation'] = $d['activation'] ?? '';
+            $row['classEnabled'] = strtoupper($d['class'] ?? 'A') === 'B' ? 'CLASS_B' : (strtoupper($d['class'] ?? 'A') === 'C' ? 'CLASS_C' : 'CLASS_A');
+            $row['region'] = $d['region'] ?? '';
+            $row['isDisabled'] = ($d['status'] ?? '') === 'disabled';
+            $row['online'] = ($d['online'] ?? '') === 'online' ? 'ONLINE' : 'OFFLINE';
+            return $row;
+        }
+        $cls = strtoupper($d['class'] ?? 'A');
+        return array_merge(cs_rowBase($d), [
+            'devEui'          => $d['dev_eui'] ?? '',
+            'name'            => $d['name'] ?? '',
+            'applicationId'   => cs_intToUuid((int) ($d['app_id'] ?? 0)),
+            'description'     => '',
+            'deviceProfileId' => cs_intToUuid((int) ($d['device_profile_id'] ?? 0)),
+            'isDisabled'      => ($d['status'] ?? '') === 'disabled',
+            'skipFcntCheck'   => false,
+            'joinEui'         => $d['join_eui'] ?? '',
+            'tags'            => cs_obj(),
+            'variables'       => cs_obj(),
+            'lastSeenAt'      => cs_ts($d['last_seen'] ?? 0),
+            'classEnabled'    => $cls === 'B' ? 'CLASS_B' : ($cls === 'C' ? 'CLASS_C' : 'CLASS_A'),
+            'deviceStatus'    => $deviceStatusOf($d),
+            // holastack 扩展
+            'numericId'       => (int) $d['id'],
+            'devAddr'         => $d['dev_addr'] ?? '',
+            'activation'      => $d['activation'] ?? '',
+            'region'          => $d['region'] ?? '',
+            'online'          => ($d['online'] ?? '') === 'online' ? 'ONLINE' : 'OFFLINE',
+            'codec'           => $d['codec'] ?? '',
+            'nwkSKey'         => $d['nwk_s_key'] ?? '',
+            'appSKey'         => $d['app_s_key'] ?? '',
+            'nwkKey'          => $d['nwk_key'] ?? '',
+            'appKey'          => $d['app_key'] ?? '',
+        ]);
+    };
+
+    // apiGatewayListItem / apiGateway
+    $gatewayStateOf = static function (int $lastSeen): string {
+        if ($lastSeen <= 0) return 'NEVER_SEEN';
+        return $lastSeen >= time() - \holastack\Web\WebApp::GW_OFFLINE_TIMEOUT ? 'ONLINE' : 'OFFLINE';
+    };
+    $gatewayRow = static function (array $g, bool $listItem) use ($gatewayStateOf): array {
+        $lastSeen = (int) ($g['last_seen'] ?? 0);
+        $base = [
+            'gatewayId'   => $g['gw_id'] ?? '',
+            'name'        => $g['name'] ?? '',
+            'description' => '',
+            'tenantId'    => cs_intToUuid((int) ($g['tenant_id'] ?? 0)),
+            'state'       => $gatewayStateOf($lastSeen),
+            'lastSeenAt'  => cs_ts($lastSeen),
+            'location'    => cs_obj(),
+            'properties'  => cs_obj(),
+            'tags'        => cs_obj(),
+        ];
+        if ($listItem) {
+            $base['createdAt'] = cs_ts($g['created_at'] ?? 0);
+            $base['updatedAt'] = cs_ts($g['created_at'] ?? 0);
+            $base['downlinkPriority'] = 0;
+        } else {
+            $base['metadata'] = cs_obj();
+            $base['statsInterval'] = 30;
+            $base['downlinkPriority'] = 0;
+            $base['createdAt'] = cs_ts($g['created_at'] ?? 0);
+            $base['updatedAt'] = cs_ts($g['created_at'] ?? 0);
+        }
+        // holastack 扩展
+        $base['region'] = $g['region'] ?? '';
+        $base['status'] = ($gatewayStateOf($lastSeen) === 'ONLINE') ? 'online' : 'offline';
+        $base['uplinks'] = (int) ($g['uplinks'] ?? 0);
+        $base['lastSeenFmt'] = $lastSeen ? date('Y-m-d H:i:s', $lastSeen) : '-';
+        $base['rfConfig'] = (isset($g['rf_config']) && $g['rf_config'] !== '') ? json_decode($g['rf_config'], true) : null;
+        return $base;
+    };
+
     switch ($resource) {
         case 'stats':
             return WebApp::getStats();
@@ -258,104 +503,524 @@ function handleApi(string $method, string $path): array
             if ($method === 'POST' && !empty($body['clear_logs'])) {
                 Auth::guardApi(Auth::ROLE_TENANT);
                 $tid = isset($body['clear_logs_tenant']) ? (int) $body['clear_logs_tenant'] : null;
-                return ['ok' => true, 'result' => WebApp::clearLogs((string) $body['clear_logs'], $tid)];
+                $r = WebApp::clearLogs((string) $body['clear_logs'], $tid);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             Auth::guardApi(Auth::ROLE_ADMIN);
             if ($method === 'POST') {
                 Setting::setMany($body);
-                return ['ok' => true, 'data' => Setting::getAll()];
+                return ['data' => Setting::getAll()];
             }
             return ['data' => Setting::getAll()];
         case 'applications':
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateApplication((int) $segs[1], $body);
+                $id = cs_uuidToInt((string) $segs[1]);
+                // PUT 全量语义：ChirpStack 只传 application 对象，回填旧记录避免误清字段
+                $old = \holastack\DB\Database::fetch("SELECT * FROM applications WHERE id=?", [$id]);
+                if (!$old) { return cs_notFound('application not found'); }
+                $in = $body['application'] ?? $body;
+                $in['name'] = $in['name'] ?? $old['name'];
+                $in['description'] = array_key_exists('description', $in) ? $in['description'] : ($old['description'] ?? '');
+                $in['app_eui'] = $in['app_eui'] ?? $old['app_eui'];
+                $in['callback_url'] = array_key_exists('callbackUrl', $in) ? $in['callbackUrl'] : ($in['callback_url'] ?? $old['callback_url']);
+                $r = WebApp::updateApplication($id, $in);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteApplication((int) $segs[1]);
+                $r = WebApp::deleteApplication(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createApplication($body);
+                $in = $body['application'] ?? $body;
+                if (isset($in['tenantId']) && !isset($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenantId']); }
+                $r = WebApp::createApplication($in);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];  // ChirpStack create：200 + {id}
             }
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listApplications($tid)];
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            $rows = WebApp::listApplications($tid !== null ? (int) $tid : null);
+            if (($get['applicationId'] ?? $get['app_id'] ?? '') !== '') {
+                $rows = array_values(array_filter($rows, fn($a) => (int) $a['id'] === (int) ($get['applicationId'] ?? $get['app_id'])));
+            }
+            return cs_list(array_map(fn($a) => $applicationRow($a, true), $rows), count($rows));
         case 'devices':
             if (($segs[1] ?? '') === 'import' && $method === 'POST') {
-                return WebApp::importDevices((int) ($body['app_id'] ?? 0), $body['raw'] ?? '', $body['format'] ?? 'csv');
+                $r = WebApp::importDevices((int) ($body['app_id'] ?? ($body['applicationId'] ? cs_uuidToInt((string) $body['applicationId']) : 0)), $body['raw'] ?? '', $body['format'] ?? 'csv');
+                if ($e = cs_wrapError($r)) { return $e; }
+                return $r;
             }
             if (isset($segs[1]) && ($segs[2] ?? '') === 'downlink' && $method === 'POST') {
-                return WebApp::enqueueDownlink((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '', !empty($body['confirmed']), !empty($body['mac']));
+                // ChirpStack Enqueue 语义：body.queueItem {fPort, data(Base64), confirmed}；兼容 holastack 原生 {port, payload(hex)}
+                $in = $body['queueItem'] ?? $body['deviceQueueItem'] ?? $body;
+                $payload = (string) ($in['data'] ?? '');
+                if ($payload !== '' && !ctype_xdigit($payload)) {
+                    $bin = base64_decode($payload, true);
+                    if ($bin === false) {
+                        return cs_invalid('data must be Base64 or hex');
+                    }
+                    $payload = bin2hex($bin);
+                }
+                // 路径段可能是数字 id（前端用 numericId）或 UUID（ChirpStack 风格）
+                $devPathId = ctype_digit((string) $segs[1]) ? (int) $segs[1] : cs_uuidToInt((string) $segs[1]);
+                $r = WebApp::enqueueDownlink(
+                    $devPathId,
+                    (int) ($in['fPort'] ?? $in['port'] ?? 0),
+                    $payload !== '' ? $payload : (string) ($in['payload'] ?? ''),
+                    !empty($in['confirmed']),
+                    !empty($in['mac'])
+                );
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => (string) $r['id']];  // ChirpStack Enqueue 返回 {id}
+            }
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'fields' && $method === 'GET') {
+                return WebApp::deviceFields((int) $segs[1]);
             }
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateDevice((int) $segs[1], $body);
+                $r = WebApp::updateDevice(cs_uuidToInt((string) $segs[1]), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteDevice((int) $segs[1]);
+                $r = WebApp::deleteDevice(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createDevice($body);
+                $in = $body['device'] ?? $body;
+                // ChirpStack camelCase 入参 → holastack snake_case
+                foreach ([
+                    'applicationId' => 'app_id',
+                    'deviceProfileId' => 'device_profile_id',
+                    'devEui' => 'dev_eui',
+                    'joinEui' => 'join_eui',
+                ] as $cs => $hs) {
+                    if (isset($in[$cs]) && !isset($in[$hs])) {
+                        $in[$hs] = ($cs === 'applicationId' || $cs === 'deviceProfileId') ? cs_uuidToInt((string) $in[$cs]) : $in[$cs];
+                    }
+                }
+                $r = WebApp::createDevice($in);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['devEui' => $in['dev_eui'] ?? ''];  // ChirpStack DeviceService.Create 返回 {devEui}
             }
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listDevices($appId, $tid)];
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            $rows = WebApp::listDevices($appId, $tid);
+            return cs_list(array_map(fn($d) => $deviceRow($d, true), $rows), count($rows));
         case 'gateways':
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateGateway($segs[1], $body);
+                $r = WebApp::updateGateway(strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1])), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteGateway($segs[1]);
+                $r = WebApp::deleteGateway(strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1])));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createGateway($body);
+                $in = $body['gateway'] ?? $body;
+                if (isset($in['gatewayId']) && !isset($in['gw_id'])) { $in['gw_id'] = $in['gatewayId']; }
+                if (isset($in['tenantId']) && !isset($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenantId']); }
+                $r = WebApp::createGateway($in);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['gatewayId' => $r['gw_id'] ?? (string) ($in['gw_id'] ?? '')];  // ChirpStack 返回 {gatewayId}
             }
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listGateways($tid)];
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            $rows = WebApp::listGateways($tid !== null ? (int) $tid : null);
+            return cs_list(array_map(fn($g) => $gatewayRow($g, true), $rows), count($rows));
         case 'device-profiles':
             if (isset($segs[1]) && $segs[1] !== '') {
-                $id = (int) $segs[1];
+                if ($segs[1] === 'adr-algorithms' && $method === 'GET') {
+                    $algos = [
+                        ['id' => cs_intToUuid(1), 'name' => 'Default ADR algorithm (LoRaWAN MAC)'],
+                        ['id' => cs_intToUuid(2), 'name' => 'Disable ADR'],
+                    ];
+                    return cs_list($algos, count($algos));
+                }
+                $id = cs_uuidToInt((string) $segs[1]);
                 if ($method === 'PUT' || $method === 'PATCH') {
-                    return WebApp::updateDeviceProfile($id, $body);
+                    $in = $body['deviceProfile'] ?? $body;
+                    foreach (['macVersion' => 'mac_version', 'regParamsRevision' => 'reg_params_revision', 'supportsOtaa' => 'supports_otaa', 'supportsClassB' => 'supports_class_b', 'supportsClassC' => 'supports_class_c', 'uplinkInterval' => 'uplink_interval', 'payloadCodecRuntime' => 'payload_codec_runtime', 'payloadCodecScript' => 'payload_codec_script'] as $cs => $hs) {
+                        if (isset($in[$cs]) && !isset($in[$hs])) { $in[$hs] = $in[$cs]; }
+                    }
+                    if (isset($in['mac_version'])) {
+                        $macMap = ['LORAWAN_1_0_0' => '1.0.0', 'LORAWAN_1_0_1' => '1.0.1', 'LORAWAN_1_0_2' => '1.0.2', 'LORAWAN_1_0_3' => '1.0.3', 'LORAWAN_1_0_4' => '1.0.4', 'LORAWAN_1_1_0' => '1.1.0'];
+                        if (isset($macMap[$in['mac_version']])) { $in['mac_version'] = $macMap[$in['mac_version']]; }
+                    }
+                    if (isset($in['reg_params_revision'])) {
+                        $in['reg_params_revision'] = preg_replace('/^RP00[12]_/', '', str_replace('_', '.', $in['reg_params_revision']));
+                    }
+                    $r = WebApp::updateDeviceProfile($id, $in);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
                 if ($method === 'DELETE') {
-                    return WebApp::deleteDeviceProfile($id);
+                    $r = WebApp::deleteDeviceProfile($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
                 $dp = WebApp::getDeviceProfile($id);
                 if (!$dp) {
-                    http_response_code(404);
-                    return ['error' => 'device_profile_not_found'];
+                    return cs_notFound('device profile not found');
                 }
-                return ['device_profile' => $dp];
+                $rev = preg_replace('/^RP00[12][-._]/', '', $dp['reg_params_revision'] ?? 'RP002-1.0.3');
+                $macMapFl = ['1.0.0' => 'LORAWAN_1_0_0', '1.0.1' => 'LORAWAN_1_0_1', '1.0.2' => 'LORAWAN_1_0_2', '1.0.3' => 'LORAWAN_1_0_3', '1.0.4' => 'LORAWAN_1_0_4', '1.1.0' => 'LORAWAN_1_1_0'];
+                $row = array_merge(cs_rowBase($dp), [
+                    'name'                   => $dp['name'] ?? '',
+                    'description'            => $dp['description'] ?? '',
+                    'region'                 => strtoupper($dp['region'] ?? 'EU868'),
+                    'macVersion'             => $macMapFl[$dp['mac_version'] ?? '1.0.4'] ?? 'LORAWAN_1_0_4',
+                    'regParamsRevision'      => 'RP002_' . str_replace(['.', '-'], '_', $rev),
+                    'adrAlgorithmId'         => cs_intToUuid(1),
+                    'payloadCodecRuntime'    => strtoupper($dp['payload_codec_runtime'] ?? 'NONE') === 'NONE' ? 'NONE' : 'JS',
+                    'payloadCodecScript'     => $dp['payload_codec_script'] ?? '',
+                    'flushQueueOnActivate'   => (bool) ($dp['flush_queue_on_activate'] ?? 0),
+                    'uplinkInterval'         => (int) ($dp['uplink_interval'] ?? 0),
+                    'deviceStatusReqInterval'=> (int) ($dp['device_status_req_interval'] ?? 0),
+                    'supportsOtaa'           => (bool) ($dp['supports_otaa'] ?? 1),
+                    'supportsClassB'         => (bool) ($dp['supports_class_b'] ?? 0),
+                    'supportsClassC'         => (bool) ($dp['supports_class_c'] ?? 0),
+                    'classBTimeout'          => (int) ($dp['class_b_timeout'] ?? 0),
+                    'classBPingSlotPeriodicity' => (int) ($dp['class_b_ping_slot_periodicity'] ?? 0),
+                    'classBPingSlotDr'       => (int) ($dp['class_b_ping_slot_dr'] ?? 0),
+                    'classBPingSlotFreq'     => (int) ($dp['class_b_ping_slot_freq'] ?? 0),
+                    'classCTimeout'          => (int) ($dp['class_c_timeout'] ?? 0),
+                    'abpRx1Delay'            => (int) ($dp['abp_rx1_delay'] ?? 1),
+                    'abpRx1DrOffset'         => (int) ($dp['abp_rx1_dr_offset'] ?? 0),
+                    'abpRx2Dr'               => (int) ($dp['abp_rx2_dr'] ?? 0),
+                    'abpRx2Freq'             => (int) ($dp['abp_rx2_freq'] ?? 0),
+                    'allowRoaming'           => (bool) ($dp['allow_roaming'] ?? 0),
+                    'tags'                   => cs_obj(),
+                    'tenantId'               => cs_intToUuid((int) ($dp['tenant_id'] ?? 0)),
+                    // holastack 扩展
+                    'numericId'              => (int) $dp['id'],
+                ]);
+                return ['deviceProfile' => $row];
             }
             if ($method === 'POST') {
-                $r = WebApp::createDeviceProfile($body);
-                if (isset($r['error'])) {
-                    http_response_code(400);
-                    return $r;
+                $in = $body['deviceProfile'] ?? $body;
+                foreach (['macVersion' => 'mac_version', 'regParamsRevision' => 'reg_params_revision', 'supportsOtaa' => 'supports_otaa', 'supportsClassB' => 'supports_class_b', 'supportsClassC' => 'supports_class_c', 'uplinkInterval' => 'uplink_interval', 'payloadCodecRuntime' => 'payload_codec_runtime', 'payloadCodecScript' => 'payload_codec_script', 'tenantId' => 'tenant_id'] as $cs => $hs) {
+                    if (isset($in[$cs]) && !isset($in[$hs])) { $in[$hs] = $in[$cs]; }
                 }
-                http_response_code(201);
-                return $r;
+                if (isset($in['mac_version'])) {
+                    $macMap = ['LORAWAN_1_0_0' => '1.0.0', 'LORAWAN_1_0_1' => '1.0.1', 'LORAWAN_1_0_2' => '1.0.2', 'LORAWAN_1_0_3' => '1.0.3', 'LORAWAN_1_0_4' => '1.0.4', 'LORAWAN_1_1_0' => '1.1.0'];
+                    if (isset($macMap[$in['mac_version']])) { $in['mac_version'] = $macMap[$in['mac_version']]; }
+                }
+                if (isset($in['reg_params_revision'])) {
+                    $in['reg_params_revision'] = preg_replace('/^RP00[12]_/', '', str_replace('_', '.', $in['reg_params_revision']));
+                }
+                if (isset($in['tenant_id']) && !is_numeric($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenant_id']); }
+                $r = WebApp::createDeviceProfile($in);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            return ['data' => WebApp::listDeviceProfiles(null)];
+            $dpRows = WebApp::listDeviceProfiles(null);
+            $dpList = [];
+            foreach ($dpRows as $p) {
+                $rev = preg_replace('/^RP00[12][-._]/', '', $p['reg_params_revision'] ?? 'RP002-1.0.3');
+                $macMapFl = ['1.0.0' => 'LORAWAN_1_0_0', '1.0.1' => 'LORAWAN_1_0_1', '1.0.2' => 'LORAWAN_1_0_2', '1.0.3' => 'LORAWAN_1_0_3', '1.0.4' => 'LORAWAN_1_0_4', '1.1.0' => 'LORAWAN_1_1_0'];
+                $item = array_merge(cs_rowBase($p), [
+                    'name'              => $p['name'] ?? '',
+                    'description'       => $p['description'] ?? '',
+                    'region'            => strtoupper($p['region'] ?? 'EU868'),
+                    'macVersion'        => $macMapFl[$p['mac_version'] ?? '1.0.4'] ?? 'LORAWAN_1_0_4',
+                    'regParamsRevision' => 'RP002_' . str_replace(['.', '-'], '_', $rev),
+                    'adrAlgorithmId'    => cs_intToUuid(1),
+                    'payloadCodecRuntime' => strtoupper($p['payload_codec_runtime'] ?? 'NONE') === 'NONE' ? 'NONE' : 'JS',
+                    'flushQueueOnActivate' => (bool) ($p['flush_queue_on_activate'] ?? 0),
+                    'uplinkInterval'    => (int) ($p['uplink_interval'] ?? 0),
+                    'deviceStatusReqInterval' => (int) ($p['device_status_req_interval'] ?? 0),
+                    'supportsOtaa'      => (bool) ($p['supports_otaa'] ?? 1),
+                    'supportsClassB'    => (bool) ($p['supports_class_b'] ?? 0),
+                    'supportsClassC'    => (bool) ($p['supports_class_c'] ?? 0),
+                    'classBTimeout'     => (int) ($p['class_b_timeout'] ?? 0),
+                    'classBPingSlotPeriodicity' => (int) ($p['class_b_ping_slot_periodicity'] ?? 0),
+                    'classBPingSlotDr'  => (int) ($p['class_b_ping_slot_dr'] ?? 0),
+                    'classBPingSlotFreq' => (int) ($p['class_b_ping_slot_freq'] ?? 0),
+                    'classCTimeout'     => (int) ($p['class_c_timeout'] ?? 0),
+                    'abpRx1Delay'       => (int) ($p['abp_rx1_delay'] ?? 1),
+                    'abpRx1DrOffset'    => (int) ($p['abp_rx1_dr_offset'] ?? 0),
+                    'abpRx2Dr'          => (int) ($p['abp_rx2_dr'] ?? 0),
+                    'abpRx2Freq'        => (int) ($p['abp_rx2_freq'] ?? 0),
+                    'allowRoaming'      => (bool) ($p['allow_roaming'] ?? 0),
+                    'tags'              => cs_obj(),
+                    'tenantId'          => cs_intToUuid((int) ($p['tenant_id'] ?? 0)),
+                    // holastack 扩展
+                    'numericId'         => (int) $p['id'],
+                ]);
+                $dpList[] = $item;
+            }
+            return cs_list($dpList, count($dpList));
+
+        case 'thing-models':
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    $r = WebApp::updateThingModel($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteThingModel($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                $m = WebApp::getThingModel($id);
+                if (!$m) {
+                    return cs_notFound('thing model not found');
+                }
+                return ['thingModel' => $m];
+            }
+            if ($method === 'POST') {
+                if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                    $body['application_id'] = cs_uuidToInt((string) $body['applicationId']);
+                }
+                $r = WebApp::createThingModel($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            return cs_list(WebApp::listThingModels($appId), count(WebApp::listThingModels($appId)));
+
+        case 'device-readings':
+            Auth::guardApi(Auth::ROLE_OPERATOR);
+            $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : 0;
+            $field = (string) ($get['field'] ?? '');
+            $from = isset($get['from']) ? (int) $get['from'] : 0;
+            $to = isset($get['to']) ? (int) $get['to'] : time();
+            return WebApp::queryDeviceReadings($devId, $field, $from, $to);
+
+        case 'alert-rules':
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                        $body['application_id'] = cs_uuidToInt((string) $body['applicationId']);
+                    }
+                    $r = WebApp::updateAlertRule($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteAlertRule($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if ($method === 'POST') {
+                if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                    $body['application_id'] = cs_uuidToInt((string) $body['applicationId']);
+                }
+                $r = WebApp::createAlertRule($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            $rules = WebApp::listAlertRules($appId);
+            return cs_list($rules, count($rules));
+
+        case 'alerts':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'POST' && (($get['action'] ?? '') === 'resolve' || ($body['action'] ?? '') === 'resolve')) {
+                    $r = WebApp::resolveAlert($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if (($get['scope'] ?? '') === 'counts') {
+                return WebApp::alertCounts();
+            }
+            if (($get['scope'] ?? '') === 'active') {
+                $r = WebApp::activeAlerts(isset($get['limit']) ? (int) $get['limit'] : 100);
+                $data = $r['data'] ?? $r;
+                return cs_list($data, is_array($data) ? count($data) : 0);
+            }
+            $limit = min(500, isset($get['limit']) ? (int) $get['limit'] : 50);
+            $offset = isset($get['offset']) ? (int) $get['offset'] : 0;
+            $did = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
+            $status = (string) ($get['status'] ?? '');
+            $r = WebApp::listAlerts($limit, $offset, $did, $status);
+            $rows = $r['data'] ?? [];
+            $out = ['totalCount' => count($rows), 'result' => $rows];
+            if (isset($r['counts'])) { $out['counts'] = $r['counts']; }
+            return $out;
+
+        case 'notification-groups':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    $r = WebApp::updateNotificationGroup($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteNotificationGroup($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if ($method === 'POST') {
+                $r = WebApp::createNotificationGroup($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            $groups = WebApp::listNotificationGroups();
+            $groups = $groups['data'] ?? $groups;
+            return cs_list($groups, count($groups));
+
+        case 'scheduled-tasks':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'POST' && (($get['action'] ?? '') === 'run' || ($body['action'] ?? '') === 'run')) {
+                    $r = WebApp::runScheduledTask($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return ['id' => cs_intToUuid((int) $r['id']), 'downlinkId' => cs_intToUuid((int) ($r['downlink_id'] ?? 0)), 'nextRunAt' => cs_ts($r['next_run_at'] ?? 0)];
+                }
+                if ($method === 'POST' && (($get['action'] ?? '') === 'toggle' || ($body['action'] ?? '') === 'toggle')) {
+                    $r = WebApp::toggleScheduledTask($id, !empty($get['enabled']) || !empty($body['enabled']));
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    if (isset($body['deviceId']) && !isset($body['device_id'])) { $body['device_id'] = cs_uuidToInt((string) $body['deviceId']); }
+                    $r = WebApp::updateScheduledTask($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteScheduledTask($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if ($method === 'POST') {
+                if (isset($body['deviceId']) && !isset($body['device_id'])) { $body['device_id'] = cs_uuidToInt((string) $body['deviceId']); }
+                $r = WebApp::createScheduledTask($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            $tasks = WebApp::listScheduledTasks();
+            $tasks = $tasks['data'] ?? $tasks;
+            return cs_list($tasks, count($tasks));
+
+        case 'automations':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    if (isset($body['applicationId']) && !isset($body['application_id'])) { $body['application_id'] = cs_uuidToInt((string) $body['applicationId']); }
+                    if (isset($body['triggerDeviceId']) && !isset($body['trigger_device_id'])) { $body['trigger_device_id'] = cs_uuidToInt((string) $body['triggerDeviceId']); }
+                    $r = WebApp::updateAutomation($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteAutomation($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if ($method === 'POST') {
+                if (isset($body['applicationId']) && !isset($body['application_id'])) { $body['application_id'] = cs_uuidToInt((string) $body['applicationId']); }
+                if (isset($body['triggerDeviceId']) && !isset($body['trigger_device_id'])) { $body['trigger_device_id'] = cs_uuidToInt((string) $body['triggerDeviceId']); }
+                $r = WebApp::createAutomation($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            $autos = WebApp::listAutomations();
+            $autos = $autos['data'] ?? $autos;
+            return cs_list($autos, count($autos));
+
+        case 'roles':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    $r = WebApp::updateRole($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteRole($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if ($method === 'POST') {
+                if (isset($body['tenantId']) && !isset($body['tenant_id'])) { $body['tenant_id'] = cs_uuidToInt((string) $body['tenantId']); }
+                $r = WebApp::createRole($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            $rolesRaw = WebApp::listRoles();
+            $roles = $rolesRaw['data'] ?? $rolesRaw;
+            $out = cs_list($roles, count($roles));
+            if (isset($rolesRaw['catalog'])) { $out['catalog'] = $rolesRaw['catalog']; }
+            return $out;
+
+        case 'departments':
+            if (isset($segs[1]) && $segs[1] !== '') {
+                $id = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'PUT' || $method === 'PATCH') {
+                    $r = WebApp::updateDepartment($id, $body);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                if ($method === 'DELETE') {
+                    $r = WebApp::deleteDepartment($id);
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
+                }
+                return cs_err(12, 'unimplemented', 'method not allowed');
+            }
+            if ($method === 'POST') {
+                $r = WebApp::createDepartment($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
+            }
+            $depts = WebApp::listDepartments();
+            $depts = $depts['data'] ?? $depts;
+            return cs_list($depts, count($depts));
 
         case 'api-keys':
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
-            $tenantId = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
+            $tenantId = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
             if (isset($segs[1]) && $segs[1] !== '') {
                 if ($method === 'DELETE') {
-                    return WebApp::deleteApiKey((int) $segs[1]);
+                    $r = WebApp::deleteApiKey(cs_uuidToInt((string) $segs[1]));
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
-                http_response_code(405);
-                return ['error' => 'method_not_allowed'];
+                return cs_err(12, 'unimplemented', 'method not allowed');
             }
             if ($method === 'POST') {
-                $r = WebApp::createApiKey($appId, $body);
-                if (isset($r['error'])) {
-                    http_response_code(400);
-                    return $r;
+                if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                    $body['application_id'] = is_numeric($body['applicationId']) ? (int) $body['applicationId'] : cs_uuidToInt((string) $body['applicationId']);
                 }
-                http_response_code(201);
-                return $r;
+                $r = WebApp::createApiKey((int) ($body['application_id'] ?? $appId), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id']), 'token' => $r['token'] ?? ''];  // token 仅 create 时返回一次（与 ChirpStack 一致）
             }
-            return ['data' => WebApp::listApiKeys($appId, $tenantId)];
+            $keys = WebApp::listApiKeys($appId, $tenantId);
+            $keyRows = array_map(fn($k) => array_merge(cs_rowBase($k), [
+                'name'            => $k['name'] ?? '',
+                'applicationId'   => cs_intToUuid((int) ($k['application_id'] ?? 0)),
+                'tokenPreview'    => $k['token_preview'] ?? '',
+                'isActive'        => true,
+                'tenantId'        => cs_intToUuid(0),
+                'displayName'     => $k['name'] ?? '',
+                // holastack 扩展
+                'numericId'       => (int) $k['id'],
+            ]), $keys);
+            return cs_list($keyRows, count($keyRows));
 
         case 'stream':
             header('Content-Type: text/event-stream; charset=utf-8');
@@ -392,42 +1057,122 @@ function handleApi(string $method, string $path): array
             exit;
 
         case 'uplinks':
-            $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            if (isset($segs[1]) && $segs[1] !== '' && $method === 'GET' && ctype_digit((string) $segs[1])) {
+                $row = WebApp::getUplink((int) $segs[1], $tid);
+                if (!$row) { return cs_notFound('uplink not found'); }
+                return ['uplink' => $row];
+            }
+            $devId = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
-            return ['data' => WebApp::listUplinks($devId, $appId, $lim, $tid, $off), 'total' => WebApp::countUplinks($devId, $appId, $tid), 'limit' => $lim, 'offset' => $off];
+            $ups = WebApp::listUplinks($devId, $appId, $lim, $tid, $off);
+            $total = WebApp::countUplinks($devId, $appId, $tid);
+            $upRows = array_map(static function ($u) {
+                return [
+                    'id'          => (string) $u['id'],
+                    'devEui'      => $u['dev_eui'] ?? '',
+                    'devAddr'     => $u['dev_addr'] ?? '',
+                    'fCntUp'      => (int) ($u['fcnt'] ?? 0),
+                    'fPort'       => (int) ($u['port'] ?? 0),
+                    'data'        => base64_encode(hex2bin((string) ($u['payload_hex'] ?? '')) ?: ''),
+                    'decrypted'   => (string) ($u['decrypted_hex'] ?? '') !== '' ? base64_encode(hex2bin($u['decrypted_hex'])) : null,
+                    'rssi'        => (int) ($u['rssi'] ?? 0),
+                    'snr'         => (float) ($u['snr'] ?? 0),
+                    'gatewayId'   => $u['gateway_id'] ?? '',
+                    'time'        => cs_ts($u['received_at'] ?? 0),
+                    // holastack 扩展
+                    'devId'       => (int) ($u['dev_id'] ?? 0),
+                    'appId'       => (int) ($u['app_id'] ?? 0),
+                    'payloadHex'  => $u['payload_hex'] ?? '',
+                    'decryptedHex'=> $u['decrypted_hex'] ?? '',
+                    // holastack 扩展（帧检视/原始报文需要）：确认位、完整 PHYPayload(hex)、网关协议原文
+                    'confirmed'   => (bool) ($u['confirmed'] ?? 0),
+                    'phyPayload'  => (string) ($u['phy_payload'] ?? ''),
+                    'rawJson'     => (string) ($u['raw_json'] ?? ''),
+                ];
+            }, $ups);
+            return cs_list($upRows, $total);
         case 'downlinks':
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            if (isset($segs[1]) && $segs[1] !== '' && $method === 'GET' && ctype_digit((string) $segs[1])) {
+                $row = WebApp::getDownlink((int) $segs[1], $tid);
+                if (!$row) { return cs_notFound('downlink not found'); }
+                return ['downlink' => $row];
+            }
             if (isset($segs[1]) && $segs[1] !== '' && $method === 'DELETE') {
-                $id = (int) $segs[1];
+                $id = cs_uuidToInt((string) $segs[1]);
                 $dl = Database::fetch("SELECT id, dev_id, app_id, status FROM downlinks WHERE id=?", [$id]);
                 if (!$dl) {
-                    http_response_code(404);
-                    return ['error' => 'downlink_not_found'];
+                    return cs_notFound('downlink not found');
                 }
-                if ((int) $dl['app_id'] !== (int) $appId) {
-                    http_response_code(403);
-                    return ['error' => 'forbidden: downlink not in your application'];
+                // 越权校验：非管理员只能取消自己租户可见应用的下行（兼容旧行为里误用的 $appId）
+                $cur = Auth::currentUser();
+                if ($cur && ($cur['role'] ?? '') !== Auth::ROLE_ADMIN) {
+                    $visible = WebApp::visibleAppIds(isset($tid) && $tid ? (int) $tid : null) ?? [];
+                    if (!in_array((int) $dl['app_id'], $visible, true)) {
+                        return cs_forbidden('downlink not in your application');
+                    }
                 }
                 if ($dl['status'] !== 'pending') {
                     http_response_code(409);
-                    return ['error' => 'downlink_not_pending', 'status' => $dl['status']];
+                    return cs_err(9, 'failed_precondition', 'downlink is not pending (status=' . $dl['status'] . ')');
                 }
-                $n = Database::execute("UPDATE downlinks SET status='canceled' WHERE id=?", [$id]);
-                return ['id' => $id, 'canceled' => $n > 0];
+                Database::execute("UPDATE downlinks SET status='canceled' WHERE id=?", [$id]);
+                return [];
             }
-            $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            $devId = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
-            return ['data' => WebApp::listDownlinks($devId, $appId, $lim, $tid, $off), 'total' => WebApp::countDownlinks($devId, $appId, $tid), 'limit' => $lim, 'offset' => $off];
+            $dls = WebApp::listDownlinks($devId, $appId, $lim, $tid, $off);
+            $total = WebApp::countDownlinks($devId, $appId, $tid);
+            $dlRows = array_map(static function ($d) {
+                return [
+                    'id'        => (string) $d['id'],
+                    'devEui'    => $d['dev_eui'] ?? '',
+                    'fPort'     => (int) ($d['port'] ?? 0),
+                    'fCntDown'  => (int) ($d['fcnt'] ?? 0),
+                    'data'      => base64_encode(hex2bin((string) ($d['payload_hex'] ?? '')) ?: ''),
+                    'confirmed' => (bool) ($d['confirmed'] ?? 0),
+                    'isPending' => ($d['status'] ?? '') === 'pending',
+                    'state'     => strtoupper($d['status'] ?? ''),
+                    'time'      => cs_ts($d['created_at'] ?? 0),
+                    // holastack 扩展
+                    'devId'     => (int) ($d['dev_id'] ?? 0),
+                    'appId'     => (int) ($d['app_id'] ?? 0),
+                    'payloadHex'=> $d['payload_hex'] ?? '',
+                    'acknowledgedAt' => cs_ts($d['acknowledged_at'] ?? 0),
+                    // holastack 扩展（下行日志页需要）：小写状态、MAC 帧标记、重传次数、发送时间、网关协议原文
+                    'status'        => (string) ($d['status'] ?? ''),
+                    'mac'           => (int) ($d['mac'] ?? 0),
+                    'transmissions' => (int) ($d['transmissions'] ?? 0),
+                    'sentAt'        => cs_ts($d['sent_at'] ?? 0),
+                    'rawJson'       => (string) ($d['raw_json'] ?? ''),
+                ];
+            }, $dls);
+            return cs_list($dlRows, $total);
         case 'events':
-            $devId = isset($get['dev_id']) ? (int) $get['dev_id'] : null;
-            $gwId = isset($get['gw_id']) ? trim($get['gw_id']) : null;
+            $devId = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
+            $gwId = isset($get['gatewayId']) ? trim((string) $get['gatewayId']) : (isset($get['gw_id']) ? trim($get['gw_id']) : null);
             $type = isset($get['type']) ? trim($get['type']) : null;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
-            return ['data' => WebApp::listEvents($devId, $gwId, $type, $lim, $tid, $off), 'total' => WebApp::countEvents($devId, $gwId, $type, $tid), 'limit' => $lim, 'offset' => $off];
+            $evs = WebApp::listEvents($devId, $gwId, $type, $lim, $tid, $off);
+            $total = WebApp::countEvents($devId, $gwId, $type, $tid);
+            $evRows = array_map(static function ($e) {
+                return [
+                    'id'        => (string) $e['id'],
+                    'type'      => $e['type'] ?? '',
+                    'level'     => $e['level'] ?? '',
+                    'gatewayId' => $e['gateway_id'] ?? '',
+                    'devId'     => (int) ($e['dev_id'] ?? 0),
+                    'message'   => $e['message'] ?? '',
+                    'time'      => cs_ts($e['created_at'] ?? 0),
+                    // holastack 扩展（事件原始报文需要）
+                    'rawJson'   => (string) ($e['raw_json'] ?? ''),
+                ];
+            }, $evs);
+            return cs_list($evRows, $total);
         case 'stream':
             Auth::guardApi(Auth::ROLE_OPERATOR);
             header('Content-Type: text/event-stream; charset=utf-8');
@@ -465,22 +1210,28 @@ function handleApi(string $method, string $path): array
 
         case 'users':
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteUser((int) $segs[1]);
+                $r = WebApp::deleteUser(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateUser((int) $segs[1], $body);
+                $r = WebApp::updateUser(cs_uuidToInt((string) $segs[1]), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (($segs[1] ?? '') === 'password' && $method === 'POST') {
                 $cur = Auth::currentUser();
                 $target = (isset($body['user_id']) && $body['user_id'] !== '') ? (int) $body['user_id'] : (int) $cur['id'];
-                return WebApp::changePassword($target, $body['new_password'] ?? '');
+                $r = WebApp::changePassword($target, $body['new_password'] ?? '');
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
                 if (empty($body['username']) || empty($body['password'])) {
-                    return ['error' => 'username and password required'];
+                    return cs_invalid('username and password required');
                 }
                 if (!in_array($body['role'] ?? 'operator', Auth::ROLES, true)) {
-                    return ['error' => 'invalid role'];
+                    return cs_invalid('invalid role');
                 }
                 try {
                     $id = Auth::createUser(
@@ -489,26 +1240,34 @@ function handleApi(string $method, string $path): array
                         $body['role'] ?? Auth::ROLE_OPERATOR,
                         (int) ($body['tenant_id'] ?? 0),
                         $body['new_tenant_name'] ?? null,
-                        $body['email'] ?? null
+                        $body['email'] ?? null,
+                        (int) ($body['role_id'] ?? 0),
+                        (int) ($body['department_id'] ?? 0)
                     );
                 } catch (\InvalidArgumentException $e) {
-                    return ['error' => 'invalid email'];
+                    return cs_invalid('invalid email');
                 }
-                return ['id' => $id];
+                return ['id' => cs_intToUuid((int) $id)];
             }
-            return ['data' => WebApp::listUsers()];
-        case 'device-profiles':
-            if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateDeviceProfile((int) $segs[1], $body);
-            }
-            if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteDeviceProfile((int) $segs[1]);
-            }
-            if ($method === 'POST') {
-                return WebApp::createDeviceProfile($body);
-            }
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listDeviceProfiles($tid)];
+            $users = WebApp::listUsers();
+            $userRows = array_map(static function ($u) {
+                return array_merge(cs_rowBase($u), [
+                    'username'       => $u['username'] ?? '',
+                    'email'          => $u['email'] ?? '',
+                    'role'           => $u['role'] ?? '',
+                    'tenantId'       => cs_intToUuid((int) ($u['tenant_id'] ?? 0)),
+                    'tenantName'     => $u['tenant_name'] ?? '',
+                    'roleId'         => cs_intToUuid((int) ($u['role_id'] ?? 0)),
+                    'roleName'       => $u['role_name'] ?? '',
+                    'departmentId'   => cs_intToUuid((int) ($u['department_id'] ?? 0)),
+                    'departmentName' => $u['department_name'] ?? '',
+                    'isAdmin'        => ($u['role'] ?? '') === 'admin',
+                    'isActive'       => true,
+                    // holastack 扩展
+                    'numericId'      => (int) $u['id'],
+                ]);
+            }, $users);
+            return cs_list($userRows, count($userRows));
         case 'api-keys':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteApiKey((int) $segs[1]);
@@ -521,86 +1280,205 @@ function handleApi(string $method, string $path): array
             return ['data' => WebApp::listApiKeys($appId, $tid)];
         case 'integrations':
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateIntegration((int) $segs[1], $body);
+                $r = WebApp::updateIntegration(cs_uuidToInt((string) $segs[1]), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteIntegration((int) $segs[1]);
+                $r = WebApp::deleteIntegration(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createIntegration($body);
+                if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                    $body['application_id'] = is_numeric($body['applicationId']) ? (int) $body['applicationId'] : cs_uuidToInt((string) $body['applicationId']);
+                }
+                $r = WebApp::createIntegration($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listIntegrations($appId, $tid)];
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            $integrations = WebApp::listIntegrations($appId, $tid);
+            $intRows = array_map(static function ($i) {
+                return array_merge(cs_rowBase($i), [
+                    'applicationId' => cs_intToUuid((int) ($i['application_id'] ?? $i['app_id'] ?? 0)),
+                    'kind'          => strtoupper($i['kind'] ?? ''),
+                    'enabled'       => (bool) ($i['enabled'] ?? 0),
+                    'configuration' => json_decode((string) ($i['config_json'] ?? '{}'), true) ?: cs_obj(),
+                    // holastack 扩展
+                    'numericId'     => (int) $i['id'],
+                ]);
+            }, $integrations);
+            return cs_list($intRows, count($intRows));
         case 'multicast-groups':
             if (isset($segs[1]) && ($segs[2] ?? '') === 'enqueue' && $method === 'POST') {
-                return WebApp::enqueueMulticast((int) $segs[1], (int) ($body['port'] ?? 0), $body['payload'] ?? '');
+                $in = $body['queueItem'] ?? $body['deviceQueueItem'] ?? $body;
+                $payload = (string) ($in['data'] ?? '');
+                if ($payload !== '' && !ctype_xdigit($payload)) {
+                    $bin = base64_decode($payload, true);
+                    if ($bin === false) {
+                        return cs_invalid('data must be Base64 or hex');
+                    }
+                    $payload = bin2hex($bin);
+                }
+                $r = WebApp::enqueueMulticast(
+                    cs_uuidToInt((string) $segs[1]),
+                    (int) ($in['fPort'] ?? $in['port'] ?? 0),
+                    $payload !== '' ? $payload : (string) ($in['payload'] ?? '')
+                );
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => (string) ($r['id'] ?? '')];
             }
             if (isset($segs[1]) && $method === 'GET' && !isset($segs[2])) {
-                return WebApp::getMulticastGroup((int) $segs[1]);
+                $g = WebApp::getMulticastGroup(cs_uuidToInt((string) $segs[1]));
+                if (!$g) {
+                    return cs_notFound('multicast group not found');
+                }
+                return ['multicastGroup' => $g];
             }
             if (isset($segs[1]) && ($segs[2] ?? '') === 'devices') {
                 if ($method === 'GET') {
-                    return WebApp::multicastDevices((int) $segs[1]);
+                    $r = WebApp::multicastDevices(cs_uuidToInt((string) $segs[1]));
+                    $rows = $r['data'] ?? (is_array($r) ? $r : []);
+                    return cs_list($rows, count($rows));
                 }
                 if ($method === 'POST') {
-                    return WebApp::addMulticastDevice((int) $segs[1], $body['dev_eui'] ?? '');
+                    $r = WebApp::addMulticastDevice(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['devEui'] ?? $body['dev_eui'] ?? '')));
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
                 if ($method === 'DELETE') {
-                    return WebApp::removeMulticastDevice((int) $segs[1], $body['dev_eui'] ?? '');
+                    $r = WebApp::removeMulticastDevice(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['devEui'] ?? $body['dev_eui'] ?? '')));
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
             }
             if (isset($segs[1]) && ($segs[2] ?? '') === 'gateways') {
                 if ($method === 'GET') {
-                    return WebApp::multicastGateways((int) $segs[1]);
+                    $r = WebApp::multicastGateways(cs_uuidToInt((string) $segs[1]));
+                    $rows = $r['data'] ?? (is_array($r) ? $r : []);
+                    return cs_list($rows, count($rows));
                 }
                 if ($method === 'POST') {
-                    return WebApp::addMulticastGateway((int) $segs[1], $body['gw_id'] ?? '');
+                    $r = WebApp::addMulticastGateway(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['gatewayId'] ?? $body['gw_id'] ?? '')));
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
                 if ($method === 'DELETE') {
-                    return WebApp::removeMulticastGateway((int) $segs[1], $body['gw_id'] ?? '');
+                    $r = WebApp::removeMulticastGateway(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['gatewayId'] ?? $body['gw_id'] ?? '')));
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return [];
                 }
             }
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateMulticastGroup((int) $segs[1], $body);
+                if (isset($body['applicationId']) && !isset($body['application_id'])) { $body['application_id'] = cs_uuidToInt((string) $body['applicationId']); }
+                $r = WebApp::updateMulticastGroup(cs_uuidToInt((string) $segs[1]), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteMulticastGroup((int) $segs[1]);
+                $r = WebApp::deleteMulticastGroup(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createMulticastGroup($body);
+                if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                    $body['application_id'] = is_numeric($body['applicationId']) ? (int) $body['applicationId'] : cs_uuidToInt((string) $body['applicationId']);
+                }
+                $r = WebApp::createMulticastGroup($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : null;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listMulticastGroups($appId, $tid)];
+            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
+            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
+            $mgs = WebApp::listMulticastGroups($appId, $tid);
+            $mgRows = array_map(static function ($m) {
+                return array_merge(cs_rowBase($m), [
+                    'name'          => $m['name'] ?? '',
+                    'applicationId' => cs_intToUuid((int) ($m['application_id'] ?? 0)),
+                    'region'        => strtoupper($m['region'] ?? ''),
+                    'groupType'     => strtoupper($m['group_type'] ?? 'C') === 'B' ? 'CLASS_B' : (strtoupper($m['group_type'] ?? 'C') === 'A' ? 'CLASS_A' : 'CLASS_C'),
+                    'mcAddr'        => $m['mc_addr'] ?? '',
+                    'mcNwkSKey'     => $m['mc_nwk_s_key'] ?? '',
+                    'mcAppSKey'     => $m['mc_app_s_key'] ?? '',
+                    'fCnt'          => (int) ($m['f_cnt'] ?? 0),
+                    'dr'            => (int) ($m['dr'] ?? 0),
+                    'frequency'     => (int) ($m['frequency'] ?? 0),
+                    'classBPingSlotPeriodicity' => (int) ($m['class_b_ping_slot_periodicity'] ?? 0),
+                    'classCSchedulingType' => strtoupper($m['class_c_scheduling_type'] ?? 'DELAY') === 'GPS' ? 'GPS' : 'DELAY',
+                    // holastack 扩展
+                    'numericId'     => (int) $m['id'],
+                    'appId'         => (int) ($m['application_id'] ?? 0),
+                ]);
+            }, $mgs);
+            return cs_list($mgRows, count($mgRows));
         case 'fuota':
             if (isset($segs[1]) && ($segs[2] ?? '') === 'start' && $method === 'POST') {
-                return WebApp::startFuotaCampaign((int) $segs[1], $body);
+                $r = WebApp::startFuotaCampaign(cs_uuidToInt((string) $segs[1]), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return $r;
             }
             if (isset($segs[1]) && ($segs[2] ?? '') === 'devices' && $method === 'POST') {
-                return WebApp::addFuotaDeployment((int) $segs[1], (int) ($body['dev_id'] ?? 0));
+                $r = WebApp::addFuotaDeployment(cs_uuidToInt((string) $segs[1]), isset($body['devId']) ? cs_uuidToInt((string) $body['devId']) : (int) ($body['dev_id'] ?? 0));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return $r;
             }
             if (isset($segs[1]) && $method === 'GET' && !isset($segs[2])) {
-                return WebApp::getFuotaCampaign((int) $segs[1]);
+                $r = WebApp::getFuotaCampaign(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return $r;
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteFuotaCampaign((int) $segs[1]);
+                $r = WebApp::deleteFuotaCampaign(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createFuotaCampaign($body);
+                if (isset($body['applicationId']) && !isset($body['application_id'])) {
+                    $body['application_id'] = is_numeric($body['applicationId']) ? (int) $body['applicationId'] : cs_uuidToInt((string) $body['applicationId']);
+                }
+                if (isset($body['multicastGroupId']) && !isset($body['multicast_group_id'])) {
+                    $body['multicast_group_id'] = is_numeric($body['multicastGroupId']) ? (int) $body['multicastGroupId'] : cs_uuidToInt((string) $body['multicastGroupId']);
+                }
+                $r = WebApp::createFuotaCampaign($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            return ['data' => WebApp::listFuotaCampaigns()];
+            $camps = WebApp::listFuotaCampaigns();
+            return cs_list($camps, count($camps));
         case 'tenants':
             if (isset($segs[1]) && $method === 'PUT') {
-                return WebApp::updateTenant((int) $segs[1], $body);
+                $r = WebApp::updateTenant(cs_uuidToInt((string) $segs[1]), $body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteTenant((int) $segs[1]);
+                $r = WebApp::deleteTenant(cs_uuidToInt((string) $segs[1]));
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
             }
             if ($method === 'POST') {
-                return WebApp::createTenant($body);
+                $r = WebApp::createTenant($body);
+                if ($e = cs_wrapError($r)) { return $e; }
+                return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            return ['data' => WebApp::listTenants()];
+            $tenants = WebApp::listTenants();
+            $tenantRows = array_map(static function ($t) {
+                return array_merge(cs_rowBase($t), [
+                    'name'                => $t['name'] ?? '',
+                    'description'         => $t['description'] ?? '',
+                    'canHaveGateways'     => (int) ($t['private_gateways_unlimited'] ?? 0) > 0,
+                    'privateGatewaysUp'   => false,
+                    'privateGatewaysDown' => false,
+                    'maxDeviceCount'      => 0,
+                    'maxGatewayCount'     => (int) ($t['private_gateways_limit'] ?? 0),
+                    'tags'                => cs_obj(),
+                    // holastack 扩展
+                    'numericId'           => (int) $t['id'],
+                ]);
+            }, $tenants);
+            return cs_list($tenantRows, count($tenantRows));
         case 'api-logs':
             
 
@@ -622,9 +1500,27 @@ function handleApi(string $method, string $path): array
             $limit = $limitOf('limit');
             $offset = $offsetOf('offset');
             $out = ApiLog::list($u, $filters, $limit, $offset);
-            return ['data' => $out['rows'], 'total' => $out['total'], 'limit' => $limit, 'offset' => $offset];
+            $logRows = array_map(static function ($l) {
+                return [
+                    'id'        => (string) ($l['id'] ?? ''),
+                    'method'    => $l['method'] ?? '',
+                    'path'      => $l['path'] ?? '',
+                    'status'    => (int) ($l['status'] ?? 0),
+                    'latencyMs' => (int) ($l['latency_ms'] ?? 0),
+                    'ip'        => $l['ip'] ?? '',
+                    'username'  => $l['username'] ?? '',
+                    'role'      => $l['role'] ?? '',
+                    'tenantId'  => (int) ($l['tenant_id'] ?? 0),
+                    'applicationId' => (int) ($l['application_id'] ?? 0),
+                    'query'     => $l['query'] ?? '',
+                    'bodySize'  => (int) ($l['body_size'] ?? 0),
+                    'time'      => cs_ts($l['created_at'] ?? 0),
+                ];
+            }, $out['rows'] ?? []);
+            return cs_list($logRows, (int) ($out['total'] ?? count($logRows)));
         default:
-            return ['error' => 'unknown endpoint'];
+            http_response_code(404);
+            return cs_err(12, 'unimplemented', 'unknown endpoint: /api/' . $resource);
     }
 }
 
