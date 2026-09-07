@@ -32,34 +32,95 @@ class Database
         return self::$pdo;
     }
 
+    /**
+     * 连接是否已死（长驻守护进程必备：MySQL wait_timeout / 重启后 2006/2002/2013）。
+     */
+    private static function isConnLost(\Throwable $e): bool
+    {
+        $msg = $e->getMessage();
+        foreach ([
+            'MySQL server has gone away',
+            'Lost connection',
+            'Connection refused',
+            'Connection reset by peer',
+            'Broken pipe',
+            'Error while sending',
+            'server has gone away',
+            'out of sync',
+            'Malformed communication packet',
+        ] as $needle) {
+            if (stripos($msg, $needle) !== false) {
+                return true;
+            }
+        }
+        $info = ($e instanceof \PDOException && is_array($e->errorInfo)) ? $e->errorInfo : [];
+        foreach ($info as $c) {
+            $s = (string) $c;
+            if ($s === '2006' || $s === '2002' || $s === '2013') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 统一执行（自动重连）：长驻进程（bin/lns.php、bin/server.php）里 MySQL 连接会被
+     * wait_timeout 掐断，之后所有查询永远 2006 → 调度器每秒刷 7 条 SCHED WARN 把日志刷爆。
+     * 检测到连接丢失即重置单例重试一次，进程可自愈。
+     */
+    private static function withRetry(callable $fn)
+    {
+        $try = 0;
+        while (true) {
+            try {
+                return $fn();
+            } catch (\PDOException $e) {
+                if ($try === 0 && self::$pdo !== null && self::isConnLost($e)) {
+                    self::$pdo = null;
+                    $try = 1;
+                    continue;
+                }
+                throw $e;
+            }
+        }
+    }
+
     public static function fetch(string $sql, array $params = []): ?array
     {
-        $st = self::pdo()->prepare($sql);
-        $st->execute($params);
-        $row = $st->fetch();
-        return $row === false ? null : $row;
+        return self::withRetry(function () use ($sql, $params) {
+            $st = self::pdo()->prepare($sql);
+            $st->execute($params);
+            $row = $st->fetch();
+            return $row === false ? null : $row;
+        });
     }
 
     public static function fetchAll(string $sql, array $params = []): array
     {
-        $st = self::pdo()->prepare($sql);
-        $st->execute($params);
-        return $st->fetchAll();
+        return self::withRetry(function () use ($sql, $params) {
+            $st = self::pdo()->prepare($sql);
+            $st->execute($params);
+            return $st->fetchAll();
+        });
     }
 
     public static function fetchOne(string $sql, array $params = [])
     {
-        $st = self::pdo()->prepare($sql);
-        $st->execute($params);
-        $v = $st->fetch(\PDO::FETCH_NUM);
-        return $v === false ? null : $v[0];
+        return self::withRetry(function () use ($sql, $params) {
+            $st = self::pdo()->prepare($sql);
+            $st->execute($params);
+            $v = $st->fetch(\PDO::FETCH_NUM);
+            return $v === false ? null : $v[0];
+        });
     }
 
     public static function execute(string $sql, array $params = []): int
     {
-        $st = self::pdo()->prepare($sql);
-        $st->execute($params);
-        return $st->rowCount();
+        return self::withRetry(function () use ($sql, $params) {
+            $st = self::pdo()->prepare($sql);
+            $st->execute($params);
+            return $st->rowCount();
+        });
     }
 
     public static function lastInsertId(): int

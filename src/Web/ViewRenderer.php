@@ -306,11 +306,12 @@ HTML;
         }
 
         $pageTitle = '<h2>' . $t('API 文档') . '</h2>';
-        $intro = '<h2>' . $t('应用开放 API（v1）') . '</h2>'
-            . '<p class="ad-note" style="margin-top:2px">'
-            . $t('使用「应用 API Key」调用，作用域限定到该 Key 所属应用。所有请求需在头部携带')
-            . '<code>Authorization: Bearer &lt;API_KEY&gt;</code>（' . $t('或 URL 参数') . ' <code>?api_key=&lt;API_KEY&gt;</code>）。'
-            . $t('API Key 在后台「应用 → API Key」中创建，') . '<b>' . $t('明文仅显示一次') . '</b>' . $t('，请妥善保存。')
+        $intro = '<p class="ad-note" style="margin-top:2px">'
+            . $t('所有 API 统一以 /api 为前缀。认证方式（二选一）：')
+            . '<code>Grpc-Metadata-Authorization: Bearer &lt;token&gt;</code>'
+            . $t('（会话 token 经 /api/login 获取，或应用 API Key，或请求头')
+            . ' <code>Authorization: Bearer &lt;token&gt;</code>'
+            . $t('）。API Key 在「应用 → API Key」中创建，') . '<b>' . $t('明文仅显示一次') . '</b>' . $t('，请妥善保存。')
             . '</p>';
         return $pageTitle . $intro . <<<HTML
 <div class="apidocs">
@@ -422,477 +423,192 @@ HTML;
         return 'curl -X ' . $a['method'] . ' "' . $url . "\" \\\n  -H \"Authorization: Bearer <YOUR_API_KEY>\"";
     }
 
-    private static function apiGroups(): array
+    public static function apiGroups(): array
     {
+        return self::apiPlatformGroups();
+    }
+
+
+    /** /api/* 平台 API 文档（会话 token 或应用 API Key） */
+    private static function apiPlatformGroups(): array
+    {
+        $stdErr = static fn() => [
+            ['code' => '401 unauthorized', 'desc' => '未认证（缺 Grpc-Metadata-Authorization 头）'],
+            ['code' => '403 forbidden', 'desc' => '权限不足'],
+            ['code' => '404 not_found (code 5)', 'desc' => '资源不存在'],
+            ['code' => '400 invalid_argument (code 3)', 'desc' => '请求参数错误'],
+        ];
+        $t = static fn(string $id, string $method, string $path, string $title, string $desc, array $extra = []) => array_merge([
+            'id' => $id, 'method' => $method, 'path' => $path, 'title' => $title, 'desc' => $desc,
+            'params' => $extra['params'] ?? [],
+            'sample' => $extra['sample'] ?? null,
+            'respFields' => $extra['respFields'] ?? [],
+            'respExample' => $extra['respExample'] ?? null,
+            'errors' => $extra['errors'] ?? $stdErr(),
+        ], []);
+        $listEx = static fn(array $r) => ['totalCount' => 1, 'result' => [$r]];
+
         return [
             [
-                'title' => '应用概览',
+                'title' => 'API 概览与认证',
                 'apis' => [
                     [
-                        'id' => 'info', 'method' => 'GET', 'path' => '/v1/info',
-                        'title' => '获取应用信息',
-                        'desc' => '返回当前 API Key 所属应用的基础信息与数据统计（设备数、上行数、下行数）。',
-                        'params' => [],
-                        'respFields' => [
-                            ['name' => 'application.id', 'type' => 'int', 'desc' => '应用 ID'],
-                            ['name' => 'application.name', 'type' => 'string', 'desc' => '应用名称'],
-                            ['name' => 'application.app_eui', 'type' => 'string', 'desc' => '应用 EUI（JoinEUI）'],
-                            ['name' => 'application.description', 'type' => 'string', 'desc' => '应用描述'],
-                            ['name' => 'counts.devices', 'type' => 'int', 'desc' => '该应用下设备总数'],
-                            ['name' => 'counts.uplinks', 'type' => 'int', 'desc' => '该应用累计上行消息数'],
-                            ['name' => 'counts.downlinks', 'type' => 'int', 'desc' => '该应用累计下行消息数'],
-                        ],
-                        'respExample' => [
-                            'application' => ['id' => 1, 'name' => '我的传感器应用', 'app_eui' => '0000000000000000', 'description' => ''],
-                        'counts' => ['devices' => 12, 'uplinks' => 4821, 'downlinks' => 37],
-                        ],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ],
-                    ],
-                    [
-                        'id' => 'devices', 'method' => 'GET', 'path' => '/v1/devices',
-                        'title' => '列出应用下所有设备',
-                        'desc' => '返回该应用下的全部设备列表。响应已剥离 app_key / nwk_s_key / app_s_key 等敏感密钥。',
-                        'params' => [],
-                        'respFields' => [
-                            ['name' => 'data[].id', 'type' => 'int', 'desc' => '设备 ID'],
-                            ['name' => 'data[].name', 'type' => 'string', 'desc' => '设备名称'],
-                            ['name' => 'data[].dev_eui', 'type' => 'string', 'desc' => '设备 EUI（16 hex）'],
-                            ['name' => 'data[].dev_addr', 'type' => 'string', 'desc' => '设备地址（ABP/已入网后）'],
-                            ['name' => 'data[].activation', 'type' => 'string', 'desc' => 'OTAA / ABP'],
-                            ['name' => 'data[].class', 'type' => 'string', 'desc' => '工作模式 A / B / C'],
-                            ['name' => 'data[].region', 'type' => 'string', 'desc' => '频段区域'],
-                            ['name' => 'data[].status', 'type' => 'string', 'desc' => 'pending / active'],
-                            ['name' => 'data[].online', 'type' => 'string', 'desc' => 'online / offline（按最近上报判定）'],
-                        ],
-                        'respExample' => [
-                            'data' => [['id' => 3, 'name' => '温湿度节点-01', 'dev_eui' => 'aabbccddeeff0011', 'dev_addr' => '01ff02aa', 'activation' => 'OTAA', 'class' => 'A', 'region' => 'CN470', 'status' => 'active', 'online' => 'online', 'last_seen' => '2026-08-16 21:00:12', 'created_at' => 1754000000]],
-                        ],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ],
-                    ],
-                    [
-                        'id' => 'device-detail', 'method' => 'GET', 'path' => '/v1/devices/{dev_eui}',
-                        'title' => '获取单个设备详情',
-                        'desc' => '根据 DevEUI 查询单个设备及其上行/下行计数。设备必须属于该 API Key 所属应用，否则返回 404。',
+                        'id' => 'cs-overview', 'method' => 'GET', 'path' => '/api/…',
+                        'title' => 'API 约定（必读）',
+                        'desc' => 'holastack 的 /api/* 全量采用统一 REST 形状，可从任意标准客户端直接调用。约定：①认证头 Grpc-Metadata-Authorization: Bearer <token>（登录 token 或 API Key）；②列表一律 {totalCount, result}，支持 limit/offset/search（limit=0 仅返回 totalCount）；③id 为 UUID 形态 00000000-0000-0000-0000-<12hex>（设备路径同时接受 16 hex DevEUI）；④时间 RFC3339 UTC（零值 1970-01-01T00:00:00Z）；⑤错误 {error, code, message, details}（错误码：3=INVALID_ARGUMENT, 5=NOT_FOUND, 6=ALREADY_EXISTS, 7=PERMISSION_DENIED, 12=UNIMPLEMENTED, 13=INTERNAL）；⑥POST create 返回 200 + {id}（devices/gateways 返回 {}）；⑦字段统一 camelCase。holastack 扩展字段（numericId/region/online/appEui/callbackUrl 等）与标准字段并存，不影响标准客户端。',
                         'params' => [
-                            ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '设备 EUI（16 hex，大小写均可）'],
+                            ['name' => 'Grpc-Metadata-Authorization', 'in' => 'header', 'type' => 'string', 'required' => true, 'desc' => 'Bearer <token>（/api/login 获取的会话 token，或 API Key）'],
+                            ['name' => 'limit / offset / search', 'in' => 'query', 'type' => 'int/string', 'required' => false, 'desc' => '通用分页与搜索参数（列表端点均支持）'],
                         ],
                         'respFields' => [
-                            ['name' => 'device', 'type' => 'object', 'desc' => '设备对象（同 /v1/devices 中的单条）'],
-                            ['name' => 'counts.uplinks', 'type' => 'int', 'desc' => '该设备累计上行数'],
-                            ['name' => 'counts.downlinks', 'type' => 'int', 'desc' => '该设备累计下行数'],
+                            ['name' => '{totalCount, result}', 'type' => 'object', 'desc' => '列表统一形状'],
+                            ['name' => '{error, code, message, details}', 'type' => 'object', 'desc' => '错误统一形状'],
                         ],
-                        'respExample' => [
-                            'device' => ['id' => 3, 'name' => '温湿度节点-01', 'dev_eui' => 'aabbccddeeff0011', 'dev_addr' => '01ff02aa', 'activation' => 'OTAA', 'class' => 'A', 'region' => 'CN470', 'status' => 'active', 'online' => 'online', 'last_seen' => '2026-08-16 21:00:12', 'created_at' => 1754000000],
-                            'counts' => ['uplinks' => 1205, 'downlinks' => 9],
-                        ],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                            ['code' => '404 device_not_found', 'desc' => '设备不存在或不归该应用所有'],
-                        ],
+                        'respExample' => ['totalCount' => 1, 'result' => ['id' => '00000000-0000-0000-0000-000000000001', 'name' => 'demo']],
+                        'errors' => $stdErr(),
                     ],
                     [
-                        'id' => 'device-uplinks', 'method' => 'GET', 'path' => '/v1/devices/{dev_eui}/uplinks',
-                        'title' => '获取设备上行数据',
-                        'desc' => '返回指定设备的最近上行消息列表（按 id 倒序）。',
+                        'id' => 'cs-login', 'method' => 'POST', 'path' => '/api/login',
+                        'title' => '登录获取 token',
+                        'desc' => '用户名密码换取会话 token。返回的 token 用于 Grpc-Metadata-Authorization: Bearer <token>。注意：同用户重复登录会使旧 token 失效。',
                         'params' => [
-                            ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '设备 EUI'],
-                            ['name' => 'limit', 'in' => 'query', 'type' => 'int', 'required' => false, 'desc' => '返回条数，默认 50，最大 500'],
+                            ['name' => 'username', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '用户名'],
+                            ['name' => 'password', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '密码'],
                         ],
+                        'sample' => ['username' => 'admin', 'password' => '******'],
                         'respFields' => [
-                            ['name' => 'data[].id', 'type' => 'int', 'desc' => '上行记录 ID'],
-                            ['name' => 'data[].dev_addr', 'type' => 'string', 'desc' => '设备地址'],
-                            ['name' => 'data[].fcnt', 'type' => 'int', 'desc' => '帧计数'],
-                            ['name' => 'data[].port', 'type' => 'int', 'desc' => 'FPort'],
-                            ['name' => 'data[].confirmed', 'type' => 'bool', 'desc' => '是否为确认帧'],
-                            ['name' => 'data[].decrypted_hex', 'type' => 'string', 'desc' => '解密后的应用负载（hex）'],
-                            ['name' => 'data[].gateway_id', 'type' => 'string', 'desc' => '接收网关 ID'],
-                            ['name' => 'data[].rssi', 'type' => 'int', 'desc' => 'RSSI (dBm)'],
-                            ['name' => 'data[].snr', 'type' => 'number', 'desc' => 'SNR (dB)'],
-                            ['name' => 'data[].received_at', 'type' => 'int', 'desc' => '接收时间（Unix 秒）'],
+                            ['name' => 'ok', 'type' => 'bool', 'desc' => '登录成功'],
+                            ['name' => 'token', 'type' => 'string', 'desc' => '会话 token（64 hex）'],
+                            ['name' => 'user.role', 'type' => 'string', 'desc' => 'admin / tenant / operator'],
+                            ['name' => 'user.permissions', 'type' => 'string[]', 'desc' => '权限点列表'],
                         ],
-                        'respExample' => [
-                            'data' => [['id' => 9981, 'dev_addr' => '01ff02aa', 'fcnt' => 1205, 'port' => 10, 'confirmed' => false, 'decrypted_hex' => '48656c6c6f', 'gateway_id' => '0080000000000001', 'rssi' => -73, 'snr' => 9.2, 'frequency' => 486.3, 'data_rate' => 'SF9BW125', 'received_at' => 1755349212]],
-                        ],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                            ['code' => '404 device_not_found', 'desc' => '设备不存在或不归该应用所有'],
-                        ],
-                    ],
-                ],
-                [
-                    'id' => 'device-create', 'method' => 'POST', 'path' => '/v1/devices',
-                    'title' => '添加设备',
-                    'desc' => '在当前应用下创建设备。app_id 由 API Key 自动绑定，无需（也不允许）在请求体中指定。OTAA 需 app_key(32hex)/join_eui(16hex)；ABP 需 dev_addr(8hex)/nwk_s_key(32hex)/app_s_key(32hex)。',
-                    'params' => [
-                        ['name' => 'name', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '设备名称，应用内唯一'],
-                        ['name' => 'dev_eui', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '设备 EUI（16 hex）'],
-                        ['name' => 'activation', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'OTAA（默认）/ ABP'],
-                        ['name' => 'class', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'A（默认）/ B / C'],
-                        ['name' => 'region', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '频段，默认应用默认区域（如 CN470）'],
-                        ['name' => 'device_profile_id', 'in' => 'body', 'type' => 'int', 'required' => false, 'desc' => '设备模板 ID，缺省用默认模板'],
-                        ['name' => 'app_key', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'OTAA 应用密钥（32 hex，OTAA 必填）'],
-                        ['name' => 'join_eui', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'JoinEUI（16 hex，OTAA 必填）'],
-                        ['name' => 'dev_addr', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '设备地址（8 hex，ABP 必填）'],
-                        ['name' => 'nwk_s_key', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '网络会话密钥（32 hex，ABP 必填）'],
-                        ['name' => 'app_s_key', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '应用会话密钥（32 hex，ABP 必填）'],
-                    ],
-                    'sample' => ['name' => '温湿度节点-02', 'dev_eui' => 'aabbccddeeff0022', 'activation' => 'OTAA', 'class' => 'A', 'region' => 'CN470', 'app_key' => '00000000000000000000000000000000', 'join_eui' => '0000000000000000'],
-                    'respFields' => [
-                        ['name' => 'id', 'type' => 'int', 'desc' => '新建设备 ID'],
-                    ],
-                    'respExample' => ['id' => 13],
-                    'errors' => [
-                        ['code' => '400', 'desc' => '参数错误（dev_eui 格式/重复、密钥长度、region 不支持等）'],
-                        ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                    ],
-                ],
-                [
-                    'id' => 'device-update', 'method' => 'PUT', 'path' => '/v1/devices/{dev_eui}',
-                    'title' => '修改设备信息',
-                    'desc' => '修改指定设备的部分字段（按需传参，缺省字段保持不变）。支持 name/class/region/device_profile_id，以及 OTAA 的 app_key/join_eui/dev_eui、ABP 的 dev_addr/nwk_s_key/app_s_key。',
-                    'params' => [
-                        ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '目标设备 EUI'],
-                        ['name' => 'name', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '新名称'],
-                        ['name' => 'class', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'A / B / C'],
-                        ['name' => 'region', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '频段区域'],
-                        ['name' => 'device_profile_id', 'in' => 'body', 'type' => 'int', 'required' => false, 'desc' => '设备模板 ID'],
-                        ['name' => 'app_key', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'OTAA 新应用密钥（32 hex）'],
-                        ['name' => 'join_eui', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'OTAA 新 JoinEUI（16 hex）'],
-                        ['name' => 'dev_eui', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'OTAA 新 DevEUI（16 hex，需全局唯一）'],
-                        ['name' => 'dev_addr', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'ABP 新设备地址（8 hex）'],
-                        ['name' => 'nwk_s_key', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'ABP 新网络会话密钥（32 hex）'],
-                        ['name' => 'app_s_key', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'ABP 新应用会话密钥（32 hex）'],
-                    ],
-                    'sample' => ['name' => '温湿度节点-改名', 'class' => 'C'],
-                    'respFields' => [
-                        ['name' => 'id', 'type' => 'int', 'desc' => '设备 ID'],
-                        ['name' => 'updated', 'type' => 'bool', 'desc' => '是否成功更新'],
-                    ],
-                    'respExample' => ['id' => 3, 'updated' => true],
-                    'errors' => [
-                        ['code' => '400', 'desc' => '参数错误（密钥长度、class 非法、名称重复等）'],
-                        ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ['code' => '404 device_not_found', 'desc' => '设备不存在或不归该应用所有'],
-                    ],
-                ],
-                [
-                    'id' => 'device-delete', 'method' => 'DELETE', 'path' => '/v1/devices/{dev_eui}',
-                    'title' => '删除设备',
-                    'desc' => '删除指定设备，同时清理其上行、下行与关联记录。设备必须属于该应用。',
-                    'params' => [
-                        ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '目标设备 EUI'],
-                    ],
-                    'respFields' => [
-                        ['name' => 'id', 'type' => 'int', 'desc' => '已删除设备 ID'],
-                        ['name' => 'deleted', 'type' => 'bool', 'desc' => '是否成功删除'],
-                    ],
-                    'respExample' => ['id' => 3, 'deleted' => true],
-                    'errors' => [
-                        ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ['code' => '404 device_not_found', 'desc' => '设备不存在或不归该应用所有'],
+                        'respExample' => ['ok' => true, 'token' => '6e34…', 'user' => ['id' => 2, 'username' => 'admin', 'role' => 'admin', 'permissions' => ['dashboard', 'devices']]],
+                        'errors' => [['code' => '401 invalid credentials', 'desc' => '用户名或密码错误']],
                     ],
                 ],
             ],
             [
-                'title' => '网关管理',
+                'title' => '设备管理',
                 'apis' => [
-                    [
-                        'id' => 'gateways', 'method' => 'GET', 'path' => '/v1/gateways',
-                        'title' => '列出网关',
-                        'desc' => '返回当前租户（API Key 对应应用所属租户）下的网关列表，含在线状态。',
-                        'params' => [],
+                    $t('cs-devices', 'GET', '/api/devices?limit=10&offset=0&search=&tenantId=&applicationId=&deviceProfileId=', '列出设备 List',
+                        '返回 {totalCount, result:[apiDeviceListItem]}。过滤参数均 camelCase（兼容 snake_case）。', [
                         'respFields' => [
-                            ['name' => 'data[].gw_id', 'type' => 'string', 'desc' => '网关 ID（16/32 hex）'],
-                            ['name' => 'data[].name', 'type' => 'string', 'desc' => '网关名称'],
-                            ['name' => 'data[].region', 'type' => 'string', 'desc' => '频段区域'],
-                            ['name' => 'data[].status', 'type' => 'string', 'desc' => 'online / offline'],
-                            ['name' => 'data[].last_seen', 'type' => 'string', 'desc' => '最近上报时间'],
+                            ['name' => 'result[].id', 'type' => 'string(UUID)', 'desc' => '设备 UUID'],
+                            ['name' => 'result[].devEui', 'type' => 'string', 'desc' => '16 hex DevEUI'],
+                            ['name' => 'result[].name / applicationId / deviceProfileId', 'type' => 'string', 'desc' => '基础字段（UUID 形态外键）'],
+                            ['name' => 'result[].lastSeenAt', 'type' => 'string(RFC3339)', 'desc' => '最近上线时间，零值 1970-…Z'],
                         ],
-                        'respExample' => ['data' => [['gw_id' => '0080000000000001', 'name' => '办公室网关', 'region' => 'CN470', 'status' => 'online', 'last_seen' => '2026-08-16 21:00:00']]],
+                        'respExample' => $listEx(['id' => '00000000-0000-0000-0000-000000000003', 'devEui' => '0011223344556677', 'name' => 'node-01', 'createdAt' => '2026-09-04T08:45:32Z', 'lastSeenAt' => '1970-01-01T00:00:00Z']),
+                    ]),
+                    $t('cs-device-get', 'GET', '/api/devices/{devEui}', '获取设备 Get',
+                        '路径参数支持 16 hex DevEUI 或设备 UUID。返回 {device:{…}}，扩展字段 numericId/devAddr/activation/region/nwkKey/appKey 一并返回。'),
+                    $t('cs-device-create', 'POST', '/api/devices', '创建设备 Create',
+                        'body 为 {device:{…}} 包装。OTAA 必填 keys:{appKey(32hex), nwkKey(32hex)} 与 joinEui(16hex，缺省时自动填 0101010101010101)；deviceProfileId/applicationId 为 UUID。返回 {}。', [
+                        'sample' => ['device' => ['name' => 'node-01', 'devEui' => '0011223344556677', 'applicationId' => '00000000-0000-0000-0000-000000000008', 'deviceProfileId' => '00000000-0000-0000-0000-000000000004', 'joinEui' => '0101010101010101', 'keys' => ['nwkKey' => '2b7e151628aed2a6abf7158809cf4f3c', 'appKey' => '2b7e151628aed2a6abf7158809cf4f3c']]],
                         'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
+                            ['code' => '400 (code 3)', 'desc' => '参数错误：app_key/join_eui 长度、模板缺失等'],
+                            ['code' => '409 (code 6)', 'desc' => 'DevEUI 已存在'],
                         ],
-                    ],
-                    [
-                        'id' => 'gateway-create', 'method' => 'POST', 'path' => '/v1/gateways',
-                        'title' => '添加网关',
-                        'desc' => '创建一个网关。租户由 API Key 对应应用自动绑定。',
-                        'params' => [
-                            ['name' => 'gw_id', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '网关 ID（16 或 32 hex）'],
-                            ['name' => 'name', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '网关名称'],
-                            ['name' => 'region', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '频段区域，默认空（不限制）'],
-                            ['name' => 'rf_config', 'in' => 'body', 'type' => 'object', 'required' => false, 'desc' => '射频配置（对象或 JSON 字符串）'],
-                        ],
-                        'sample' => ['gw_id' => '0080000000000001', 'name' => '办公室网关', 'region' => 'CN470'],
-                        'respFields' => [
-                            ['name' => 'gw_id', 'type' => 'string', 'desc' => '已创建网关 ID'],
-                        ],
-                        'respExample' => ['gw_id' => '0080000000000001'],
-                        'errors' => [
-                            ['code' => '400', 'desc' => '参数错误（gw_id 格式/重复、名称缺失等）'],
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ],
-                    ],
-                    [
-                        'id' => 'gateway-detail', 'method' => 'GET', 'path' => '/v1/gateways/{gw_id}',
-                        'title' => '获取网关详情',
-                        'desc' => '根据网关 ID 查询单个网关信息。',
-                        'params' => [
-                            ['name' => 'gw_id', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '网关 ID'],
-                        ],
-                        'respFields' => [
-                            ['name' => 'gateway', 'type' => 'object', 'desc' => '网关对象（同列表单条，含 rf_config）'],
-                        ],
-                        'respExample' => ['gateway' => ['gw_id' => '0080000000000001', 'name' => '办公室网关', 'region' => 'CN470', 'status' => 'online', 'last_seen' => '2026-08-16 21:00:00', 'rf_config' => null]],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                            ['code' => '404', 'desc' => '网关不存在或无权限'],
-                        ],
-                    ],
-                    [
-                        'id' => 'gateway-update', 'method' => 'PUT', 'path' => '/v1/gateways/{gw_id}',
-                        'title' => '修改网关信息',
-                        'desc' => '修改网关的 name/region/rf_config。',
-                        'params' => [
-                            ['name' => 'gw_id', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '网关 ID'],
-                            ['name' => 'name', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '新名称'],
-                            ['name' => 'region', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '新频段区域'],
-                            ['name' => 'rf_config', 'in' => 'body', 'type' => 'object', 'required' => false, 'desc' => '新射频配置'],
-                        ],
-                        'sample' => ['name' => '办公室网关-2F', 'region' => 'CN470'],
-                        'respFields' => [
-                            ['name' => 'gw_id', 'type' => 'string', 'desc' => '网关 ID'],
-                            ['name' => 'updated', 'type' => 'bool', 'desc' => '是否成功更新'],
-                        ],
-                        'respExample' => ['gw_id' => '0080000000000001', 'updated' => true],
-                        'errors' => [
-                            ['code' => '400', 'desc' => '参数错误'],
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                            ['code' => '404', 'desc' => '网关不存在或无权限'],
-                        ],
-                    ],
-                    [
-                        'id' => 'gateway-delete', 'method' => 'DELETE', 'path' => '/v1/gateways/{gw_id}',
-                        'title' => '删除网关',
-                        'desc' => '删除指定网关。',
-                        'params' => [
-                            ['name' => 'gw_id', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '网关 ID'],
-                        ],
-                        'respFields' => [
-                            ['name' => 'gw_id', 'type' => 'string', 'desc' => '已删除网关 ID'],
-                            ['name' => 'deleted', 'type' => 'bool', 'desc' => '是否成功删除'],
-                        ],
-                        'respExample' => ['gw_id' => '0080000000000001', 'deleted' => true],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                            ['code' => '404', 'desc' => '网关不存在或无权限'],
-                        ],
-                    ],
+                    ]),
+                    $t('cs-device-update', 'PUT', '/api/devices/{devEui}', '修改设备 Update',
+                        'body {device:{…}} 部分字段更新。'),
+                    $t('cs-device-delete', 'DELETE', '/api/devices/{devEui}', '删除设备 Delete',
+                        '删除设备及其上行/下行/关联记录。返回 {}。'),
+                    $t('cs-device-queue-post', 'POST', '/api/devices/{devEui}/queue', '下行入队 Enqueue',
+                        '标准入队路径。body {deviceQueueItem:{fPort:1..223, data(Base64), confirmed}}（兼容扁平 queueItem 与 items[] 批量）。Class C 立即下发；Class A 等下次上行窗口。', [
+                        'sample' => ['deviceQueueItem' => ['fPort' => 2, 'data' => 'aGVsbG8=', 'confirmed' => false]],
+                        'respFields' => [['name' => 'id', 'type' => 'string(UUID)', 'desc' => '队列项 ID']],
+                        'respExample' => ['id' => '00000000-0000-0000-0000-000000000006'],
+                    ]),
+                    $t('cs-device-queue-get', 'GET', '/api/devices/{devEui}/queue', '查看下行队列 GetQueue',
+                        '返回 {totalCount, result:[{id, devEui, fPort, confirmed, isPending, fCntDown, data(Base64), expiresAt}]}。'),
+                    $t('cs-device-queue-del', 'DELETE', '/api/devices/{devEui}/queue', '清空下行队列 FlushQueue',
+                        '撤销该设备全部 pending 下行。DELETE /api/devices/{devEui}/queue/{queueItemId} 可撤销单条。'),
+                    $t('cs-device-activate', 'POST', '/api/devices/{devEui}/activate', 'ABP 激活 Activate',
+                        'body {deviceActivation:{devAddr(8hex), nwkSEncKey/sNwkSIKey/fNwkSIntKey/appSKey(32hex)}}。写入会话密钥并置 active。'),
+                    $t('cs-device-activation', 'GET', '/api/devices/{devEui}/activation', '获取激活信息 GetActivation',
+                        '返回 {deviceActivation:{devEui, devAddr, appSKey, fNwkSIntKey, sNwkSIntKey, nwkSEncKey, fCntUp, nFCntDown, aFCntDown}}。DELETE 同路径 = 清除会话（重置回 pending）。'),
+                    $t('cs-device-keys', 'GET', '/api/devices/{devEui}/keys', '获取密钥 GetKeys',
+                        '返回 {deviceKeys:{devEui, appKey, nwkKey, genAppKey}}。POST/PUT 同路径更新（{deviceKeys:{appKey, nwkKey}}，128-bit HEX），DELETE 清空。'),
+                    $t('cs-device-fcnt', 'POST', '/api/devices/{devEui}/get-next-f-cnt-down', '取下一个下行帧计数 GetNextFCntDown',
+                        'FCntDown 自增并返回。返回 {fCntDown:int}（仅 POST）。', ['respExample' => ['fCntDown' => 2]]),
+                    $t('cs-device-devaddr', 'POST', '/api/devices/{devEui}/get-random-dev-addr', '取随机 DevAddr GetRandomDevAddr',
+                        '返回 {devAddr:"8hex"}（最高位清 0，仅 POST）。', ['respExample' => ['devAddr' => '289c5eab']]),
+                    $t('cs-device-nonces', 'DELETE', '/api/devices/{devEui}/dev-nonces', '清除 DevNonces',
+                        '返回 {}（no-op，形状与标准约定一致）。'),
+                    $t('cs-device-metrics', 'GET', '/api/devices/{devEui}/metrics', '设备指标 GetDeviceMetrics',
+                        '近 24h 上行按小时聚合，metrics 形状 {rxPackets, rxPacketsPerDr, …:{name, kind:COUNTER, timestamps[], datasets[]}}。GET /link-metrics 同形状返回空指标。'),
+                    $t('cs-device-link-metrics', 'GET', '/api/devices/{devEui}/link-metrics', '链路指标 GetDeviceLinkMetrics',
+                        '标准形状 + 空数据集（暂无链路统计）。'),
                 ],
             ],
             [
-                'title' => '下行队列与设备指标',
+                'title' => '应用 / 模板 / 网关',
                 'apis' => [
-                    [
-                        'id' => 'device-downlinks', 'method' => 'GET', 'path' => '/v1/devices/{dev_eui}/downlinks',
-                        'title' => '列出设备下行队列',
-                        'desc' => '返回该设备的下行记录（默认全部，可用 ?status=pending 只看待发）。pending 表示仍在队列等待网关下发。',
-                        'params' => [
-                            ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '设备 EUI'],
-                            ['name' => 'status', 'in' => 'query', 'type' => 'string', 'required' => false, 'desc' => '过滤状态：pending / sent / failed / canceled'],
-                        ],
-                        'respFields' => [
-                            ['name' => 'data[].id', 'type' => 'int', 'desc' => '下行记录 ID'],
-                            ['name' => 'data[].port', 'type' => 'int', 'desc' => 'FPort'],
-                            ['name' => 'data[].payload_hex', 'type' => 'string', 'desc' => '负载（hex）'],
-                            ['name' => 'data[].status', 'type' => 'string', 'desc' => 'pending / sent / failed / canceled'],
-                        ],
-                        'errors' => [['code' => '404', 'desc' => '设备不存在']],
-                    ],
-                    [
-                        'id' => 'downlink-cancel', 'method' => 'DELETE', 'path' => '/v1/downlinks/{id}',
-                        'title' => '取消待发下行',
-                        'desc' => '取消一条状态为 pending 的下行（已下发的不允许取消）。取消后状态置为 canceled。',
-                        'params' => [['name' => 'id', 'in' => 'path', 'type' => 'int', 'required' => true, 'desc' => '下行记录 ID（来自 /v1/devices/{dev_eui}/downlinks 的 id）']],
-                        'respFields' => [['name' => 'canceled', 'type' => 'bool', 'desc' => '是否成功取消']],
-                        'errors' => [
-                            ['code' => '404', 'desc' => '下行不存在'],
-                            ['code' => '403', 'desc' => '不属于当前应用'],
-                            ['code' => '409', 'desc' => '下行已非 pending，无法取消（返回其当前 status）'],
-                        ],
-                    ],
-                    [
-                        'id' => 'device-metrics', 'method' => 'GET', 'path' => '/v1/devices/{dev_eui}/metrics',
-                        'title' => '设备信号指标',
-                        'desc' => '返回最近一段时间内的上行信号点（RSSI / SNR / FCnt），用于绘制信号质量曲线。默认近 24 小时，最大 720 小时。',
-                        'params' => [
-                            ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '设备 EUI'],
-                            ['name' => 'range', 'in' => 'query', 'type' => 'int', 'required' => false, 'desc' => '时间范围（小时），默认 24，最大 720'],
-                        ],
-                        'respFields' => [
-                            ['name' => 'range_hours', 'type' => 'int', 'desc' => '实际统计小时数'],
-                            ['name' => 'count', 'type' => 'int', 'desc' => '数据点数量'],
-                            ['name' => 'points[].t', 'type' => 'int', 'desc' => '时间戳（秒）'],
-                            ['name' => 'points[].rssi', 'type' => 'int', 'desc' => 'RSSI（dBm）'],
-                            ['name' => 'points[].snr', 'type' => 'float', 'desc' => 'SNR（dB）'],
-                            ['name' => 'points[].fcnt', 'type' => 'int', 'desc' => '帧计数'],
-                        ],
-                        'errors' => [['code' => '404', 'desc' => '设备不存在']],
-                    ],
+                    $t('cs-apps', 'GET', '/api/applications', '应用列表（List）',
+                        '{totalCount, result:[apiApplication]}。GET 单体 {application:{…}}；POST {application:{name,…}} 返回 {id}；PUT/DELETE 同标准路径。扩展字段 appEui/callbackUrl/numericId。'),
+                    $t('cs-app-tags', 'GET', '/api/applications/{id}/device-tags', '应用设备标签 DeviceTags',
+                        '返回 {result:[{key, values}]}（聚合自设备 latest_fields 键名）。'),
+                    $t('cs-app-profiles', 'GET', '/api/applications/{id}/device-profiles', '应用下模板列表',
+                        'ListDeviceProfilesByApplication，返回 {totalCount, result:[apiDeviceProfileListItem]}。'),
+                    $t('cs-app-integrations', 'GET', '/api/applications/{id}/integrations', '应用集成 Integrations',
+                        'GET 列表 {totalCount, result:[{kind}]}；POST {integration:{kind:"HTTP"|"INFLUX_DB"|"THINGS_BOARD"|…（11 种）}} 创建；GET/PUT/DELETE /integrations/{kind} 单类型；POST /integrations/mqtt/certificate 返回空证书 {caCert:"", tlsCert:"", tlsKey:"", expiresAt}。'),
+                    $t('cs-dps', 'GET', '/api/device-profiles', '设备模板列表',
+                        '{totalCount, result:[apiDeviceProfileListItem]}（region/macVersion/regParamsRevision 已映射标准枚举）。POST {deviceProfile:{…}} → {id}。'),
+                    $t('cs-dp-sub', 'GET', '/api/device-profiles/adr-algorithms', 'ADR 算法 / vendors / devices 目录',
+                        '/device-profiles/adr-algorithms 返回内置算法；/vendors、/devices（vendor 目录）返回空列表；/device-profiles/{id}/devices/{vendorId}/{vendorProfileId} 返回 404（无目录数据）。'),
+                    $t('cs-dpt', 'GET', '/api/device-profile-templates', '设备模板市场（DeviceProfileTemplates）',
+                        'GET 列表返回空 {totalCount:0, result:[]}；POST/PUT 返回 501 unimplemented（不持久化市场模板）；GET/DELETE 单体 404。'),
+                    $t('cs-gateways', 'GET', '/api/gateways', '网关列表（List）',
+                        '{totalCount, result:[apiGatewayListItem]}；search 按 name/gatewayId。POST {gateway:{gatewayId, name, …}} 返回 {}；GET 单体 {gateway:{…}}；PUT/DELETE 同标准路径。'),
+                    $t('cs-gw-metrics', 'GET', '/api/gateways/{gatewayId}/metrics', '网关指标 GetGatewayMetrics',
+                        '近 24h RX/TX 按小时聚合（标准 metrics 形状）。/duty-cycle-metrics 返回空指标；POST /generate-certificate 返回 {}；GET /relay-gateways 列出 relay 网关。'),
                 ],
             ],
             [
-                'title' => '设备模板与密钥',
+                'title' => '多播 / 租户 / 用户 / Relay',
                 'apis' => [
-                    [
-                        'id' => 'device-profiles', 'method' => 'GET', 'path' => '/v1/device-profiles',
-                        'title' => '列出设备模板',
-                        'desc' => '返回设备模板（Device Profile）列表，可绑定到设备以统一频段/MAC 版本/Class 能力。',
-                        'params' => [],
-                        'respFields' => [['name' => 'data[]', 'type' => 'object', 'desc' => '模板对象（含 name/region/mac_version/supports_class_b/c/supports_otaa 等）']],
-                        'errors' => [['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效']],
-                    ],
-                    [
-                        'id' => 'device-profile-create', 'method' => 'POST', 'path' => '/v1/device-profiles',
-                        'title' => '创建设备模板',
-                        'desc' => '创建一个设备模板。tenant 由 API Key 自动绑定。',
-                        'params' => [
-                            ['name' => 'name', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '模板名称'],
-                            ['name' => 'region', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => '频段，默认 EU868'],
-                            ['name' => 'mac_version', 'in' => 'body', 'type' => 'string', 'required' => false, 'desc' => 'MAC 版本，默认 1.0.4'],
-                            ['name' => 'supports_class_b', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '是否支持 Class B'],
-                            ['name' => 'supports_class_c', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '是否支持 Class C'],
-                            ['name' => 'supports_otaa', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '是否支持 OTAA'],
-                        ],
-                        'sample' => ['name' => 'CN470-ClassC', 'region' => 'CN470', 'mac_version' => '1.0.4', 'supports_class_c' => true, 'supports_otaa' => true],
-                        'respFields' => [['name' => 'id', 'type' => 'int', 'desc' => '新模板 ID']],
-                        'errors' => [['code' => '400', 'desc' => '参数错误'], ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效']],
-                    ],
-                    [
-                        'id' => 'device-profile-detail', 'method' => 'GET', 'path' => '/v1/device-profiles/{id}',
-                        'title' => '获取/修改/删除模板',
-                        'desc' => 'GET 获取详情；PUT/PATCH 修改；DELETE 删除。',
-                        'params' => [['name' => 'id', 'in' => 'path', 'type' => 'int', 'required' => true, 'desc' => '模板 ID']],
-                        'errors' => [['code' => '404', 'desc' => '模板不存在'], ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效']],
-                    ],
-                    [
-                        'id' => 'api-keys', 'method' => 'GET', 'path' => '/v1/api-keys',
-                        'title' => '列出 API 密钥',
-                        'desc' => '返回当前应用下的 API Key 列表（token 仅显示前 12 位预览）。',
-                        'params' => [],
-                        'respFields' => [['name' => 'data[].id', 'type' => 'int', 'desc' => 'Key ID'], ['name' => 'data[].name', 'type' => 'string', 'desc' => 'Key 名称'], ['name' => 'data[].token_preview', 'type' => 'string', 'desc' => 'token 预览']],
-                        'errors' => [['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效']],
-                    ],
-                    [
-                        'id' => 'api-key-create', 'method' => 'POST', 'path' => '/v1/api-keys',
-                        'title' => '创建 API 密钥',
-                        'desc' => '为当前应用创建一个新的 API Key（仅创建时返回完整 token 一次，请妥善保存）。',
-                        'params' => [['name' => 'name', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => 'Key 名称']],
-                        'sample' => ['name' => '边缘网关采集'],
-                        'respFields' => [['name' => 'id', 'type' => 'int', 'desc' => 'Key ID'], ['name' => 'api_key', 'type' => 'string', 'desc' => '完整 token（仅此一次）']],
-                        'errors' => [['code' => '400', 'desc' => '参数错误'], ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效']],
-                    ],
-                    [
-                        'id' => 'api-key-delete', 'method' => 'DELETE', 'path' => '/v1/api-keys/{id}',
-                        'title' => '吊销 API 密钥',
-                        'desc' => '吊销指定 API Key，立即失效。',
-                        'params' => [['name' => 'id', 'in' => 'path', 'type' => 'int', 'required' => true, 'desc' => 'Key ID']],
-                        'respFields' => [['name' => 'deleted', 'type' => 'bool', 'desc' => '是否成功吊销']],
-                        'errors' => [['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'], ['code' => '404', 'desc' => 'Key 不存在']],
-                    ],
+                    $t('cs-mc', 'GET', '/api/multicast-groups', '多播组列表',
+                        '{totalCount, result:[…]}。POST 创建、GET/PUT/DELETE 单体；POST /{id}/queue 或 /enqueue 入队（body {queueItem:{fPort, data(Base64)}}）返回 {fCnt}；GET /queue 返回 {items:[…]}；DELETE 清空队列；devices/gateways 子路由增删成员。'),
+                    $t('cs-tenants', 'GET', '/api/tenants', '租户列表（List）',
+                        '{totalCount, result:[apiTenant]}（admin only）。GET 单体；GET /{id}/users 列租户成员；POST /{id}/users 添加成员；/by-devaddr-prefix-overlap 返回空列表（标准形状）。'),
+                    $t('cs-users', 'GET', '/api/users', '用户列表（List）',
+                        '{totalCount, result:[apiUser]}（admin only）。POST/PUT/DELETE 同标准路径；POST /api/users/{userId}/password 修改密码（body {password}）。'),
+                    $t('cs-relays', 'GET', '/api/relays', 'Relay 列表',
+                        '映射 relay_gateways/relay_devices 表。GET /api/relays 列 relay 网关设备；GET /api/relays/{devEui}/devices 列 relay 下挂设备；POST 同路径添加下挂设备（body {deviceDevEui}）；DELETE /api/relays/{id} 删除。'),
+                    $t('cs-misc', 'GET', '/api/api-keys | /api/uplinks | /api/downlinks | /api/me', '附加资源',
+                        'api-keys/roles/departments/uplinks/downlinks/stats/regions 等沿用 {totalCount, result} 形状（api-keys 列表为 {data} 兼容形状），可在同一路由体系内直接使用。'),
                 ],
             ],
             [
-                'title' => '实时事件流 (SSE)',
+                'title' => '数据管理与平台功能',
                 'apis' => [
-                    [
-                        'id' => 'stream', 'method' => 'GET', 'path' => '/v1/stream',
-                        'title' => '订阅实时事件',
-                        'desc' => '基于 Server-Sent Events 的实时事件流（上行/下行/Join/网关等）。连接后持续推送 data: JSON，直到 55 秒超时（客户端自动重连并带 ?after=<last_id> 续传）。',
-                        'params' => [['name' => 'after', 'in' => 'query', 'type' => 'int', 'required' => false, 'desc' => '从此事件 ID 之后开始推送（断线续传用）']],
-                        'respFields' => [['name' => 'event', 'type' => 'stream', 'desc' => "每行 `data: {id,type,level,gateway_id,dev_id,message,created_at}`"]],
-                        'errors' => [['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效']],
-                    ],
-                ],
-            ],
-            [
-                'title' => '消息数据',
-
-                'apis' => [
-                    [
-                        'id' => 'uplinks', 'method' => 'GET', 'path' => '/v1/uplinks',
-                        'title' => '获取应用最近上行',
-                        'desc' => '返回该应用最近的上行消息（按 id 倒序）。可通过 dev_eui 过滤单设备。',
-                        'params' => [
-                            ['name' => 'dev_eui', 'in' => 'query', 'type' => 'string', 'required' => false, 'desc' => '仅返回该设备上行'],
-                            ['name' => 'limit', 'in' => 'query', 'type' => 'int', 'required' => false, 'desc' => '返回条数，默认 50，最大 500'],
-                        ],
-                        'respFields' => [
-                            ['name' => 'data[]', 'type' => 'object[]', 'desc' => '同 /v1/devices/{dev_eui}/uplinks 的 data 元素'],
-                        ],
-                        'respExample' => [
-                            'data' => [['id' => 9981, 'dev_addr' => '01ff02aa', 'fcnt' => 1205, 'port' => 10, 'confirmed' => false, 'decrypted_hex' => '48656c6c6f', 'gateway_id' => '0080000000000001', 'rssi' => -73, 'snr' => 9.2, 'received_at' => 1755349212]],
-                        ],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ],
-                    ],
-                    [
-                        'id' => 'downlinks', 'method' => 'GET', 'path' => '/v1/downlinks',
-                        'title' => '获取应用最近下行',
-                        'desc' => '返回该应用最近的下行队列/发送记录（按 id 倒序）。',
-                        'params' => [
-                            ['name' => 'dev_eui', 'in' => 'query', 'type' => 'string', 'required' => false, 'desc' => '仅返回该设备下行'],
-                            ['name' => 'limit', 'in' => 'query', 'type' => 'int', 'required' => false, 'desc' => '返回条数，默认 50，最大 500'],
-                        ],
-                        'respFields' => [
-                            ['name' => 'data[].id', 'type' => 'int', 'desc' => '下行记录 ID'],
-                            ['name' => 'data[].dev_id', 'type' => 'int', 'desc' => '目标设备 ID'],
-                            ['name' => 'data[].port', 'type' => 'int', 'desc' => 'FPort'],
-                            ['name' => 'data[].payload_hex', 'type' => 'string', 'desc' => '下行负载（hex）'],
-                            ['name' => 'data[].confirmed', 'type' => 'bool', 'desc' => '是否确认帧'],
-                            ['name' => 'data[].status', 'type' => 'string', 'desc' => 'pending / sent / acked / failed / timeout'],
-                            ['name' => 'data[].sent_at', 'type' => 'int', 'desc' => '实际发送时间（Unix 秒）'],
-                        ],
-                        'respExample' => [
-                            'data' => [['id' => 412, 'dev_id' => 3, 'port' => 10, 'payload_hex' => '48656c6c6f', 'confirmed' => false, 'status' => 'sent', 'sent_at' => 1755349300]],
-                        ],
-                        'errors' => [
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                        ],
-                    ],
-                ],
-            ],
-            [
-                'title' => '下行控制',
-                'apis' => [
-                    [
-                        'id' => 'downlink', 'method' => 'POST', 'path' => '/v1/devices/{dev_eui}/downlink',
-                        'title' => '下发下行数据',
-                        'desc' => '向指定设备入队一条下行。Class C 立即下发；Class A 于下次上行 RX1/RX2 窗口下发；Class B 于 ping 时隙下发。payload 为 hex 字符串。',
-                        'params' => [
-                            ['name' => 'dev_eui', 'in' => 'path', 'type' => 'string', 'required' => true, 'desc' => '目标设备 EUI'],
-                            ['name' => 'port', 'in' => 'body', 'type' => 'int', 'required' => true, 'desc' => 'FPort。应用数据填 1–223；发送 MAC 命令时填 0（并置 mac=true）'],
-                            ['name' => 'payload', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '负载 hex 字符串（长度需为偶数）。mac=true 时为 MAC 指令字节（如 03 0A 00 01 即 LinkADRReq）'],
-                            ['name' => 'confirmed', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '是否确认帧，默认 false'],
-                            ['name' => 'mac', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '是否为 MAC 命令（FPort=0，使用 NwkSKey 加密）。true 时 port 强制为 0，payload 作为 MAC 指令下发；默认 false'],
-                        ],
-                        'sample' => ['port' => 10, 'payload' => '48656c6c6f', 'confirmed' => false, 'mac' => false],
-                        'respFields' => [
-                            ['name' => 'id', 'type' => 'int', 'desc' => '下行记录 ID'],
-                            ['name' => 'status', 'type' => 'string', 'desc' => '入队状态，成功为 pending'],
-                        ],
-                        'respExample' => ['id' => 413, 'status' => 'pending'],
-                        'errors' => [
-                            ['code' => '400', 'desc' => '参数错误（port 越界 / payload 非 hex / 长度非偶数）'],
-                            ['code' => '401 invalid_api_key', 'desc' => 'API Key 缺失或无效'],
-                            ['code' => '404 device_not_found', 'desc' => '设备不存在或不归该应用所有'],
-                        ],
-                    ],
+                    $t('cs-thing-models', 'GET', '/api/thing-models?applicationId=', '物模型 Thing Models',
+                        'GET 列表 {totalCount, result}；GET /{id} 返回 {thingModel:{…}}；POST {applicationId, name, fields…} 创建返回 {id}；PUT/DELETE /{id} 修改/删除。物模型定义设备上行字段的结构化描述，供看板自动解码。'),
+                    $t('cs-device-readings', 'GET', '/api/device-readings?dev_id=&field=&from=&to=', '设备历史读数 Device Readings',
+                        '按设备 + 字段名 + 时间范围（from/to Unix 秒）查询历史数据点，用于曲线绘制。'),
+                    $t('cs-alert-rules', 'GET', '/api/alert-rules?applicationId=', '告警规则 Alert Rules',
+                        'GET 列表；POST 创建（{applicationId, name, condition…}）返回 {id}；PUT/DELETE /{id}。规则命中后生成告警。'),
+                    $t('cs-alerts', 'GET', '/api/alerts?scope=|active|counts&status=&devId=&limit=&offset=', '告警 Alerts',
+                        '默认列表 {totalCount, result, counts}；?scope=active 只取活动告警；?scope=counts 只取计数。POST /{id}?action=resolve 解除一条告警。'),
+                    $t('cs-notification-groups', 'GET', '/api/notification-groups', '通知组 Notification Groups',
+                        'GET 列表；POST 创建返回 {id}；PUT/DELETE /{id}。通知组定义告警推送的目标（如 webhook/邮件组）。'),
+                    $t('cs-scheduled-tasks', 'GET', '/api/scheduled-tasks', '定时任务 Scheduled Tasks',
+                        'GET 列表；POST 创建（cron + 下行模板）返回 {id}；PUT/DELETE /{id}；POST /{id}?action=run 立即执行一次（返回 {id, downlinkId, nextRunAt}）；POST /{id}?action=toggle&enabled=1|0 启停。'),
+                    $t('cs-automations', 'GET', '/api/automations', '联动模型 Automations',
+                        'GET 列表；POST 创建（{applicationId, triggerDeviceId, condition, action…}）返回 {id}；PUT/DELETE /{id}。设备上行满足条件时自动触发下行。'),
+                    $t('cs-fuota', 'GET', '/api/fuota', 'FUOTA 固件升级任务',
+                        'GET 列表；POST 创建（{applicationId, multicastGroupId, payload…}）返回 {id}；GET /{id} 详情；DELETE /{id}；POST /{id}/start 开始升级；POST /{id}/devices 添加目标设备。'),
+                    $t('cs-events', 'GET', '/api/events?devId=&gatewayId=&type=&limit=&offset=', '网关/系统事件 Events',
+                        '返回 {totalCount, result:[{id, type, level, gatewayId, devId, message, time, rawJson}]}。type 可过滤（如 join/error/tx）。'),
+                    $t('cs-api-logs', 'GET', '/api/api-logs?method=&status=&ip=&path_contains=&since=&limit=&offset=', 'API 调用日志 API Logs',
+                        '返回 {totalCount, result:[{id, method, path, status, latencyMs, ip, username, role, query, bodySize, time}]}（admin/tenant/operator 均可查，范围按角色过滤）。'),
+                    $t('cs-stream', 'GET', '/api/stream?after=', '实时事件流 SSE',
+                        'Server-Sent Events：连接后持续推送 data: {id, type, level, gateway_id, dev_id, message, created_at}，55 秒超时，客户端带 ?after=<last_id> 重连续传。'),
+                    $t('cs-settings', 'GET', '/api/settings', '站点设置 Settings（admin）',
+                        'GET 返回 {data:{…}} 全部设置；POST 设置若干键值；POST {clear_logs:"uplinks|downlinks|events|alerts", clear_logs_tenant?} 清理日志（tenant 及以上）。'),
+                    $t('cs-stats-regions', 'GET', '/api/stats | /api/regions | /api/me | /api/public-settings | /api/i18n', '基础信息端点',
+                        'stats=仪表盘统计；regions=支持的频段列表；me=当前用户（含 permissions）；public-settings=公开站点设置；i18n?lang= 取语言字典。'),
                 ],
             ],
         ];

@@ -199,6 +199,7 @@ function cs_ts($unix): string
 
 function cs_err(int $code, string $error, string $message): array
 {
+    // 官方 grpc-gateway v2 错误体 = {code, message, details}；error 字段保留供前端 csAdapt 识别（非官方字段）
     return ['error' => $error, 'code' => $code, 'message' => $message, 'details' => []];
 }
 
@@ -218,6 +219,13 @@ function cs_forbidden(string $msg = 'permission denied'): array
 {
     http_response_code(403);
     return cs_err(7, 'permission_denied', $msg);
+}
+
+/** 官方 unimplemented 响应（gRPC code 12，HTTP 501） */
+function cs_unimplemented(string $what = 'Method is not implemented.'): array
+{
+    http_response_code(501);
+    return cs_err(12, 'unimplemented', $what);
 }
 
 /** 列表响应包装 */
@@ -263,7 +271,105 @@ function cs_wrapError(array $r): ?array
     return cs_invalid($msg);
 }
 
-function handleApi(string $method, string $path): array
+/**
+ * 路径段解析（ChirpStack 平替关键）：
+ * - 16 位 hex → DevEUI（查 devices 表取数字 id）
+ * - UUID / 纯数字 → cs_uuidToInt
+ */
+function cs_resolveDeviceSeg(string $seg): array
+{
+    $hex = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $seg));
+    // 16 位 hex 一律先按 DevEUI 解析（ChirpStack 官方路径用 DevEUI 定位设备）；
+    // 查不到再回退：无连字符的纯 hex 也可能来自内部数字 id 的 UUID 形态
+    if (strlen($hex) === 16 && strpos($seg, '-') === false) {
+        $dev = Database::fetch("SELECT id FROM devices WHERE dev_eui=?", [$hex]);
+        if ($dev) {
+            return ['devEui' => $hex, 'id' => (int) $dev['id']];
+        }
+        // 回退：uuidToInt 兼容纯数字形态（如 "0000000000000003"）
+        $id = cs_uuidToInt($seg);
+        if ($id > 0 && Database::fetch("SELECT id FROM devices WHERE id=?", [$id])) {
+            return ['devEui' => '', 'id' => $id];
+        }
+        return ['devEui' => $hex, 'id' => 0];
+    }
+    if (strpos($seg, '-') !== false) {
+        return ['devEui' => '', 'id' => cs_uuidToInt($seg)];
+    }
+    return ['devEui' => '', 'id' => (int) $seg];
+}
+
+/** 按 DevEUI 取数字 id；找不到返回 0 */
+function cs_devEuiToId(string $devEui): int
+{
+    $hex = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $devEui));
+    if ($hex === '') {
+        return 0;
+    }
+    $dev = Database::fetch("SELECT id FROM devices WHERE dev_eui=?", [$hex]);
+    return $dev ? (int) $dev['id'] : 0;
+}
+
+/** ChirpStack ApplicationService integration 类型端点（HTTP/InfluxDB/ThingsBoard 等 11 种，复用 integrations 表 kind 字段） */
+function cs_appIntegrationEndpoint(string $method, int $appId, array $segs, array $body): array
+{
+    // 官方 kind 枚举 → holastack integrations.kind（统一大写）
+    $officialKinds = ['HTTP', 'INFLUX_DB', 'THINGS_BOARD', 'MY_DEVICES', 'GCP_PUB_SUB', 'AWS_SNS', 'AZURE_SERVICE_BUS', 'PILOT_THINGS', 'MQTT_GLOBAL', 'IFTTT', 'BLYNK'];
+    $pathKind = strtoupper(str_replace('-', '_', (string) ($segs[0] ?? '')));
+
+    // GET /api/applications/{id}/integrations：列表 {totalCount, result:[{kind}]}
+    if ($pathKind === '' && $method === 'GET') {
+        $rows = Database::fetchAll("SELECT * FROM integrations WHERE application_id=? ORDER BY id", [$appId]);
+        $result = array_map(static fn($i) => ['kind' => strtoupper((string) $i['kind'])], $rows);
+        return cs_list($result, count($result));
+    }
+    // POST /api/applications/{id}/integrations/mqtt/certificate：MQTT 客户端证书（holastack 无 CA 基础设施，官方形状 + 空证书）
+    if ($pathKind === 'MQTT' && ($segs[1] ?? '') === 'certificate' && $method === 'POST') {
+        return ['caCert' => '', 'tlsCert' => '', 'tlsKey' => '', 'expiresAt' => CS_ZERO_TS];
+    }
+
+    if (!in_array($pathKind, $officialKinds, true)) {
+        return cs_unimplemented('unknown integration kind: ' . $pathKind);
+    }
+
+    $existing = Database::fetch("SELECT * FROM integrations WHERE application_id=? AND kind=?", [$appId, $pathKind]);
+
+    if ($method === 'GET') {
+        if (!$existing) {
+            return cs_notFound('integration does not exist');
+        }
+        $cfg = json_decode((string) $existing['config_json'], true) ?: [];
+        $int = array_merge(['applicationId' => cs_intToUuid($appId)], $cfg);
+        return ['integration' => $int];
+    }
+    if ($method === 'POST' || $method === 'PUT') {
+        $in = $body['integration'] ?? $body;
+        $cfg = $in;
+        unset($cfg['applicationId']);
+        if ($existing) {
+            Database::execute(
+                "UPDATE integrations SET config_json=?, enabled=1 WHERE id=?",
+                [json_encode($cfg, JSON_UNESCAPED_UNICODE), (int) $existing['id']]
+            );
+        } else {
+            Database::execute(
+                "INSERT INTO integrations (application_id, tenant_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?,?)",
+                [$appId, 0, $pathKind, 1, json_encode($cfg, JSON_UNESCAPED_UNICODE), time()]
+            );
+        }
+        return [];
+    }
+    if ($method === 'DELETE') {
+        if ($existing) {
+            Database::execute("DELETE FROM integrations WHERE id=?", [(int) $existing['id']]);
+            return [];
+        }
+        return cs_notFound('integration does not exist');
+    }
+    return cs_invalid('method not allowed');
+}
+
+function handleApi(string $method, string $path): array|\stdClass
 {
     $segs = explode('/', trim($path, '/'));
     array_shift($segs); 
@@ -349,9 +455,9 @@ function handleApi(string $method, string $path): array
     
 
     $isWrite = in_array($method, ['POST', 'PUT', 'DELETE'], true);
-    $isDownlink = ($resource === 'devices' && ($segs[2] ?? '') === 'downlink');
-    $isPwChange = ($resource === 'users' && ($segs[1] ?? '') === 'password');
-    $isMulticastEnqueue = ($resource === 'multicast-groups' && ($segs[2] ?? '') === 'enqueue');
+    $isDownlink = ($resource === 'devices' && in_array($segs[2] ?? '', ['downlink', 'queue'], true));
+    $isPwChange = ($resource === 'users' && in_array($segs[1] ?? '', ['password'], true) || ($resource === 'users' && ($segs[2] ?? '') === 'password'));
+    $isMulticastEnqueue = ($resource === 'multicast-groups' && in_array($segs[2] ?? '', ['enqueue', 'queue'], true));
     $adminOnlyResource = in_array($resource, ['users', 'tenants', 'settings'], true);
     
 
@@ -514,6 +620,65 @@ function handleApi(string $method, string $path): array
             }
             return ['data' => Setting::getAll()];
         case 'applications':
+            if (isset($segs[1]) && isset($segs[2]) && $segs[2] !== '') {
+                // ChirpStack 应用子路由
+                $appId2 = cs_uuidToInt((string) $segs[1]);
+                $sub2 = (string) $segs[2];
+                if ($sub2 === 'device-tags' && $method === 'GET') {
+                    // ListDeviceTags → {result:[{key, values}]}
+                    $tagRows = Database::fetchAll(
+                        "SELECT latest_fields FROM devices WHERE app_id=? AND latest_fields<>''",
+                        [$appId2]
+                    );
+                    $tags = [];
+                    foreach ($tagRows as $d) {
+                        $fields = json_decode((string) $d['latest_fields'], true) ?: [];
+                        foreach (array_keys($fields) as $k) {
+                            $tags[$k] = true;
+                        }
+                    }
+                    $result = [];
+                    foreach (array_keys($tags) as $k) {
+                        $result[] = ['key' => $k, 'values' => []];
+                    }
+                    return ['result' => $result];
+                }
+                if ($sub2 === 'device-profiles' && $method === 'GET') {
+                    // ListDeviceProfilesByApplication → {totalCount, result:[apiDeviceProfileListItem]}
+                    $dpRows2 = WebApp::listDeviceProfiles(null);
+                    $profRows = [];
+                    foreach ($dpRows2 as $p) {
+                        $rev2 = preg_replace('/^RP00[12][-._]/', '', $p['reg_params_revision'] ?? 'RP002-1.0.3');
+                        $macFl2 = ['1.0.0' => 'LORAWAN_1_0_0', '1.0.1' => 'LORAWAN_1_0_1', '1.0.2' => 'LORAWAN_1_0_2', '1.0.3' => 'LORAWAN_1_0_3', '1.0.4' => 'LORAWAN_1_0_4', '1.1.0' => 'LORAWAN_1_1_0'];
+                        $profRows[] = array_merge(cs_rowBase($p), [
+                            'name'              => $p['name'] ?? '',
+                            'description'       => $p['description'] ?? '',
+                            'region'            => strtoupper($p['region'] ?? 'EU868'),
+                            'macVersion'        => $macFl2[$p['mac_version'] ?? '1.0.4'] ?? 'LORAWAN_1_0_4',
+                            'regParamsRevision' => 'RP002_' . str_replace(['.', '-'], '_', $rev2),
+                            'supportsOtaa'      => (bool) ($p['supports_otaa'] ?? 1),
+                            'supportsClassB'    => (bool) ($p['supports_class_b'] ?? 0),
+                            'supportsClassC'    => (bool) ($p['supports_class_c'] ?? 0),
+                            'tags'              => cs_obj(),
+                            'numericId'         => (int) $p['id'],
+                        ]);
+                    }
+                    $off2 = $offsetOf('offset');
+                    $lim2 = $limitOf('limit');
+                    return cs_list(array_slice($profRows, $off2, $lim2), count($profRows));
+                }
+                if ($sub2 === 'integrations') {
+                    return cs_appIntegrationEndpoint($method, $appId2, array_values(array_slice($segs, 3)), $body);
+                }
+            }
+            if (isset($segs[1]) && $method === 'GET') {
+                // ChirpStack Get → {application:{...}}
+                $a = WebApp::getApplication(cs_uuidToInt((string) $segs[1]));
+                if (!$a) {
+                    return cs_notFound('application not found');
+                }
+                return ['application' => $applicationRow($a, false)];
+            }
             if (isset($segs[1]) && $method === 'PUT') {
                 $id = cs_uuidToInt((string) $segs[1]);
                 // PUT 全量语义：ChirpStack 只传 application 对象，回填旧记录避免误清字段
@@ -545,12 +710,281 @@ function handleApi(string $method, string $path): array
             if (($get['applicationId'] ?? $get['app_id'] ?? '') !== '') {
                 $rows = array_values(array_filter($rows, fn($a) => (int) $a['id'] === (int) ($get['applicationId'] ?? $get['app_id'])));
             }
-            return cs_list(array_map(fn($a) => $applicationRow($a, true), $rows), count($rows));
+            // ChirpStack List：search（name 匹配）+ limit/offset
+            $search = trim((string) ($get['search'] ?? ''));
+            if ($search !== '') {
+                $rows = array_values(array_filter($rows, fn($a) => stripos((string) ($a['name'] ?? ''), $search) !== false));
+            }
+            $total = count($rows);
+            if ((int) ($get['limit'] ?? 50) === 0) {
+                return cs_list([], $total);
+            }
+            $result = array_slice(array_values($rows), $offsetOf('offset'), $limitOf('limit'));
+            return cs_list(array_map(fn($a) => $applicationRow($a, true), $result), $total);
         case 'devices':
             if (($segs[1] ?? '') === 'import' && $method === 'POST') {
                 $r = WebApp::importDevices((int) ($body['app_id'] ?? ($body['applicationId'] ? cs_uuidToInt((string) $body['applicationId']) : 0)), $body['raw'] ?? '', $body['format'] ?? 'csv');
                 if ($e = cs_wrapError($r)) { return $e; }
                 return $r;
+            }
+            if (isset($segs[1]) && $segs[1] !== '' && ($segs[2] ?? '') !== '') {
+                // ===== 设备子路由：ChirpStack 官方 + holastack 扩展（downlink/fields） =====
+                $res = cs_resolveDeviceSeg((string) $segs[1]);
+                $devId = (int) $res['id'];
+                $sub = (string) $segs[2];
+
+                if ($sub === 'downlink' && $method === 'POST') {
+                    // holastack 扩展端点（ChirpStack 等价 = POST /queue）
+                    $in = $body['queueItem'] ?? $body['deviceQueueItem'] ?? $body;
+                    $payload = (string) ($in['data'] ?? '');
+                    if ($payload !== '' && !ctype_xdigit($payload)) {
+                        $bin = base64_decode($payload, true);
+                        if ($bin === false) {
+                            return cs_invalid('data must be Base64 or hex');
+                        }
+                        $payload = bin2hex($bin);
+                    }
+                    $r = WebApp::enqueueDownlink(
+                        $devId,
+                        (int) ($in['fPort'] ?? $in['port'] ?? 0),
+                        $payload !== '' ? $payload : (string) ($in['payload'] ?? ''),
+                        !empty($in['confirmed']),
+                        !empty($in['mac'])
+                    );
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    return ['id' => (string) $r['id']];
+                }
+                if ($sub === 'fields' && $method === 'GET') {
+                    return WebApp::deviceFields($devId);
+                }
+                if ($sub === 'queue') {
+                    $qId = $segs[3] ?? null;
+                    if ($qId !== null && $method === 'DELETE') {
+                        // DELETE /queue/{id}：撤销单个 pending item
+                        $qid = cs_uuidToInt((string) $qId);
+                        $q = Database::fetch("SELECT id, dev_id, status FROM downlinks WHERE id=?", [$qid]);
+                        if (!$q || (int) $q['dev_id'] !== $devId) {
+                            return cs_notFound('queue item not found');
+                        }
+                        if ($q['status'] !== 'pending') {
+                            http_response_code(409);
+                            return cs_err(9, 'failed_precondition', 'queue item is not pending');
+                        }
+                        Database::execute("UPDATE downlinks SET status='canceled' WHERE id=?", [$qid]);
+                        return [];
+                    }
+                    if ($devId <= 0) {
+                        return cs_notFound('device not found');
+                    }
+                    if ($method === 'POST') {
+                        // ChirpStack Enqueue：body {queueItem:{...}} 或 {flushQueue, queueItem}
+                        if (!empty($body['flushQueue'])) {
+                            Database::execute("UPDATE downlinks SET status='canceled' WHERE dev_id=? AND status='pending'", [$devId]);
+                        }
+                        $in = $body['queueItem'] ?? $body['deviceQueueItem'] ?? [];
+                        $payload = (string) ($in['data'] ?? '');
+                        if ($payload !== '' && !ctype_xdigit($payload)) {
+                            $bin = base64_decode($payload, true);
+                            if ($bin === false) {
+                                return cs_invalid('data must be Base64 encoded');
+                            }
+                            $payload = bin2hex($bin);
+                        }
+                        $r = WebApp::enqueueDownlink($devId, (int) ($in['fPort'] ?? 0), $payload, !empty($in['confirmed']));
+                        if ($e = cs_wrapError($r)) { return $e; }
+                        return ['id' => cs_intToUuid((int) $r['id'])];
+                    }
+                    if ($method === 'GET') {
+                        // ChirpStack GetDeviceQueueItems → {totalCount, result:[apiDeviceQueueItem]}
+                        $rows = Database::fetchAll(
+                            "SELECT d.*, v.dev_eui FROM downlinks d JOIN devices v ON v.id=d.dev_id WHERE d.dev_id=? AND d.status='pending' ORDER BY d.id ASC",
+                            [$devId]
+                        );
+                        $items = array_map(static function ($q) {
+                            return [
+                                'id'          => cs_intToUuid((int) $q['id']),
+                                'devEui'      => $q['dev_eui'] ?? '',
+                                'fPort'       => (int) $q['port'],
+                                'confirmed'   => (bool) $q['confirmed'],
+                                'isPending'   => true,
+                                'isEncrypted' => false,
+                                'fCntDown'    => (int) ($q['fcnt'] ?? 0),
+                                'data'        => base64_encode(hex2bin((string) $q['payload_hex']) ?: ''),
+                                'expiresAt'   => CS_ZERO_TS,
+                            ];
+                        }, $rows);
+                        return cs_list($items, count($items));
+                    }
+                    if ($method === 'DELETE') {
+                        // flushQueue：撤销全部 pending
+                        Database::execute("UPDATE downlinks SET status='canceled' WHERE dev_id=? AND status='pending'", [$devId]);
+                        return [];
+                    }
+                }
+                if ($sub === 'activate' && $method === 'POST') {
+                    // ChirpStack ABP 激活：body {deviceActivation:{devAddr, fCntUp, nFwkSIntKey, appSKey,...}}
+                    $dev = Database::fetch("SELECT activation FROM devices WHERE id=?", [$devId]);
+                    if (!$dev) {
+                        return cs_notFound('device not found');
+                    }
+                    $act = $body['deviceActivation'] ?? $body;
+                    $hex = static fn($v) => strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $v));
+                    $addr = $hex($act['devAddr'] ?? '');
+                    $nwk = $hex($act['fNwkSIntKey'] ?? $act['nwkSEncKey'] ?? '');
+                    $app = $hex($act['appSKey'] ?? '');
+                    if (strlen($addr) !== 8 || strlen($nwk) !== 32 || strlen($app) !== 32) {
+                        return cs_invalid('deviceActivation requires devAddr(8 hex), fNwkSIntKey(32 hex), appSKey(32 hex)');
+                    }
+                    Database::execute(
+                        "UPDATE devices SET activation='ABP', dev_addr=?, nwk_s_key=?, app_s_key=?, fcnt_up=? WHERE id=?",
+                        [$addr, $nwk, $app, (int) ($act['fCntUp'] ?? 0), $devId]
+                    );
+                    return [];
+                }
+                if ($sub === 'activation') {
+                    $dev = Database::fetch("SELECT * FROM devices WHERE id=?", [$devId]);
+                    if (!$dev) {
+                        return cs_notFound('device not found');
+                    }
+                    if ($method === 'GET') {
+                        // ChirpStack GetDeviceActivation → {deviceActivation:{...}}
+                        return ['deviceActivation' => [
+                            'devEui'      => $dev['dev_eui'],
+                            'devAddr'     => $dev['dev_addr'] ?? '',
+                            'appSKey'     => $dev['app_s_key'] ?? '',
+                            'fNwkSIntKey' => ($dev['f_nwk_s_int_key'] ?? '') ?: ($dev['nwk_s_key'] ?? ''),
+                            'sNwkSIntKey' => $dev['s_nwk_s_int_key'] ?? '',
+                            'nwkSEncKey'  => ($dev['nwk_s_enc_key'] ?? '') ?: ($dev['nwk_s_key'] ?? ''),
+                            'fCntUp'      => (int) $dev['fcnt_up'],
+                            'nFCntDown'   => (int) $dev['fcnt_down'],
+                            'aFCntDown'   => (int) $dev['fcnt_down'],
+                        ]];
+                    }
+                    if ($method === 'DELETE') {
+                        // 清除会话：设备重置回待入网状态
+                        Database::execute(
+                            "UPDATE devices SET dev_addr='', nwk_s_key='', app_s_key='', f_nwk_s_int_key='', s_nwk_s_int_key='', nwk_s_enc_key='', fcnt_up=0, fcnt_down=0, last_seen=0, status='pending' WHERE id=?",
+                            [$devId]
+                        );
+                        return [];
+                    }
+                }
+                if ($sub === 'keys') {
+                    $dev = Database::fetch("SELECT * FROM devices WHERE id=?", [$devId]);
+                    if (!$dev) {
+                        return cs_notFound('device not found');
+                    }
+                    if ($method === 'GET') {
+                        // ChirpStack GetDeviceKeys → {deviceKeys:{...}}
+                        return ['deviceKeys' => [
+                            'devEui'    => $dev['dev_eui'],
+                            'appKey'    => $dev['app_key'] ?? '',
+                            'nwkKey'    => $dev['nwk_key'] ?? '',
+                            'genAppKey' => '',
+                        ]];
+                    }
+                    if ($method === 'POST' || $method === 'PUT') {
+                        $k = $body['deviceKeys'] ?? $body;
+                        $hex = static fn($v) => strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $v));
+                        $sets = [];
+                        $params = [];
+                        foreach ([['appKey', 'app_key'], ['nwkKey', 'nwk_key']] as [$csK, $col]) {
+                            if (isset($k[$csK]) && $k[$csK] !== '') {
+                                $v = $hex($k[$csK]);
+                                if (strlen($v) !== 32) {
+                                    return cs_invalid($csK . ' must be 128-bit HEX encoded');
+                                }
+                                $sets[] = "$col=?";
+                                $params[] = $v;
+                            }
+                        }
+                        if ($sets) {
+                            $params[] = $devId;
+                            Database::execute("UPDATE devices SET " . implode(', ', $sets) . " WHERE id=?", $params);
+                        }
+                        return [];
+                    }
+                    if ($method === 'DELETE') {
+                        Database::execute("UPDATE devices SET app_key='', nwk_key='' WHERE id=?", [$devId]);
+                        return [];
+                    }
+                }
+                if ($sub === 'get-next-f-cnt-down' && $method === 'POST') {
+                    // ChirpStack GetNextFCntDown → {fCntDown}
+                    $dev = Database::fetch("SELECT fcnt_down FROM devices WHERE id=?", [$devId]);
+                    if (!$dev) {
+                        return cs_notFound('device not found');
+                    }
+                    $next = (int) $dev['fcnt_down'] + 1;
+                    Database::execute("UPDATE devices SET fcnt_down=? WHERE id=?", [$next, $devId]);
+                    return ['fCntDown' => $next];
+                }
+                if ($sub === 'get-random-dev-addr' && $method === 'POST') {
+                    // 4 字节随机 DevAddr（首字节最高位清 0，避免与官方保留前缀冲突）
+                    $addr = str_pad(dechex(random_int(0, 0x7fffffff)), 8, '0', STR_PAD_LEFT);
+                    return ['devAddr' => $addr];
+                }
+                // 官方仅 POST：GET 落此须拦截，避免误入设备单体分支
+                if (in_array($sub, ['get-next-f-cnt-down', 'get-random-dev-addr'], true)) {
+                    return cs_invalid('method not allowed');
+                }
+                if ($sub === 'dev-nonces' && $method === 'DELETE') {
+                    // holastack 无独立 dev-nonces 存储：no-op 成功（ChirpStack 返回空对象）
+                    return [];
+                }
+                if ($sub === 'metrics' && $method === 'GET') {
+                    // 按小时聚合 24h 上行（ChirpStack GetDeviceMetrics 形状）
+                    $dev = Database::fetch("SELECT id FROM devices WHERE id=?", [$devId]);
+                    if (!$dev) {
+                        return cs_notFound('device not found');
+                    }
+                    $rows = Database::fetchAll(
+                        "SELECT received_at FROM uplinks WHERE dev_id=? AND received_at>=? ORDER BY received_at ASC",
+                        [$devId, time() - 86400]
+                    );
+                    $buckets = [];
+                    foreach ($rows as $u) {
+                        $b = gmdate('Y-m-d\TH:00:00\Z', (int) $u['received_at']);
+                        $buckets[$b] = ($buckets[$b] ?? 0) + 1;
+                    }
+                    return [
+                        'rxPackets' => [
+                            'name'       => 'RX packets',
+                            'kind'       => 'COUNTER',
+                            'timestamps' => array_keys($buckets),
+                            'datasets'   => [['label' => 'RX packets', 'data' => array_values($buckets)]],
+                        ],
+                        'states'  => cs_obj(),
+                        'metrics' => cs_obj(),
+                    ];
+                }
+                if ($sub === 'link-metrics' && $method === 'GET') {
+                    // 24h RSSI/SNR 小时均值（ChirpStack GetDeviceLinkMetrics 形状）
+                    $dev = Database::fetch("SELECT id FROM devices WHERE id=?", [$devId]);
+                    if (!$dev) {
+                        return cs_notFound('device not found');
+                    }
+                    $rows = Database::fetchAll(
+                        "SELECT received_at, rssi, snr FROM uplinks WHERE dev_id=? AND received_at>=? ORDER BY received_at ASC",
+                        [$devId, time() - 86400]
+                    );
+                    $bRssi = [];
+                    $bSnr = [];
+                    foreach ($rows as $u) {
+                        $b = gmdate('Y-m-d\TH:00:00\Z', (int) $u['received_at']);
+                        $bRssi[$b][] = (int) $u['rssi'];
+                        $bSnr[$b][] = (float) $u['snr'];
+                    }
+                    $avg = static function (array $b) {
+                        return array_map(static fn($arr) => round(array_sum($arr) / max(1, count($arr)), 1), array_values($b));
+                    };
+                    return [
+                        'rxPackets' => ['name' => 'RX packets', 'kind' => 'COUNTER', 'timestamps' => array_keys($bRssi), 'datasets' => [['label' => 'RX packets', 'data' => array_map('count', array_values($bRssi))]]],
+                        'gwRssi'    => ['name' => 'RSSI', 'kind' => 'GAUGE', 'timestamps' => array_keys($bRssi), 'datasets' => [['label' => 'RSSI', 'data' => $avg($bRssi)]]],
+                        'gwSnr'     => ['name' => 'SNR', 'kind' => 'GAUGE', 'timestamps' => array_keys($bSnr), 'datasets' => [['label' => 'SNR', 'data' => $avg($bSnr)]]],
+                        'errors'    => ['name' => 'Errors', 'kind' => 'COUNTER', 'timestamps' => [], 'datasets' => []],
+                    ];
+                }
             }
             if (isset($segs[1]) && ($segs[2] ?? '') === 'downlink' && $method === 'POST') {
                 // ChirpStack Enqueue 语义：body.queueItem {fPort, data(Base64), confirmed}；兼容 holastack 原生 {port, payload(hex)}
@@ -579,14 +1013,35 @@ function handleApi(string $method, string $path): array
                 return WebApp::deviceFields((int) $segs[1]);
             }
             if (isset($segs[1]) && $method === 'PUT') {
-                $r = WebApp::updateDevice(cs_uuidToInt((string) $segs[1]), $body);
+                // ChirpStack: PUT /api/devices/{device.devEui}；兼容前端数字 id / UUID
+                $res = cs_resolveDeviceSeg((string) $segs[1]);
+                if ($res['id'] <= 0) {
+                    return cs_notFound('device not found');
+                }
+                $r = WebApp::updateDevice((int) $res['id'], $body);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return [];
             }
             if (isset($segs[1]) && $method === 'DELETE') {
-                $r = WebApp::deleteDevice(cs_uuidToInt((string) $segs[1]));
+                $res = cs_resolveDeviceSeg((string) $segs[1]);
+                if ($res['id'] <= 0) {
+                    return cs_notFound('device not found');
+                }
+                $r = WebApp::deleteDevice((int) $res['id']);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return [];
+            }
+            if (isset($segs[1]) && $method === 'GET') {
+                // ChirpStack Get → {device:{...}}
+                $res = cs_resolveDeviceSeg((string) $segs[1]);
+                if ($res['id'] <= 0) {
+                    return cs_notFound('device not found');
+                }
+                $d = WebApp::getDevice((int) $res['id']);
+                if (!$d) {
+                    return cs_notFound('device not found');
+                }
+                return ['device' => $deviceRow($d, false)];
             }
             if ($method === 'POST') {
                 $in = $body['device'] ?? $body;
@@ -601,15 +1056,117 @@ function handleApi(string $method, string $path): array
                         $in[$hs] = ($cs === 'applicationId' || $cs === 'deviceProfileId') ? cs_uuidToInt((string) $in[$cs]) : $in[$cs];
                     }
                 }
+                // ChirpStack device.keys（nwkKey/appKey）→ holastack nwk_key/app_key
+                if (isset($in['keys']) && is_array($in['keys'])) {
+                    if (isset($in['keys']['appKey']) && !isset($in['app_key'])) { $in['app_key'] = $in['keys']['appKey']; }
+                    if (isset($in['keys']['nwkKey']) && !isset($in['nwk_key'])) { $in['nwk_key'] = $in['keys']['nwkKey']; }
+                }
+                // ChirpStack OTAA 必带 JoinEUI；缺省时给全 F 占位（holastack 校验要求 16 hex）
+                if (!isset($in['join_eui']) && empty($in['dev_addr'])) {
+                    $in['join_eui'] = $in['joinEui'] ?? '0101010101010101';
+                }
                 $r = WebApp::createDevice($in);
                 if ($e = cs_wrapError($r)) { return $e; }
-                return ['devEui' => $in['dev_eui'] ?? ''];  // ChirpStack DeviceService.Create 返回 {devEui}
+                return cs_obj();  // ChirpStack DeviceService.Create 返回空对象 {}
             }
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
             $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
             $rows = WebApp::listDevices($appId, $tid);
-            return cs_list(array_map(fn($d) => $deviceRow($d, true), $rows), count($rows));
+            // ChirpStack List 参数：search（name/devEui 匹配）、deviceProfileId
+            $search = trim((string) ($get['search'] ?? ''));
+            if ($search !== '') {
+                $rows = array_values(array_filter($rows, fn($d) => stripos((string) ($d['name'] ?? ''), $search) !== false || stripos((string) ($d['dev_eui'] ?? ''), $search) !== false));
+            }
+            if (isset($get['deviceProfileId'])) {
+                $dpId = cs_uuidToInt((string) $get['deviceProfileId']);
+                $rows = array_values(array_filter($rows, fn($d) => (int) ($d['device_profile_id'] ?? 0) === $dpId));
+            }
+            $total = count($rows);
+            $lim = $limitOf('limit');
+            $off = $offsetOf('offset');
+            if ((int) ($get['limit'] ?? 50) === 0) {
+                // ChirpStack 语义：limit=0 → 只返回 totalCount
+                return cs_list([], $total);
+            }
+            $result = array_slice(array_values($rows), $off, $lim);
+            return cs_list(array_map(fn($d) => $deviceRow($d, true), $result), $total);
         case 'gateways':
+            if (isset($segs[1]) && isset($segs[2]) && $segs[2] !== '') {
+                // ChirpStack 网关子路由
+                $gwSeg = strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1]));
+                $subGw = (string) $segs[2];
+                if ($subGw === 'metrics' && $method === 'GET') {
+                    // 按小时聚合 24h 网关 RX/TX（ChirpStack GetGatewayMetrics 形状）
+                    $rows = Database::fetchAll(
+                        "SELECT received_at FROM uplinks WHERE gateway_id=? AND received_at>=? ORDER BY received_at ASC",
+                        [$gwSeg, time() - 86400]
+                    );
+                    $rx = [];
+                    foreach ($rows as $u) {
+                        $b = gmdate('Y-m-d\TH:00:00\Z', (int) $u['received_at']);
+                        $rx[$b] = ($rx[$b] ?? 0) + 1;
+                    }
+                    $mkMetric = static fn(array $b, string $n) => ['name' => $n, 'kind' => 'COUNTER', 'timestamps' => array_keys($b), 'datasets' => [['label' => $n, 'data' => array_values($b)]]];
+                    return [
+                        'rxPackets' => $mkMetric($rx, 'RX packets'),
+                        'rxPacketsPerDr' => $mkMetric([], 'RX packets / DR'),
+                        'rxPacketsPerFreq' => $mkMetric([], 'RX packets / frequency'),
+                        'txPackets' => $mkMetric([], 'TX packets'),
+                        'txPacketsPerDr' => $mkMetric([], 'TX packets / DR'),
+                        'txPacketsPerFreq' => $mkMetric([], 'TX packets / frequency'),
+                        'txPacketsPerStatus' => $mkMetric([], 'TX packets / status'),
+                    ];
+                }
+                if ($subGw === 'duty-cycle-metrics' && $method === 'GET') {
+                    // holastack 无 duty-cycle 统计：官方形状 + 空指标
+                    return [
+                        'maxLoadPercentage' => ['name' => 'Max load', 'kind' => 'GAUGE', 'timestamps' => [], 'datasets' => []],
+                        'windowPercentage' => ['name' => 'Window', 'kind' => 'GAUGE', 'timestamps' => [], 'datasets' => []],
+                    ];
+                }
+                if ($subGw === 'generate-certificate' && $method === 'POST') {
+                    // holastack 无网关 TLS 证书基础设施：官方形状 + 空证书
+                    return ['caCert' => '', 'tlsCert' => '', 'tlsKey' => '', 'expiresAt' => CS_ZERO_TS];
+                }
+            }
+            if (isset($segs[1]) && $segs[1] === 'relay-gateways') {
+                // relay-gateways：holastack 有 relay_gateways 表（name/relay_dev_eui/region）
+                if ($method === 'GET' && !isset($segs[2])) {
+                    $rgRows = Database::fetchAll("SELECT * FROM relay_gateways ORDER BY id DESC");
+                    $result = array_map(static function ($rg) {
+                        return [
+                            'relayId'       => substr(md5((string) $rg['relay_dev_eui']), 0, 8),
+                            'name'          => $rg['name'] ?? '',
+                            'description'   => '',
+                            'tenantId'      => cs_intToUuid((int) ($rg['tenant_id'] ?? 0)),
+                            'regionConfigId' => strtoupper($rg['region'] ?? ''),
+                            'state'         => 'NEVER_SEEN',
+                            'lastSeenAt'    => CS_ZERO_TS,
+                            'createdAt'     => cs_ts($rg['created_at'] ?? 0),
+                            'updatedAt'     => cs_ts($rg['created_at'] ?? 0),
+                        ];
+                    }, $rgRows);
+                    $off3 = $offsetOf('offset');
+                    $lim3 = $limitOf('limit');
+                    return cs_list(array_slice($result, $off3, $lim3), count($result));
+                }
+                if (isset($segs[3]) && $method === 'PUT') {
+                    return cs_unimplemented('relay gateway update is not supported');
+                }
+                if (isset($segs[2]) && $method === 'DELETE') {
+                    $relayId = strtolower((string) $segs[2]);
+                    Database::execute("DELETE FROM relay_gateways WHERE substr(md5(relay_dev_eui),1,8)=? OR relay_dev_eui=?", [$relayId, $relayId]);
+                    return [];
+                }
+            }
+            if (isset($segs[1]) && $method === 'GET' && !isset($segs[2])) {
+                // ChirpStack Get → {gateway:{...}}
+                $g = WebApp::getGateway(strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1])));
+                if (!$g) {
+                    return cs_notFound('gateway not found');
+                }
+                return ['gateway' => $gatewayRow($g, false)];
+            }
             if (isset($segs[1]) && $method === 'PUT') {
                 $r = WebApp::updateGateway(strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1])), $body);
                 if ($e = cs_wrapError($r)) { return $e; }
@@ -626,20 +1183,57 @@ function handleApi(string $method, string $path): array
                 if (isset($in['tenantId']) && !isset($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenantId']); }
                 $r = WebApp::createGateway($in);
                 if ($e = cs_wrapError($r)) { return $e; }
-                return ['gatewayId' => $r['gw_id'] ?? (string) ($in['gw_id'] ?? '')];  // ChirpStack 返回 {gatewayId}
+                return cs_obj();  // ChirpStack GatewayService.Create 返回空对象 {}
             }
             $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
             $rows = WebApp::listGateways($tid !== null ? (int) $tid : null);
-            return cs_list(array_map(fn($g) => $gatewayRow($g, true), $rows), count($rows));
+            // ChirpStack List：search（name/gatewayId 匹配）+ limit/offset
+            $search = trim((string) ($get['search'] ?? ''));
+            if ($search !== '') {
+                $rows = array_values(array_filter($rows, fn($g) => stripos((string) ($g['name'] ?? ''), $search) !== false || stripos((string) ($g['gw_id'] ?? ''), $search) !== false));
+            }
+            $total = count($rows);
+            if ((int) ($get['limit'] ?? 50) === 0) {
+                return cs_list([], $total);
+            }
+            $result = array_slice(array_values($rows), $offsetOf('offset'), $limitOf('limit'));
+            return cs_list(array_map(fn($g) => $gatewayRow($g, true), $result), $total);
         case 'device-profiles':
-            if (isset($segs[1]) && $segs[1] !== '') {
-                if ($segs[1] === 'adr-algorithms' && $method === 'GET') {
-                    $algos = [
-                        ['id' => cs_intToUuid(1), 'name' => 'Default ADR algorithm (LoRaWAN MAC)'],
-                        ['id' => cs_intToUuid(2), 'name' => 'Disable ADR'],
-                    ];
-                    return cs_list($algos, count($algos));
+            if (isset($segs[1]) && $segs[1] === 'adr-algorithms' && $method === 'GET') {
+                $algos = [
+                    ['id' => cs_intToUuid(1), 'name' => 'Default ADR algorithm (LoRaWAN MAC)'],
+                    ['id' => cs_intToUuid(2), 'name' => 'Disable ADR'],
+                ];
+                return cs_list($algos, count($algos));
+            }
+            if (isset($segs[1]) && $segs[1] === 'vendors' && $method === 'GET') {
+                // ListVendors：holastack 无 vendor 表 → 官方形状 + 空结果
+                return cs_list([], 0);
+            }
+            if (isset($segs[1]) && $segs[1] === 'devices' && $method === 'GET' && !isset($segs[2])) {
+                // ListDevices（vendor 目录）：官方形状 + 空结果
+                return cs_list([], 0);
+            }
+            if (isset($segs[1]) && $segs[1] === 'devices' && isset($segs[2]) && $method === 'GET') {
+                // GetDeviceProfileByDeviceId → {deviceProfile:{...}}
+                $dId = cs_uuidToInt((string) $segs[2]);
+                $d = WebApp::getDevice($dId);
+                if (!$d || (int) ($d['device_profile_id'] ?? 0) <= 0) {
+                    return cs_notFound('device profile not found');
                 }
+                $dp2 = WebApp::getDeviceProfile((int) $d['device_profile_id']);
+                if (!$dp2) {
+                    return cs_notFound('device profile not found');
+                }
+                // 复用下方 GET 单体分支：直接转发
+                $segs[1] = (string) $dp2['id'];
+                $segs[2] = null;
+            }
+            if (isset($segs[2]) && isset($segs[1]) && $method === 'GET' && !in_array($segs[1], ['adr-algorithms', 'vendors', 'devices'], true)) {
+                // GetByProfileId（vendorId/vendorProfileId 路径）：holastack 无 vendor 目录 → 404
+                return cs_notFound('device profile not found');
+            }
+            if (isset($segs[1]) && $segs[1] !== '') {
                 $id = cs_uuidToInt((string) $segs[1]);
                 if ($method === 'PUT' || $method === 'PATCH') {
                     $in = $body['deviceProfile'] ?? $body;
@@ -753,7 +1347,17 @@ function handleApi(string $method, string $path): array
                 ]);
                 $dpList[] = $item;
             }
-            return cs_list($dpList, count($dpList));
+            // ChirpStack List：search（name 匹配）+ limit/offset
+            $search = trim((string) ($get['search'] ?? ''));
+            if ($search !== '') {
+                $dpList = array_values(array_filter($dpList, fn($x) => stripos((string) ($x['name'] ?? ''), $search) !== false));
+            }
+            $total = count($dpList);
+            if ((int) ($get['limit'] ?? 50) === 0) {
+                return cs_list([], $total);
+            }
+            $dpList = array_slice(array_values($dpList), $offsetOf('offset'), $limitOf('limit'));
+            return cs_list($dpList, $total);
 
         case 'thing-models':
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
@@ -1209,6 +1813,21 @@ function handleApi(string $method, string $path): array
             exit;
 
         case 'users':
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'password' && $method === 'POST') {
+                // ChirpStack UpdatePassword：POST /api/users/{userId}/password body {password}
+                $target = cs_uuidToInt((string) $segs[1]);
+                $r = WebApp::changePassword($target, $body['password'] ?? $body['new_password'] ?? '');
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
+            }
+            if (($segs[1] ?? '') === 'password' && $method === 'POST') {
+                // holastack 扩展：POST /api/users/password {user_id?, new_password}
+                $cur = Auth::currentUser();
+                $target = (isset($body['user_id']) && $body['user_id'] !== '') ? (int) $body['user_id'] : (int) $cur['id'];
+                $r = WebApp::changePassword($target, $body['new_password'] ?? '');
+                if ($e = cs_wrapError($r)) { return $e; }
+                return [];
+            }
             if (isset($segs[1]) && $method === 'DELETE') {
                 $r = WebApp::deleteUser(cs_uuidToInt((string) $segs[1]));
                 if ($e = cs_wrapError($r)) { return $e; }
@@ -1216,13 +1835,6 @@ function handleApi(string $method, string $path): array
             }
             if (isset($segs[1]) && $method === 'PUT') {
                 $r = WebApp::updateUser(cs_uuidToInt((string) $segs[1]), $body);
-                if ($e = cs_wrapError($r)) { return $e; }
-                return [];
-            }
-            if (($segs[1] ?? '') === 'password' && $method === 'POST') {
-                $cur = Auth::currentUser();
-                $target = (isset($body['user_id']) && $body['user_id'] !== '') ? (int) $body['user_id'] : (int) $cur['id'];
-                $r = WebApp::changePassword($target, $body['new_password'] ?? '');
                 if ($e = cs_wrapError($r)) { return $e; }
                 return [];
             }
@@ -1267,7 +1879,11 @@ function handleApi(string $method, string $path): array
                     'numericId'      => (int) $u['id'],
                 ]);
             }, $users);
-            return cs_list($userRows, count($userRows));
+            $totalU = count($userRows);
+            if ((int) ($get['limit'] ?? 50) === 0) {
+                return cs_list([], $totalU);
+            }
+            return cs_list(array_slice($userRows, $offsetOf('offset'), $limitOf('limit')), $totalU);
         case 'api-keys':
             if (isset($segs[1]) && $method === 'DELETE') {
                 return WebApp::deleteApiKey((int) $segs[1]);
@@ -1312,23 +1928,50 @@ function handleApi(string $method, string $path): array
             }, $integrations);
             return cs_list($intRows, count($intRows));
         case 'multicast-groups':
-            if (isset($segs[1]) && ($segs[2] ?? '') === 'enqueue' && $method === 'POST') {
-                $in = $body['queueItem'] ?? $body['deviceQueueItem'] ?? $body;
-                $payload = (string) ($in['data'] ?? '');
-                if ($payload !== '' && !ctype_xdigit($payload)) {
-                    $bin = base64_decode($payload, true);
-                    if ($bin === false) {
-                        return cs_invalid('data must be Base64 or hex');
+            if (isset($segs[1]) && in_array($segs[2] ?? '', ['enqueue', 'queue'], true)) {
+                // ChirpStack: POST /queue（Enqueue）、GET /queue（List）、DELETE /queue（Flush）
+                // holastack 扩展别名：POST /enqueue
+                $mgId = cs_uuidToInt((string) $segs[1]);
+                $isEnqueueAlias = ($segs[2] === 'enqueue');
+                if ($isEnqueueAlias || $method === 'POST') {
+                    $in = $body['queueItem'] ?? $body['deviceQueueItem'] ?? $body;
+                    $payload = (string) ($in['data'] ?? '');
+                    if ($payload !== '' && !ctype_xdigit($payload)) {
+                        $bin = base64_decode($payload, true);
+                        if ($bin === false) {
+                            return cs_invalid('data must be Base64 or hex');
+                        }
+                        $payload = bin2hex($bin);
                     }
-                    $payload = bin2hex($bin);
+                    $r = WebApp::enqueueMulticast(
+                        $mgId,
+                        (int) ($in['fPort'] ?? $in['port'] ?? 0),
+                        $payload !== '' ? $payload : (string) ($in['payload'] ?? '')
+                    );
+                    if ($e = cs_wrapError($r)) { return $e; }
+                    // ChirpStack EnqueueMulticastGroupQueueItem 返回 {fCnt}
+                    return ['fCnt' => (int) ($r['f_cnt'] ?? 0)];
                 }
-                $r = WebApp::enqueueMulticast(
-                    cs_uuidToInt((string) $segs[1]),
-                    (int) ($in['fPort'] ?? $in['port'] ?? 0),
-                    $payload !== '' ? $payload : (string) ($in['payload'] ?? '')
-                );
-                if ($e = cs_wrapError($r)) { return $e; }
-                return ['id' => (string) ($r['id'] ?? '')];
+                if ($method === 'GET') {
+                    // ListMulticastGroupQueue → {items:[apiMulticastGroupQueueItem]}
+                    $mqRows = Database::fetchAll(
+                        "SELECT * FROM multicast_queue WHERE multicast_group_id=? ORDER BY id ASC",
+                        [$mgId]
+                    );
+                    $mqItems = array_map(static fn($m) => [
+                        'multicastGroupId' => cs_intToUuid((int) $m['multicast_group_id']),
+                        'fPort'            => (int) $m['f_port'],
+                        'fCnt'             => (int) ($m['f_cnt'] ?? 0),
+                        'data'             => base64_encode(hex2bin((string) $m['payload_hex']) ?: ''),
+                        'expiresAt'        => !empty($m['expires_at']) ? cs_ts($m['expires_at']) : CS_ZERO_TS,
+                    ], $mqRows);
+                    return ['items' => $mqItems];
+                }
+                if ($method === 'DELETE') {
+                    // FlushQueue
+                    Database::execute("DELETE FROM multicast_queue WHERE multicast_group_id=?", [$mgId]);
+                    return [];
+                }
             }
             if (isset($segs[1]) && $method === 'GET' && !isset($segs[2])) {
                 $g = WebApp::getMulticastGroup(cs_uuidToInt((string) $segs[1]));
@@ -1344,12 +1987,15 @@ function handleApi(string $method, string $path): array
                     return cs_list($rows, count($rows));
                 }
                 if ($method === 'POST') {
+                    // ChirpStack: POST {devEui}; 兼容 body {dev_eui}
                     $r = WebApp::addMulticastDevice(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['devEui'] ?? $body['dev_eui'] ?? '')));
                     if ($e = cs_wrapError($r)) { return $e; }
                     return [];
                 }
                 if ($method === 'DELETE') {
-                    $r = WebApp::removeMulticastDevice(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['devEui'] ?? $body['dev_eui'] ?? '')));
+                    // ChirpStack: DELETE /devices/{devEui}（路径段）；兼容 body {devEui}
+                    $devEuiDel = strtolower((string) ($segs[3] ?? $body['devEui'] ?? $body['dev_eui'] ?? ''));
+                    $r = WebApp::removeMulticastDevice(cs_uuidToInt((string) $segs[1]), $devEuiDel);
                     if ($e = cs_wrapError($r)) { return $e; }
                     return [];
                 }
@@ -1366,7 +2012,9 @@ function handleApi(string $method, string $path): array
                     return [];
                 }
                 if ($method === 'DELETE') {
-                    $r = WebApp::removeMulticastGateway(cs_uuidToInt((string) $segs[1]), strtolower((string) ($body['gatewayId'] ?? $body['gw_id'] ?? '')));
+                    // ChirpStack: DELETE /gateways/{gatewayId}（路径段）；兼容 body {gatewayId}
+                    $gwIdDel = strtolower((string) ($segs[3] ?? $body['gatewayId'] ?? $body['gw_id'] ?? ''));
+                    $r = WebApp::removeMulticastGateway(cs_uuidToInt((string) $segs[1]), $gwIdDel);
                     if ($e = cs_wrapError($r)) { return $e; }
                     return [];
                 }
@@ -1448,6 +2096,73 @@ function handleApi(string $method, string $path): array
             $camps = WebApp::listFuotaCampaigns();
             return cs_list($camps, count($camps));
         case 'tenants':
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'users') {
+                // ChirpStack TenantService users：GET 列表 / POST 添加（映射到 users 表 tenant_id）
+                $tid2 = cs_uuidToInt((string) $segs[1]);
+                if ($method === 'GET') {
+                    $tUsers = Database::fetchAll("SELECT * FROM users WHERE tenant_id=? ORDER BY id", [$tid2]);
+                    $tuRows = array_map(static fn($tu) => [
+                        'tenantId'       => cs_intToUuid($tid2),
+                        'userId'         => cs_intToUuid((int) $tu['id']),
+                        'email'          => $tu['email'] ?? '',
+                        'isAdmin'        => ($tu['role'] ?? '') === 'admin',
+                        'isDeviceAdmin'  => in_array($tu['role'] ?? '', ['admin', 'tenant'], true),
+                        'isGatewayAdmin' => in_array($tu['role'] ?? '', ['admin', 'tenant'], true),
+                        'createdAt'      => cs_ts($tu['created_at'] ?? 0),
+                        'updatedAt'      => cs_ts($tu['created_at'] ?? 0),
+                        'numericId'      => (int) $tu['id'],
+                    ], $tUsers);
+                    $offT = $offsetOf('offset');
+                    $limT = $limitOf('limit');
+                    return cs_list(array_slice($tuRows, $offT, $limT), count($tuRows));
+                }
+                if ($method === 'POST') {
+                    $tu = $body['tenantUser'] ?? $body;
+                    $email = (string) ($tu['email'] ?? '');
+                    if ($email === '') {
+                        return cs_invalid('email required');
+                    }
+                    $existing = Database::fetch("SELECT id FROM users WHERE email=?", [$email]);
+                    if ($existing) {
+                        Database::execute("UPDATE users SET tenant_id=? WHERE id=?", [$tid2, (int) $existing['id']]);
+                        return [];
+                    }
+                    return cs_notFound('user with given email does not exist');
+                }
+                if (isset($segs[3]) && ($method === 'PUT' || $method === 'DELETE')) {
+                    $uid2 = cs_uuidToInt((string) $segs[3]);
+                    if ($method === 'DELETE') {
+                        Database::execute("UPDATE users SET tenant_id=0 WHERE id=? AND tenant_id=?", [$uid2, $tid2]);
+                        return [];
+                    }
+                    $tu = $body['tenantUser'] ?? $body;
+                    $role = !empty($tu['isAdmin']) ? 'admin' : (!empty($tu['isDeviceAdmin']) ? 'tenant' : 'operator');
+                    Database::execute("UPDATE users SET role=?, tenant_id=? WHERE id=?", [$role, $tid2, $uid2]);
+                    return [];
+                }
+            }
+            if (isset($segs[1]) && $segs[1] === 'by-devaddr-prefix-overlap' && $method === 'GET') {
+                // ChirpStack devAddr 前缀重叠检查：holastack 无租户级前缀隔离 → 空结果（无重叠）
+                return cs_list([], 0);
+            }
+            if (isset($segs[1]) && $method === 'GET') {
+                // ChirpStack Get → {tenant:{...}}
+                $t = Database::fetch("SELECT * FROM tenants WHERE id=?", [cs_uuidToInt((string) $segs[1])]);
+                if (!$t) {
+                    return cs_notFound('tenant not found');
+                }
+                return ['tenant' => array_merge(cs_rowBase($t), [
+                    'name'                => $t['name'] ?? '',
+                    'description'         => $t['description'] ?? '',
+                    'canHaveGateways'     => (int) ($t['private_gateways_unlimited'] ?? 0) > 0,
+                    'privateGatewaysUp'   => false,
+                    'privateGatewaysDown' => false,
+                    'maxDeviceCount'      => 0,
+                    'maxGatewayCount'     => (int) ($t['private_gateways_limit'] ?? 0),
+                    'tags'                => cs_obj(),
+                    'numericId'           => (int) $t['id'],
+                ])];
+            }
             if (isset($segs[1]) && $method === 'PUT') {
                 $r = WebApp::updateTenant(cs_uuidToInt((string) $segs[1]), $body);
                 if ($e = cs_wrapError($r)) { return $e; }
@@ -1459,11 +2174,18 @@ function handleApi(string $method, string $path): array
                 return [];
             }
             if ($method === 'POST') {
-                $r = WebApp::createTenant($body);
+                $in = $body['tenant'] ?? $body;
+                if (isset($in['name'])) { $in['name'] = $in['name']; }
+                $r = WebApp::createTenant($in);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return ['id' => cs_intToUuid((int) $r['id'])];
             }
             $tenants = WebApp::listTenants();
+            // ChirpStack List：search + limit/offset
+            $search = trim((string) ($get['search'] ?? ''));
+            if ($search !== '') {
+                $tenants = array_values(array_filter($tenants, fn($t) => stripos((string) ($t['name'] ?? ''), $search) !== false));
+            }
             $tenantRows = array_map(static function ($t) {
                 return array_merge(cs_rowBase($t), [
                     'name'                => $t['name'] ?? '',
@@ -1478,7 +2200,85 @@ function handleApi(string $method, string $path): array
                     'numericId'           => (int) $t['id'],
                 ]);
             }, $tenants);
-            return cs_list($tenantRows, count($tenantRows));
+            $totalT = count($tenantRows);
+            if ((int) ($get['limit'] ?? 50) === 0) {
+                return cs_list([], $totalT);
+            }
+            return cs_list(array_slice($tenantRows, $offsetOf('offset'), $limitOf('limit')), $totalT);
+        case 'device-profile-templates':
+            // ChirpStack DeviceProfileTemplateService：holastack 无模板存储 → 返回空列表 / 单体 404
+            if ($method === 'GET' && !isset($segs[1])) {
+                return cs_list([], 0);
+            }
+            if ($method === 'POST') {
+                return cs_unimplemented('device-profile templates are not persisted in this server');
+            }
+            if (isset($segs[1])) {
+                if ($method === 'GET') {
+                    return cs_notFound('device-profile template not found');
+                }
+                if ($method === 'PUT') {
+                    return cs_unimplemented('device-profile templates are not persisted in this server');
+                }
+                if ($method === 'DELETE') {
+                    return cs_notFound('device-profile template not found');
+                }
+            }
+            return cs_invalid('method not allowed');
+        case 'relays':
+            // ChirpStack RelayService：映射 relay_devices / relay_gateways
+            if (isset($segs[1]) && ($segs[2] ?? '') === 'devices') {
+                $relayEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1]));
+                if ($method === 'GET') {
+                    $rdRows = Database::fetchAll(
+                        "SELECT rd.*, d.name AS dev_name FROM relay_devices rd LEFT JOIN devices d ON d.dev_eui=rd.dev_eui WHERE rd.relay_gateway_id IN (SELECT id FROM relay_gateways WHERE relay_dev_eui=?) ORDER BY rd.id",
+                        [$relayEui]
+                    );
+                    $rdList = array_map(static fn($rd) => [
+                        'devEui'    => $rd['dev_eui'] ?? '',
+                        'name'      => $rd['dev_name'] ?? ($rd['dev_eui'] ?? ''),
+                        'createdAt' => cs_ts($rd['created_at'] ?? 0),
+                    ], $rdRows);
+                    $offR = $offsetOf('offset');
+                    $limR = $limitOf('limit');
+                    return cs_list(array_slice($rdList, $offR, $limR), count($rdList));
+                }
+                if ($method === 'POST') {
+                    $in = $body['deviceDevEui'] ?? $body['devEui'] ?? '';
+                    $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $in));
+                    $gw = Database::fetch("SELECT id FROM relay_gateways WHERE relay_dev_eui=?", [$relayEui]);
+                    if (!$gw) {
+                        return cs_notFound('relay gateway not found');
+                    }
+                    if (strlen($devEui) !== 16) {
+                        return cs_invalid('deviceDevEui must be a 16-hex EUI64');
+                    }
+                    $exists = Database::fetch(
+                        "SELECT id FROM relay_devices WHERE relay_gateway_id=? AND dev_eui=?",
+                        [(int) $gw['id'], $devEui]
+                    );
+                    if ($exists) {
+                        http_response_code(409);
+                        return cs_err(6, 'already_exists', 'device already added to relay');
+                    }
+                    Database::execute(
+                        "INSERT INTO relay_devices (relay_gateway_id, dev_eui, created_at) VALUES (?,?,?)",
+                        [(int) $gw['id'], $devEui, time()]
+                    );
+                    return [];
+                }
+            }
+            if ($method === 'GET') {
+                // List relays = relay 网关设备列表
+                $relRows = Database::fetchAll(
+                    "SELECT d.dev_eui, d.name FROM devices d WHERE d.relay_state='relay' OR d.dev_eui IN (SELECT relay_dev_eui FROM relay_gateways) ORDER BY d.id DESC"
+                );
+                $relList = array_map(static fn($r) => ['devEui' => $r['dev_eui'] ?? '', 'name' => $r['name'] ?? ''], $relRows);
+                $offR2 = $offsetOf('offset');
+                $limR2 = $limitOf('limit');
+                return cs_list(array_slice($relList, $offR2, $limR2), count($relList));
+            }
+            return cs_invalid('method not allowed');
         case 'api-logs':
             
 
@@ -1519,8 +2319,8 @@ function handleApi(string $method, string $path): array
             }, $out['rows'] ?? []);
             return cs_list($logRows, (int) ($out['total'] ?? count($logRows)));
         default:
-            http_response_code(404);
-            return cs_err(12, 'unimplemented', 'unknown endpoint: /api/' . $resource);
+            http_response_code(501);
+            return cs_unimplemented('unknown endpoint: /api/' . $resource);
     }
 }
 

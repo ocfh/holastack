@@ -30,7 +30,9 @@ class NetworkServer
     private $gateways = [];   
 
     private $running = true;
-    private $lastDlCheck = 0; 
+    private $lastDlCheck = 0;
+    /** @var array<string,int> runSafe 告警节流：任务名 => 上次告警时间戳 */
+    private $schedWarnAt = [];
 
     private $joinBuf = [];    
 
@@ -216,6 +218,12 @@ class NetworkServer
         try {
             $fn();
         } catch (\Throwable $e) {
+            // 节流：同一任务 60 秒内只告警一次，防止 DB 宕机时每秒 7 条刷爆日志/磁盘
+            $now = time();
+            if (($this->schedWarnAt[$name] ?? 0) + 60 > $now) {
+                return;
+            }
+            $this->schedWarnAt[$name] = $now;
             $this->log("SCHED WARN $name 异常（已隔离，不影响其他调度）: " . $e->getMessage());
         }
     }

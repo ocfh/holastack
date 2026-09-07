@@ -197,7 +197,6 @@ const NAV_GROUPS = [
     {v:'alerts', perm:'alerts', text:'告警管理', icon:'bellAlert'},
     {v:'scheduled', perm:'scheduled', text:'定时任务', icon:'clock'},
     {v:'automations', perm:'automations', text:'联动模型', icon:'bolt'},
-    {v:'notification-groups', perm:'notification-groups', text:'通知组', icon:'bell'},
   ]},
   { label:'工具集成', icon:'puzzlePiece', items:[
     {v:'integrations', perm:'integrations', text:'外部集成', icon:'puzzlePiece'},
@@ -602,7 +601,7 @@ async function nav(v, silent=false){
     else if (v==='alerts') await viewAlerts();
     else if (v==='scheduled') await viewScheduledTasks();
     else if (v==='automations') await viewAutomations();
-    else if (v==='notification-groups') await viewNotificationGroups();
+    else if (v==='notification-groups') { __alert.tab='groups'; await viewAlerts(); }
     else if (v==='roles') await viewRoles();
     else if (v==='departments') await viewDepartments();
     else if (v==='settings') await viewSettings();

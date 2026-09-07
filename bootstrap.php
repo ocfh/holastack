@@ -27,4 +27,5 @@ if (!is_dir(ELW_LOG_DIR)) {
 
 
 
+require_once __DIR__ . '/src/mbpolyfill.php';   // mbstring 未加载时的兜底（须在任何使用 mb_* 的代码前）
 require_once __DIR__ . '/src/langHelpers.php';

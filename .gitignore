@@ -1,0 +1,10 @@
+/runtime/
+/vendor/
+*.zip
+*.log
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+config/local.php
+config/local*.php
