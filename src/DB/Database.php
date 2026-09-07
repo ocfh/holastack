@@ -267,6 +267,10 @@ class Database
                 
 
                 ['tenants', 'private_gateways_unlimited', 'INTEGER NOT NULL DEFAULT 0'],
+
+                ['roles', 'devices_limit', 'INTEGER NOT NULL DEFAULT 0'],
+                ['roles', 'gateways_limit', 'INTEGER NOT NULL DEFAULT 0'],
+                ['roles', 'gateways_unlimited', 'INTEGER NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
@@ -464,6 +468,10 @@ class Database
                 
 
                 ['tenants', 'private_gateways_unlimited', 'TINYINT NOT NULL DEFAULT 0'],
+
+                ['roles', 'devices_limit', 'INT NOT NULL DEFAULT 0'],
+                ['roles', 'gateways_limit', 'INT NOT NULL DEFAULT 0'],
+                ['roles', 'gateways_unlimited', 'TINYINT NOT NULL DEFAULT 0'],
             ] as [$tbl, $col, $def]) {
                 if (!self::mysqlColumnExists($tbl, $col)) {
                     $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");
@@ -477,16 +485,30 @@ class Database
     }
 
     /**
-     * 系统三档角色（admin/tenant/operator）继续由 users.role 字段控制，不再写入 roles 表。
-     * 同时清理早期版本种入的系统角色，避免「角色管理」与原有角色体系重复/冲突。
+     * 内置角色：admin（全权限）与 operator（只读集），写入 roles 表（is_system=1）。
+     * 已存在则按需补齐缺失列；自定义角色不受影响。
      */
     public static function seedSystemRoles(): void
     {
-        $ids = self::pdo()->query('SELECT id FROM roles WHERE is_system=1')->fetchAll(\PDO::FETCH_COLUMN);
-        if ($ids) {
-            $in = implode(',', array_map('intval', $ids));
-            self::pdo()->prepare("UPDATE users SET role_id=0 WHERE role_id IN ($in)")->execute();
-            self::pdo()->prepare('DELETE FROM roles WHERE is_system=1')->execute();
+        $admin = json_encode(array_keys(\holastack\Auth\Auth::PERMISSION_CATALOG), JSON_UNESCAPED_UNICODE);
+        $operator = json_encode(array_values(\holastack\Auth\Auth::OPERATOR_PERMS), JSON_UNESCAPED_UNICODE);
+        $seeds = [
+            ['admin', '内置管理员：全部权限（不可编辑/删除）', $admin, 1],
+            ['operator', '内置操作员：只读监控权限（不可编辑/删除）', $operator, 1],
+        ];
+        foreach ($seeds as [$name, $desc, $perms, $unlimited]) {
+            $row = self::fetch("SELECT id FROM roles WHERE is_system=1 AND name=?", [$name]);
+            if ($row) {
+                self::execute(
+                    "UPDATE roles SET permissions=?, gateways_unlimited=1, devices_limit=0, gateways_limit=0 WHERE id=?",
+                    [$perms, $row['id']]
+                );
+            } else {
+                self::execute(
+                    "INSERT INTO roles (tenant_id, name, description, permissions, is_system, gateways_unlimited, devices_limit, gateways_limit, created_at) VALUES (0,?,?,?,?,1,0,0,?)",
+                    [$name, $desc, $perms, 1, time()]
+                );
+            }
         }
     }
 }

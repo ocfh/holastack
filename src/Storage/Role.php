@@ -10,18 +10,21 @@ use holastack\Auth\Auth;
  */
 class Role
 {
+    /** 配额字段白名单（随角色持久化，0=不限/未配置）。 */
+    public const QUOTA_FIELDS = ['devices_limit', 'gateways_limit', 'gateways_unlimited'];
+
     public static function list(?int $tenantId = null): array
     {
         if ($tenantId !== null) {
             return Database::fetchAll(
                 "SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id=r.id) AS user_count
-                 FROM roles r WHERE r.is_system=0 AND r.tenant_id IN (0,?) ORDER BY r.id ASC",
+                 FROM roles r WHERE (r.is_system=1 OR (r.is_system=0 AND r.tenant_id IN (0,?))) ORDER BY r.is_system DESC, r.id ASC",
                 [$tenantId]
             );
         }
         return Database::fetchAll(
             "SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id=r.id) AS user_count
-             FROM roles r WHERE r.is_system=0 ORDER BY r.id ASC"
+             FROM roles r WHERE r.is_system IN (0,1) ORDER BY r.is_system DESC, r.id ASC"
         );
     }
 
@@ -36,9 +39,10 @@ class Role
         if (isset($norm['error'])) {
             return $norm;
         }
+        $q = self::quotaValues($p);
         Database::execute(
-            "INSERT INTO roles (tenant_id, name, description, permissions, is_system, created_at) VALUES (?,?,?,?,0,?)",
-            [$norm['tenant_id'], $norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), time()]
+            "INSERT INTO roles (tenant_id, name, description, permissions, is_system, devices_limit, gateways_limit, gateways_unlimited, created_at) VALUES (?,?,?,?,0,?,?,?,?)",
+            [$norm['tenant_id'], $norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $q['devices_limit'], $q['gateways_limit'], $q['gateways_unlimited'], time()]
         );
         return ['id' => Database::lastInsertId()];
     }
@@ -57,9 +61,10 @@ class Role
         if (isset($norm['error'])) {
             return $norm;
         }
+        $q = self::quotaValues(array_merge($m, $p));
         Database::execute(
-            "UPDATE roles SET name=?, description=?, permissions=?, tenant_id=? WHERE id=?",
-            [$norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $norm['tenant_id'], $id]
+            "UPDATE roles SET name=?, description=?, permissions=?, tenant_id=?, devices_limit=?, gateways_limit=?, gateways_unlimited=? WHERE id=?",
+            [$norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $norm['tenant_id'], $q['devices_limit'], $q['gateways_limit'], $q['gateways_unlimited'], $id]
         );
         return ['id' => $id];
     }
@@ -102,6 +107,21 @@ class Role
             'description' => mb_substr((string) ($p['description'] ?? ''), 0, 255),
             'permissions' => $perm,
             'tenant_id'   => (int) ($p['tenant_id'] ?? 0),
+        ];
+    }
+
+    /** 从请求参数提取配额三项（缺省沿用旧值语义：0/0/0）。 */
+    private static function quotaValues(array $p): array
+    {
+        $unlimited = !empty($p['gateways_unlimited']) ? 1 : 0;
+        $gw = max(0, (int) ($p['gateways_limit'] ?? 0));
+        if ($unlimited) {
+            $gw = 0;
+        }
+        return [
+            'devices_limit'      => max(0, (int) ($p['devices_limit'] ?? 0)),
+            'gateways_limit'     => $gw,
+            'gateways_unlimited' => $unlimited,
         ];
     }
 }

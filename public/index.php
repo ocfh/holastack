@@ -1566,6 +1566,14 @@ function handleApi(string $method, string $path): array|\stdClass
             }
             $rolesRaw = WebApp::listRoles();
             $roles = $rolesRaw['data'] ?? $rolesRaw;
+            foreach ($roles as &$rr) {
+                $rr['devicesLimit'] = (int) ($rr['devices_limit'] ?? 0);
+                $rr['gatewaysLimit'] = (int) ($rr['gateways_limit'] ?? 0);
+                $rr['gatewaysUnlimited'] = (int) ($rr['gateways_unlimited'] ?? 0) === 1 ? true : false;
+                $rr['isSystem'] = (int) ($rr['is_system'] ?? 0) === 1 ? true : false;
+                $rr['userCount'] = (int) ($rr['user_count'] ?? 0);
+            }
+            unset($rr);
             $out = cs_list($roles, count($roles));
             if (isset($rolesRaw['catalog'])) { $out['catalog'] = $rolesRaw['catalog']; }
             return $out;
@@ -1846,6 +1854,26 @@ function handleApi(string $method, string $path): array|\stdClass
                     return cs_invalid('invalid role');
                 }
                 try {
+                    // 创建同名角色：勾选 create_role_same_name 时，以用户名自动创建/复用同名自定义角色（默认只读权限集）
+                    $sameRoleId = 0;
+                    if (!empty($body['create_role_same_name'])) {
+                        $rname = trim((string) $body['username']);
+                        if ($rname !== '') {
+                            $existing = Database::fetch("SELECT id FROM roles WHERE name=? AND is_system=0", [$rname]);
+                            if ($existing) {
+                                $sameRoleId = (int) $existing['id'];
+                            } else {
+                                $cr = WebApp::createRole([
+                                    'name'        => $rname,
+                                    'description' => '随用户「' . $rname . '」创建的同名角色',
+                                    'permissions' => Auth::OPERATOR_PERMS,
+                                    'tenant_id'   => (int) ($body['tenant_id'] ?? 0),
+                                ]);
+                                $sameRoleId = (int) ($cr['id'] ?? 0);
+                            }
+                        }
+                    }
+                    $roleId = (int) ($body['role_id'] ?? 0) ?: $sameRoleId;
                     $id = Auth::createUser(
                         $body['username'],
                         $body['password'],
@@ -1853,7 +1881,7 @@ function handleApi(string $method, string $path): array|\stdClass
                         (int) ($body['tenant_id'] ?? 0),
                         $body['new_tenant_name'] ?? null,
                         $body['email'] ?? null,
-                        (int) ($body['role_id'] ?? 0),
+                        $roleId,
                         (int) ($body['department_id'] ?? 0)
                     );
                 } catch (\InvalidArgumentException $e) {

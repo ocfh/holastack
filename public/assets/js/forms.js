@@ -219,6 +219,8 @@ async function newUser(){
       <select id="m_tenant"><option value="" disabled selected>— ${t('选择用户配置')} —</option>${tenants}</select>
     </div>
     <label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select>
+    <label class="check" style="margin:8px 0 0"><input type="checkbox" id="m_create_role" onchange="sameRoleToggle()"><span>${t('创建同名角色')}</span></label>
+    <div class="muted" style="font-size:11px;margin-top:4px" id="m_create_role_hint">${t('勾选后保存时自动以用户名创建同名自定义角色（已存在则复用），默认只读权限集，可稍后在角色管理中调整。')}</div>
     <label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`);
   roleTenantToggle();
@@ -227,9 +229,20 @@ function roleTenantToggle(){
   const box = document.getElementById('m_tenant_box');
   if (box) box.classList.toggle('hidden', (document.getElementById('m_role')||{}).value !== 'tenant');
 }
+function sameRoleToggle(){
+  const cb = document.getElementById('m_create_role');
+  const hint = document.getElementById('m_create_role_hint');
+  const sel = document.getElementById('m_role_custom');
+  if (!cb) return;
+  if (hint) hint.style.opacity = cb.checked ? '1' : '0.6';
+  if (sel && cb.checked) sel.value = '0';
+}
 async function saveUser(){
   const role = v('m_role');
   const body = {username:v('m_user'), password:v('m_pass'), role, email:v('m_email'), role_id: +v('m_role_custom')||0, department_id: +v('m_dept')||0};
+  if (document.getElementById('m_create_role') && document.getElementById('m_create_role').checked) {
+    body.create_role_same_name = 1;
+  }
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;

@@ -80,6 +80,81 @@ class WebApp
         return $s['tenant_id'];
     }
 
+    /**
+     * 资源配额解析：优先取该租户下用户所绑定角色的配额（gateways_unlimited/gateways_limit/devices_limit），
+     * 角色未配置（全 0）时回退到租户（用户配置）自身的 private_gateways_* 旧逻辑。
+     * 返回 ['gateways_unlimited'=>bool, 'gateways_limit'=>int, 'devices_limit'=>int, 'source'=>'role'|'tenant'|'none']
+     */
+    public static function quotaForTenant(int $tenantId): array
+    {
+        if ($tenantId > 0) {
+            $roleRow = Database::fetch(
+                "SELECT r.devices_limit, r.gateways_limit, r.gateways_unlimited
+                 FROM users u JOIN roles r ON r.id=u.role_id
+                 WHERE u.tenant_id=? AND u.role_id>0 ORDER BY u.id ASC LIMIT 1",
+                [$tenantId]
+            );
+            if ($roleRow && ((int) $roleRow['gateways_unlimited'] === 1 || (int) $roleRow['gateways_limit'] > 0 || (int) $roleRow['devices_limit'] > 0)) {
+                return [
+                    'gateways_unlimited' => (int) $roleRow['gateways_unlimited'] === 1,
+                    'gateways_limit'     => max(0, (int) $roleRow['gateways_limit']),
+                    'devices_limit'      => max(0, (int) $roleRow['devices_limit']),
+                    'source'             => 'role',
+                ];
+            }
+            $t = Tenant::get($tenantId);
+            if ($t) {
+                return [
+                    'gateways_unlimited' => (int) ($t['private_gateways_unlimited'] ?? 0) === 1,
+                    'gateways_limit'     => max(0, (int) ($t['private_gateways_limit'] ?? 0)),
+                    'devices_limit'      => 0,
+                    'source'             => 'tenant',
+                ];
+            }
+        }
+        return ['gateways_unlimited' => false, 'gateways_limit' => 0, 'devices_limit' => 0, 'source' => 'none'];
+    }
+
+    /** 校验租户网关配额（角色优先），超限返回错误信息，否则 null。 */
+    private static function checkGatewayQuota(int $tenantId): ?string
+    {
+        $q = self::quotaForTenant($tenantId);
+        if ($q['gateways_unlimited']) {
+            return null;
+        }
+        $limit = $q['gateways_limit'];
+        if ($limit <= 0) {
+            return null;
+        }
+        $count = (int) Database::fetch(
+            "SELECT COUNT(*) AS c FROM gateways WHERE tenant_id=?",
+            [$tenantId]
+        )['c'];
+        if ($count >= $limit) {
+            return $q['source'] === 'role'
+                ? '该角色的私有网关数量已达上限（' . $limit . '），请先在「角色管理」中调整或开启无限制'
+                : '该用户配置的私有网关数量已达上限（' . $limit . '），请先在「用户配置」中调整上限或开启无限制';
+        }
+        return null;
+    }
+
+    /** 校验租户设备配额（仅来自角色配置，租户旧字段不控设备），超限返回错误信息，否则 null。 */
+    private static function checkDeviceQuota(int $tenantId): ?string
+    {
+        $q = self::quotaForTenant($tenantId);
+        if ($q['devices_limit'] <= 0) {
+            return null;
+        }
+        $count = (int) Database::fetch(
+            "SELECT COUNT(*) AS c FROM devices WHERE tenant_id=?",
+            [$tenantId]
+        )['c'];
+        if ($count >= $q['devices_limit']) {
+            return '该角色的设备数量已达上限（' . $q['devices_limit'] . '），请先在「角色管理」中调整设备上限';
+        }
+        return null;
+    }
+
     private static function appInScope(int $appId): bool
     {
         $appIds = self::visibleAppIds();
@@ -466,6 +541,10 @@ class WebApp
         $tid = (int) ($app['tenant_id'] ?? 0);
         if ($tid <= 0) {
             $tid = self::createTenantId($p);
+        }
+        $devQuotaErr = $tid > 0 ? self::checkDeviceQuota($tid) : null;
+        if ($devQuotaErr !== null) {
+            return ['error' => $devQuotaErr];
         }
         if (Database::fetch("SELECT id FROM devices WHERE app_id=? AND name=?", [$appId, $p['name']])) {
             return ['error' => '该应用下设备名称已存在'];
@@ -1051,10 +1130,14 @@ class WebApp
         
 
         $t = $tid > 0 ? Tenant::get($tid) : null;
+        $quotaErr = $tid > 0 ? self::checkGatewayQuota($tid) : null;
+        if ($quotaErr !== null) {
+            return ['error' => $quotaErr];
+        }
         if ($t) {
             $unlimited = (int) ($t['private_gateways_unlimited'] ?? 0) === 1;
             $limit = max(0, (int) ($t['private_gateways_limit'] ?? 0));
-            if (!$unlimited) {
+            if (!$unlimited && $limit > 0 && self::quotaForTenant($tid)['source'] === 'tenant') {
                 $count = (int) Database::fetch(
                     "SELECT COUNT(*) AS c FROM gateways WHERE tenant_id=?",
                     [$tid]

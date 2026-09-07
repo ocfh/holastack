@@ -206,7 +206,6 @@ const NAV_GROUPS = [
     {v:'loracalc', perm:'loracalc', text:'LoRa 计算器', icon:'calculator'},
   ]},
   { label:'系统管理', admin:true, icon:'cog6Tooth', items:[
-    {v:'tenants', perm:'tenants', text:'用户配置', icon:'users'},
     {v:'users', perm:'users', text:'用户管理', icon:'user'},
     {v:'roles', perm:'roles', text:'角色管理', icon:'shieldCheck'},
     {v:'departments', perm:'departments', text:'部门管理', icon:'buildingOffice'},
@@ -585,7 +584,7 @@ async function nav(v, silent=false){
     else if (v==='downlinks') await viewDownlinks();
     else if (v==='events') await viewEvents();
     else if (v==='device-profiles') await viewDeviceProfiles();
-    else if (v==='tenants') await viewTenants();
+    else if (v==='tenants') await viewRoles();
     else if (v==='integrations') await viewIntegrations();
     else if (v==='api-keys') await viewApiKeys();
     else if (v==='multicast-groups') await viewMulticastGroups();

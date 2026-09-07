@@ -3495,27 +3495,50 @@ async function autoDel(id){
   toast(t('已删除'),'ok'); autoReload();
 }
 
-/* ================= 角色管理 (P5) ================= */
+/* ================= 角色管理（含资源配额，原「用户配置」已合并至此） ================= */
 async function viewRoles(){
   const r = await api('GET','/api/roles'); const roles=r.data||[]; const catalog=r.catalog||{};
   __rbc.catalog = catalog; __rbc.roles = roles;
   const rows = roles.map(row=>{
-    const tags = row.is_system ? `<span class="chip muted">${t('内置')}</span>` : `<span class="chip">${t('自定义')}</span>`;
+    const isSys = row.is_system || row.isSystem;
+    const tags = isSys ? `<span class="chip muted">${t('内置')}</span>` : `<span class="chip">${t('自定义')}</span>`;
     const permChips = Array.isArray(row.permissions) ? row.permissions.map(p=>`<span class="chip">${esc(catalog[p]||p)}</span>`).join('') : '';
-    const actions = row.is_system
-      ? '' 
+    const gwUnl = row.gateways_unlimited || row.gatewaysUnlimited;
+    const gwTxt = gwUnl ? t('无限制') : ((+row.gateways_limit||+row.gatewaysLimit||0) ? `${t('上限')} ${row.gateways_limit||row.gatewaysLimit}` : t('未配置'));
+    const devTxt = (+row.devices_limit||+row.devicesLimit||0) ? `${t('上限')} ${row.devices_limit||row.devicesLimit}` : t('未配置');
+    const actions = isSys
+      ? ''
       : `<button class="btn ghost" onclick="roleEdit(${row.id})">${ICON.pencilSquare}${t('编辑')}</button> <button class="btn danger" onclick="roleDel(${row.id})">${ICON.trash}${t('删除')}</button>`;
-    return `<tr><td>${esc(row.name)}${tags}</td><td class="muted">${esc(row.description||'')}</td><td>${permChips}</td><td class="muted">${row.user_count||0}</td><td>${adminBtn(actions)}</td></tr>`;
-  }).join('')||`<tr><td colspan="5" class="muted">${t('暂无角色')}</td></tr>`;
+    return `<tr><td>${esc(row.name)}${tags}</td><td class="muted">${esc(row.description||'')}</td><td>${permChips}</td><td class="muted">${devTxt}</td><td class="muted">${gwTxt}</td><td class="muted">${row.user_count||row.userCount||0}</td><td>${adminBtn(actions)}</td></tr>`;
+  }).join('')||`<tr><td colspan="7" class="muted">${t('暂无角色')}</td></tr>`;
   document.getElementById('view').innerHTML = `
     <div class="view-head"><h2>${ICON.shieldCheck||''}${t('角色管理')}</h2>${adminBtn(`<button onclick="roleNew()">${ICON.plus}${t('新建角色')}</button>`)}</div>
-    <div class="card" style="padding:4px 0"><table><thead><tr><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('权限')}</th><th>${t('用户数')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="muted" style="font-size:12px;margin-top:8px">${t('角色提示')}</div>`;
+    <div class="card" style="padding:4px 0"><table><thead><tr><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('权限')}</th><th>${t('设备上限')}</th><th>${t('私有网关上限')}</th><th>${t('用户数')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">${t('角色配额提示')}</div>`;
 }
-function roleNew(){ roleModal({id:0,name:'',description:'',permissions:['dashboard','devices','alerts','uplinks','downlinks']}); }
-function roleEdit(id){ const x=__rbc.roles.find(r=>r.id===id); if(!x) return; roleModal(x); }
+function roleNew(){
+  const defPerms = Object.keys(__rbc.catalog||{}).filter(k=>['dashboard','devices','alerts','uplinks','downlinks'].indexOf(k)!==-1);
+  roleModal({id:0,name:'',description:'',permissions:defPerms,devices_limit:0,gateways_limit:0,gateways_unlimited:0});
+}
+function roleEdit(id){ const x=__rbc.roles.find(r=>+r.id===+id); if(!x) return; roleModal(x); }
+function rlPermAll(){
+  document.querySelectorAll('.rl_perm').forEach(c=>{ c.checked=true; });
+}
+function rlPermNone(){
+  document.querySelectorAll('.rl_perm').forEach(c=>{ c.checked=false; });
+}
+function rlPermInv(){
+  document.querySelectorAll('.rl_perm').forEach(c=>{ c.checked=!c.checked; });
+}
+function rlGwToggle(){
+  const cb = document.getElementById('rl_gw_unlimited');
+  if (!cb) return;
+  const div = document.getElementById('rl_gw_limit_div');
+  if (div) div.style.display = cb.checked ? 'none' : '';
+}
 function roleModal(x){
   const isNew = !x.id;
+  const isSys = x.is_system || x.isSystem;
   const cats = __rbc.catalog||{};
   const groups = [
     ['运行监控', ['dashboard','uplinks','downlinks','events','noc','map']],
@@ -3529,21 +3552,48 @@ function roleModal(x){
       <div class="muted" style="font-weight:600;font-size:12px;margin-bottom:4px">${t(glabel)}</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${ks.map(k=>`<label style="margin:0;display:flex;align-items:center;gap:4px;font-weight:400"><input type="checkbox" class="rl_perm" value="${k}" ${has(k)?'checked':''}>${esc(cats[k]||k)}</label>`).join('')}</div>
     </div>`).join('');
+  const gwUnl = (x.gateways_unlimited ?? (x.gatewaysUnlimited ? 1 : 0)) ? true : false;
+  const readOnlyNote = isSys ? `<div class="muted" style="font-size:12px">${t('内置角色不可编辑/删除，仅可查看')}</div>` : '';
   openModal(`<h3>${isNew?t('新建角色'):t('编辑角色')}</h3>
     <div style="display:flex;flex-direction:column;gap:10px">
-      <div><label>${t('角色名称')}</label><input id="rl_name" value="${esc(x.name||'')}"></div>
-      <div><label>${t('描述')}</label><input id="rl_desc" value="${esc(x.description||'')}"></div>
-      <div><label>${t('权限')}</label>${boxes}</div>
+      <div><label>${t('角色名称')}</label><input id="rl_name" value="${esc(x.name||'')}" ${isSys?'disabled':''}></div>
+      <div><label>${t('描述')}</label><input id="rl_desc" value="${esc(x.description||'')}" ${isSys?'disabled':''}></div>
+      <div><label>${t('权限')}</label>
+        ${readOnlyNote}
+        <div style="display:flex;gap:8px;margin:6px 0">
+          <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="rlPermAll()">${t('全选')}</button>
+          <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="rlPermNone()">${t('清空')}</button>
+          <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="rlPermInv()">${t('反选')}</button>
+        </div>
+        ${boxes}
+      </div>
+      <div ${isSys?'hidden':''}><label>${t('资源配额')}</label>
+        <div class="row" style="align-items:flex-end">
+          <div><label>${t('设备上限')}</label><input id="rl_dev_limit" type="number" min="0" value="${+x.devices_limit||+x.devicesLimit||0}" style="width:110px"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不限制设备数量')}</div></div>
+          <div><label>${t('私有网关限额')}</label>
+            <label class="check" style="margin:6px 0 0"><input type="checkbox" id="rl_gw_unlimited" ${gwUnl?'checked':''} onchange="rlGwToggle()"><span>${t('无限制')}</span></label>
+          </div>
+          <div id="rl_gw_limit_div" style="${gwUnl?'display:none':''}"><label>${t('私有网关上限')}</label><input id="rl_gw_limit" type="number" min="0" value="${+x.gateways_limit||+x.gatewaysLimit||0}" style="width:110px"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不允许创建私有网关；正值 = 上限')}</div></div>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:4px">${t('配额说明：绑定该角色的用户（按租户）创建设备/网关时受此配额约束；未配置时沿用「用户配置」的旧上限逻辑。')}</div>
+      </div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
       <button class="ghost" onclick="closeModal()">${t('取消')}</button>
-      <button onclick="busy('保存中…', ()=>roleSave(${x.id||0}))">${t('保存')}</button>
+      ${isSys?'':`<button onclick="busy('保存中…', ()=>roleSave(${x.id||0}))">${t('保存')}</button>`}
     </div>`);
+  rlGwToggle();
 }
 async function roleSave(id){
   const perms = Array.from(document.querySelectorAll('.rl_perm')).filter(c=>c.checked).map(c=>c.value);
   if(!perms.length){ toast(t('至少勾选一项权限'),'err'); return; }
-  const body = { name: v('rl_name'), description: v('rl_desc'), permissions: perms };
+  const gwUnl = document.getElementById('rl_gw_unlimited').checked;
+  const body = {
+    name: v('rl_name'), description: v('rl_desc'), permissions: perms,
+    devices_limit: +v('rl_dev_limit')||0,
+    gateways_limit: gwUnl ? 0 : (+v('rl_gw_limit')||0),
+    gateways_unlimited: gwUnl ? 1 : 0,
+  };
   const r = id ? await api('PUT','/api/roles/'+id, body) : await api('POST','/api/roles', body);
   if(r && r.error){ toast(String(r.error),'err'); return; }
   closeModal(); toast(t('已保存'),'ok'); viewRoles();
