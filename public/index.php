@@ -1701,36 +1701,15 @@ function handleApi(string $method, string $path): array|\stdClass
                 if (empty($body['username']) || empty($body['password'])) {
                     return cs_invalid('username and password required');
                 }
-                if (!in_array($body['role'] ?? 'operator', Auth::ROLES, true)) {
-                    return cs_invalid('invalid role');
-                }
+                $roleId = (int) ($body['role_id'] ?? 0);
                 try {
-
-                    $sameRoleId = 0;
-                    if (!empty($body['create_role_same_name'])) {
-                        $rname = trim((string) $body['username']);
-                        if ($rname !== '') {
-                            $existing = Database::fetch("SELECT id FROM roles WHERE name=? AND is_system=0", [$rname]);
-                            if ($existing) {
-                                $sameRoleId = (int) $existing['id'];
-                            } else {
-                                $cr = WebApp::createRole([
-                                    'name'        => $rname,
-                                    'description' => '随用户「' . $rname . '」创建的同名角色',
-                                    'permissions' => Auth::OPERATOR_PERMS,
-                                    'tenant_id'   => (int) ($body['tenant_id'] ?? 0),
-                                ]);
-                                $sameRoleId = (int) ($cr['id'] ?? 0);
-                            }
-                        }
-                    }
-                    $roleId = (int) ($body['role_id'] ?? 0) ?: $sameRoleId;
+                    $role = $roleId > 0 ? Auth::roleFromRoleId($roleId, Auth::ROLE_OPERATOR) : Auth::ROLE_OPERATOR;
                     $id = Auth::createUser(
                         $body['username'],
                         $body['password'],
-                        $body['role'] ?? Auth::ROLE_OPERATOR,
-                        (int) ($body['tenant_id'] ?? 0),
-                        $body['new_tenant_name'] ?? null,
+                        $role,
+                        0,
+                        null,
                         $body['email'] ?? null,
                         $roleId
                     );

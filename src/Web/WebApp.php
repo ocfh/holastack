@@ -407,6 +407,157 @@ class WebApp
         return $out;
     }
 
+    private static function demoThingModels(?int $appId = null): array
+    {
+        $now = time();
+        $rows = [
+            ['id' => 1, 'tenant_id' => 0, 'application_id' => 1, 'name' => '温湿度传感器模型', 'codec' => 'SEGMENT',
+             'fields_json' => json_encode([
+                 ['key' => 'temperature', 'name' => '温度', 'type' => 'number', 'unit' => '°C', 'offset' => 0, 'len' => 2, 'dataType' => 'int16be', 'scale' => 0.1],
+                 ['key' => 'humidity', 'name' => '湿度', 'type' => 'number', 'unit' => '%RH', 'offset' => 2, 'len' => 2, 'dataType' => 'uint16be', 'scale' => 0.1],
+                 ['key' => 'battery', 'name' => '电量', 'type' => 'number', 'unit' => '%', 'offset' => 4, 'len' => 1, 'dataType' => 'uint8'],
+             ], JSON_UNESCAPED_UNICODE), 'created_at' => $now - 86400 * 25],
+            ['id' => 2, 'tenant_id' => 0, 'application_id' => 2, 'name' => '电表读数模型', 'codec' => 'SEGMENT',
+             'fields_json' => json_encode([
+                 ['key' => 'voltage', 'name' => '电压', 'type' => 'number', 'unit' => 'V', 'offset' => 0, 'len' => 2, 'dataType' => 'uint16be', 'scale' => 0.1],
+                 ['key' => 'current', 'name' => '电流', 'type' => 'number', 'unit' => 'A', 'offset' => 2, 'len' => 2, 'dataType' => 'uint16be', 'scale' => 0.01],
+                 ['key' => 'energy', 'name' => '电能', 'type' => 'number', 'unit' => 'kWh', 'offset' => 4, 'len' => 4, 'dataType' => 'uint32be', 'scale' => 0.01],
+             ], JSON_UNESCAPED_UNICODE), 'created_at' => $now - 86400 * 18],
+            ['id' => 3, 'tenant_id' => 0, 'application_id' => 3, 'name' => '烟感状态模型', 'codec' => 'JSON',
+             'fields_json' => json_encode([
+                 ['key' => 'alarm', 'name' => '报警状态', 'type' => 'number', 'unit' => '', 'jsonKey' => 'alarm'],
+                 ['key' => 'smoke_ppm', 'name' => '烟雾浓度', 'type' => 'number', 'unit' => 'ppm', 'jsonKey' => 'smoke'],
+             ], JSON_UNESCAPED_UNICODE), 'created_at' => $now - 86400 * 9],
+        ];
+        if ($appId !== null && $appId > 0) {
+            $rows = array_values(array_filter($rows, static fn($m) => (int) $m['application_id'] === (int) $appId));
+        }
+        return $rows;
+    }
+
+    private static function demoNotificationGroups(): array
+    {
+        $now = time();
+        return [
+            ['id' => 1, 'tenant_id' => 0, 'name' => '运维值班群', 'webhook_url' => 'https://hooks.example.com/lora/ops',
+             'enabled' => 1, 'created_at' => $now - 86400 * 22],
+            ['id' => 2, 'tenant_id' => 0, 'name' => '告警升级群', 'webhook_url' => 'https://hooks.example.com/lora/escalate',
+             'enabled' => 1, 'created_at' => $now - 86400 * 12],
+            ['id' => 3, 'tenant_id' => 0, 'name' => '测试通知组', 'webhook_url' => '',
+             'enabled' => 0, 'created_at' => $now - 86400 * 3],
+        ];
+    }
+
+    private static function demoAlertRules(?int $appId = null): array
+    {
+        $now = time();
+        $rows = [
+            ['id' => 1, 'tenant_id' => 0, 'application_id' => 1, 'device_id' => 0, 'name' => '温度过高',
+             'field_key' => 'temperature', 'operator' => 'gt', 'threshold' => '35', 'severity' => 'critical',
+             'notify_group_id' => 1, 'enabled' => 1, 'created_at' => $now - 86400 * 20],
+            ['id' => 2, 'tenant_id' => 0, 'application_id' => 1, 'device_id' => 3, 'name' => '烟感电量低',
+             'field_key' => 'battery', 'operator' => 'lt', 'threshold' => '20', 'severity' => 'warn',
+             'notify_group_id' => 2, 'enabled' => 1, 'created_at' => $now - 86400 * 14],
+            ['id' => 3, 'tenant_id' => 0, 'application_id' => 2, 'device_id' => 0, 'name' => '电压异常',
+             'field_key' => 'voltage', 'operator' => 'lt', 'threshold' => '200', 'severity' => 'warn',
+             'notify_group_id' => 0, 'enabled' => 0, 'created_at' => $now - 86400 * 6],
+        ];
+        if ($appId !== null && $appId > 0) {
+            $rows = array_values(array_filter($rows, static fn($r) => (int) $r['application_id'] === (int) $appId));
+        }
+        return $rows;
+    }
+
+    private static function demoAlerts(int $n = 14, ?int $deviceId = null, string $status = ''): array
+    {
+        $devs = self::demoDevices();
+        if ($deviceId !== null && $deviceId > 0) {
+            $devs = array_values(array_filter($devs, static fn($d) => (int) $d['id'] === (int) $deviceId));
+            if (!$devs) {
+                return [];
+            }
+        }
+        $rules = self::demoAlertRules();
+        $now = time();
+        $out = [];
+        for ($i = 0; $i < $n; $i++) {
+            $d = $devs[array_rand($devs)];
+            $r = $rules[array_rand($rules)];
+            $st = $status !== '' ? $status : (mt_rand(1, 4) === 1 ? 'triggered' : 'resolved');
+            $sev = $r['severity'];
+            $val = $r['operator'] === 'gt' ? mt_rand(36, 42) : mt_rand(5, 19);
+            $ts = $now - $i * mt_rand(1800, 14400);
+            $out[] = [
+                'id' => 70000 + $i, 'tenant_id' => 0, 'device_id' => $d['id'], 'device_name' => $d['name'],
+                'rule_id' => $r['id'], 'rule_name' => $r['name'], 'field_key' => $r['field_key'],
+                'value' => $val, 'text_value' => (string) $val, 'severity' => $sev, 'status' => $st,
+                'message' => sprintf('设备 %s 字段 %s 触发规则「%s」（%s %s %s）', $d['name'], $r['field_key'], $r['name'], $r['field_key'], $r['operator'], $r['threshold']),
+                'ts' => $ts,
+            ];
+        }
+        usort($out, static fn($a, $b) => $b['ts'] <=> $a['ts']);
+        return $out;
+    }
+
+    private static function demoScheduledTasks(): array
+    {
+        $now = time();
+        $devs = self::demoDevices();
+        $crons = ['*/15 * * * *', '0 8 * * *', '30 12 * * 1', '0 */2 * * *'];
+        $out = [];
+        $names = ['定时抄表', '每日报状态', '每周重启继电器', '定时拉取数据'];
+        for ($i = 0; $i < 4; $i++) {
+            $d = $devs[array_rand($devs)];
+            $enabled = $i !== 3;
+            $lastRun = $enabled ? $now - mt_rand(600, 7200) : 0;
+            $out[] = [
+                'id' => 90000 + $i, 'tenant_id' => 0, 'name' => $names[$i],
+                'application_id' => $d['app_id'], 'device_id' => $d['id'],
+                'port' => mt_rand(1, 3) === 1 ? 2 : 10,
+                'payload_hex' => sprintf('01%02x%02x', mt_rand(0, 255), mt_rand(0, 255)),
+                'confirmed' => (mt_rand(0, 2) === 1) ? 1 : 0,
+                'cron' => $crons[$i], 'enabled' => $enabled ? 1 : 0,
+                'next_run_at' => $enabled ? $now + mt_rand(300, 5400) : 0,
+                'last_run_at' => $lastRun,
+                'last_result' => $lastRun > 0 ? '下行已入队' : '',
+                'enabled_fmt' => $enabled ? 1 : 0,
+                'created_at' => $now - 86400 * mt_rand(3, 20),
+            ];
+        }
+        return $out;
+    }
+
+    private static function demoAutomations(): array
+    {
+        $now = time();
+        $devs = self::demoDevices();
+        $defs = [
+            ['高温自动告警', 'temperature', 'gt', '35', 'notify', 0, '', 1, 300],
+            ['低电量自动换组', 'battery', 'lt', '20', 'notify', 0, '', 1, 3600],
+            ['浓度超标喷淋', 'smoke_ppm', 'gt', '500', 'downlink', 1, '0102ff', 1, 120],
+            ['电压骤降停机', 'voltage', 'lt', '200', 'downlink', 2, '0200', 0, 60],
+        ];
+        $out = [];
+        foreach ($defs as $i => [$name, $field, $op, $val, $atype, $actionDev, $hex, $enabled, $cd]) {
+            $d = $devs[array_rand($devs)];
+            $fired = mt_rand(0, 40);
+            $lastFired = $fired > 0 ? $now - mt_rand(120, 86400) : 0;
+            $out[] = [
+                'id' => 110000 + $i, 'tenant_id' => 0, 'application_id' => $d['app_id'], 'name' => $name,
+                'trigger_device_id' => $i % 2 === 0 ? 0 : $d['id'], 'trigger_field' => $field,
+                'trigger_operator' => $op, 'trigger_value' => $val, 'cooldown_seconds' => $cd,
+                'enabled' => $enabled, 'action_type' => $atype,
+                'action_device_id' => $atype === 'downlink' ? $devs[$actionDev]['id'] : 0,
+                'action_port' => 2, 'action_payload_hex' => $hex, 'action_confirmed' => 0,
+                'notify_group_id' => $atype === 'notify' ? mt_rand(1, 2) : 0,
+                'fired_count' => $fired, 'last_fired_at' => $lastFired,
+                'last_result' => $lastFired > 0 ? ($atype === 'notify' ? '已推送通知组' : '下行已入队') : '',
+                'created_at' => $now - 86400 * mt_rand(2, 25),
+            ];
+        }
+        return $out;
+    }
+
     public static function listApplications(?int $tenantId = null): array
     {
         if (self::scope()['demo']) {
@@ -1236,34 +1387,6 @@ class WebApp
         if (!$u) {
             return ['error' => 'user not found'];
         }
-        $role = $p['role'] ?? $u['role'];
-        if (!in_array($role, Auth::ROLES, true)) {
-            return ['error' => 'invalid role'];
-        }
-        if ((int)$cur['id'] === $id && $role !== Auth::ROLE_ADMIN) {
-            return ['error' => 'cannot change own role'];
-        }
-        $tid = (int) ($p['tenant_id'] ?? $u['tenant_id'] ?? 0);
-        if ($role === Auth::ROLE_TENANT) {
-            if ($tid <= 0 && !empty($p['new_tenant_name'])) {
-                $name = trim($p['new_tenant_name']);
-                $exists = Database::fetch("SELECT id FROM tenants WHERE name=?", [$name]);
-                if ($exists) {
-                    $tid = (int) $exists['id'];
-                } else {
-                    Database::execute(
-                        "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at) VALUES (?,?,0,0,?)",
-                        [$name, '', time()]
-                    );
-                    $tid = Database::lastInsertId();
-                }
-            }
-            if ($tid <= 0) {
-                return ['error' => 'tenant role requires a tenant'];
-            }
-        } else {
-            $tid = 0;
-        }
         $email = strtolower(trim((string) ($p['email'] ?? $u['email'] ?? '')));
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return ['error' => 'invalid email'];
@@ -1272,6 +1395,11 @@ class WebApp
         if ($roleId > 0 && !Role::get($roleId)) {
             return ['error' => 'invalid role_id'];
         }
+        if ((int)$cur['id'] === $id && $roleId !== (int)$u['role_id'] && $roleId !== 0) {
+            return ['error' => 'cannot change own role'];
+        }
+        $role = $roleId > 0 ? Auth::roleFromRoleId($roleId, Auth::ROLE_OPERATOR) : $u['role'];
+        $tid = (int) ($u['tenant_id'] ?? 0);
         Database::execute("UPDATE users SET role=?, tenant_id=?, email=?, role_id=? WHERE id=?", [$role, $tid, $email, $roleId, $id]);
         return ['ok' => true];
     }
@@ -1409,6 +1537,9 @@ class WebApp
 
     public static function listThingModels(int $appId): array
     {
+        if (self::scope()['demo']) {
+            return self::demoThingModels($appId);
+        }
         return ThingModel::list($appId, self::effectiveTenant());
     }
 
@@ -1480,6 +1611,9 @@ class WebApp
 
     public static function listAlertRules(?int $appId): array
     {
+        if (self::scope()['demo']) {
+            return self::demoAlertRules($appId);
+        }
         return Alert::listRules((int) $appId, self::effectiveTenant());
     }
 
@@ -1525,6 +1659,10 @@ class WebApp
 
     public static function listAlerts(int $limit, int $offset, ?int $deviceId = null, string $status = ''): array
     {
+        if (self::scope()['demo']) {
+            $data = self::demoAlerts(min(500, max(1, $limit)), $deviceId, $status);
+            return ['data' => $data, 'counts' => self::demoAlertCounts($data)];
+        }
         return [
             'data' => Alert::listAlerts(self::effectiveTenant(), $limit, $offset, $deviceId, $status),
             'counts' => Alert::counts(self::effectiveTenant()),
@@ -1533,12 +1671,34 @@ class WebApp
 
     public static function activeAlerts(int $limit = 100): array
     {
+        if (self::scope()['demo']) {
+            return ['data' => self::demoAlerts(min(500, max(1, $limit)), null, 'triggered')];
+        }
         return ['data' => Alert::activeAlerts(self::effectiveTenant(), $limit)];
     }
 
     public static function alertCounts(): array
     {
+        if (self::scope()['demo']) {
+            return self::demoAlertCounts(self::demoAlerts(40));
+        }
         return Alert::counts(self::effectiveTenant());
+    }
+
+    private static function demoAlertCounts(array $alerts): array
+    {
+        $triggered = 0;
+        $today = 0;
+        $midnight = mktime(0, 0, 0);
+        foreach ($alerts as $a) {
+            if (($a['status'] ?? '') === 'triggered') {
+                $triggered++;
+            }
+            if ((int) ($a['ts'] ?? 0) >= $midnight) {
+                $today++;
+            }
+        }
+        return ['triggered' => $triggered, 'today' => $today, 'total' => count($alerts)];
     }
 
     public static function resolveAlert(int $alertId): array
@@ -1552,6 +1712,9 @@ class WebApp
 
     public static function listNotificationGroups(): array
     {
+        if (self::scope()['demo']) {
+            return ['data' => self::demoNotificationGroups()];
+        }
         return ['data' => Alert::listGroups(self::effectiveTenant())];
     }
 
@@ -1591,6 +1754,9 @@ class WebApp
 
     public static function listScheduledTasks(): array
     {
+        if (self::scope()['demo']) {
+            return ['data' => self::demoScheduledTasks()];
+        }
         $rows = ScheduledTask::list(self::effectiveTenant());
         $now = time();
         foreach ($rows as &$row) {
@@ -1676,6 +1842,9 @@ class WebApp
 
     public static function listAutomations(): array
     {
+        if (self::scope()['demo']) {
+            return ['data' => self::demoAutomations()];
+        }
         $rows = Automation::list(self::effectiveTenant());
         foreach ($rows as &$row) {
             $row['fired_count'] = (int) ($row['fired_count'] ?? 0);

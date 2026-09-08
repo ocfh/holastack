@@ -201,8 +201,8 @@
     const d0 = Lc_DEVICES.LR1110;
     return `
 <div class="lc-head">
-  <h2>${(typeof ICON!=='undefined' && ICON.calculator) ? ICON.calculator : ''} LoRa / LoRaWAN 参数计算器</h2>
-  <p class="hint">复刻 Semtech 官方 LoRa Calculator · 中文版 · 所有计算在浏览器本地完成，不上传任何数据。</p>
+  <h2>${(typeof ICON!=='undefined' && ICON.calculator) ? ICON.calculator : ''} ${(typeof t==='function') ? t('LoRa / LoRaWAN 参数计算器') : 'LoRa / LoRaWAN 参数计算器'}</h2>
+  <p class="hint">${(typeof t==='function') ? t('复刻 Semtech 官方 LoRa Calculator · 中文版 · 所有计算在浏览器本地完成，不上传任何数据。') : ''}</p>
 </div>
 <div class="tabs">
   <div class="tab active" id="tabLoRa" onclick="Lc_switchTab('LoRa')">LoRa（射频）</div>
@@ -517,7 +517,7 @@
       sens = Lc_sensFsk(Lc_num('r_fdr', 50) * 2, dev.nf);
       xtal = Lc_xtalFsk(fdr * 1000, fHz);
       effDr = (payload * 8) / toaSec;
-      document.getElementById('r_midx').textContent = '调制指数 Modulation Index：' + Lc_fmt(2 * fdev / fdr, 3);
+      document.getElementById('r_midx').textContent = (typeof t === 'function' ? t('调制指数 Modulation Index：') : '调制指数 Modulation Index：') + Lc_fmt(2 * fdev / fdr, 3);
       preamble = preambleBits;
     } else {
       const sf = parseInt(Lc_val('r_sf', '12'), 10);

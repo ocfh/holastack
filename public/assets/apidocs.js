@@ -149,6 +149,8 @@
       var first = view.querySelector('.ad-item');
       if (first) Ad_select(first.getAttribute('data-ad'));
       Ad_mobileChrome();
+      var h2 = view.querySelector('h2');
+      if (h2 && !(h2.querySelector('svg')) && typeof ICON !== 'undefined' && ICON.bookOpen) h2.insertAdjacentHTML('afterbegin', ICON.bookOpen);
     };
     window.adSelect = Ad_select;
     window.adCopyFrom = Ad_copyFrom;

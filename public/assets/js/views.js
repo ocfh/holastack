@@ -122,7 +122,7 @@ function dashUpRow(e){
   </div>`;
 }
 const rawBtn = (id, fn) => `<button class="raw-btn" title="查看原始 JSON" onclick="${fn}(${id})">${ICON.magnifyingGlass}</button>`;
-const frameBtn = (id, fn) => `<button class="raw-btn" title="帧结构检视" onclick="${fn}(${id})">${ICON.codeBracket}</button>`;
+const frameBtn = (id, fn) => `<button class="raw-btn" title="${t('帧结构检视')}" onclick="${fn}(${id})">${ICON.codeBracket}</button>`;
 
 async function tenantFilterHtml(){
   if (!isAdmin()) return '';
@@ -852,19 +852,17 @@ async function viewUsers(){
   const userCfg = {
     state, stateKey:'usersSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (u, k) => ({id:u.id, username:u.username, email:u.email||'', role:u.role, tenant:u.tenant_id||0, time:u.created_at}[k]),
+    cellValue: (u, k) => ({id:u.id, username:u.username, email:u.email||'', role:u.role_name||u.role||'', time:u.created_at}[k]),
     cols:[
       {key:'id',       label:'ID',       type:'num', firstDir:'asc', sortable:false},
       {key:'username', label:'用户名',    type:'str', firstDir:'asc', sortable:false},
       {key:'email',    label:'邮箱',      type:'str', firstDir:'asc', sortable:false},
       {key:'role',     label:'角色',      type:'str', firstDir:'asc', sortable:false},
-      {key:'tenant',   label:'用户配置',  type:'num', firstDir:'asc', sortable:false},
       {key:'time',     label:'创建时间',  type:'time', firstDir:'desc'},
       {key:'_raw',     label:'',         type:'raw'},
     ],
     rows: state.users,
-    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span>${u.role_id?` <span class="tag" title="角色">${esc(u.role_name||('#'+u.role_id))}</span>`:''}</td>
-     <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
+    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${esc(u.role_name||u.role||'—')}</span></td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
      <td><button class="btn ghost" onclick="editUser(${u.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">${ICON.trash}删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">${ICON.key}改密</button></td></tr>`,
     emptyText:'暂无用户',
@@ -1052,11 +1050,12 @@ async function viewSettings(){
       </div>
       <div class="st-cat hidden" id="stcat-maint">
         <h3>${ICON.clipboardDocumentList}${t('日志维护')}</h3>
-        <div style="display:flex;flex-direction:column;gap:10px">
-          ${maintRow('上行消息日志','uplinks')}
-          ${maintRow('下行消息日志','downlinks')}
-          ${maintRow('网关日志','events')}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${maintCheck('uplinks','上行消息日志')}
+          ${maintCheck('downlinks','下行消息日志')}
+          ${maintCheck('events','网关日志')}
         </div>
+        <div style="margin-top:12px"><button class="btn danger" onclick="clearMaintChecked()">${ICON.trash}${t('清空所选日志')}</button></div>
       </div>
       <div class="st-cat hidden" id="stcat-map">
         <h3>${ICON.map}地图服务</h3>
@@ -1065,7 +1064,6 @@ async function viewSettings(){
         <label>自定义瓦片 URL（选择「自定义瓦片 URL」时使用，Leaflet 占位符 {z}/{x}/{y}；含 token 可用 KEY 占位）</label>
         <input id="st_mapurl" value="${val('map_url')}" placeholder="https://your-tile-server.com/{z}/{x}/{y}.png?token=KEY">
         <label>API Key（下发给需要 Key 的提供商 / 填到上面的 KEY 占位）</label><input id="st_mapkey" value="${val('map_key')}" placeholder="粘贴地图提供商的访问令牌">
-        <p class="muted" style="margin:2px 0 0">无需 Key 的国内底图：高德 / 腾讯（GCJ-02）可直接出图。天地图（矢量 / 影像）免费但需先在 <a href="https://console.tianditu.gov.cn/api/key" target="_blank" rel="noopener">tianditu.gov.cn</a> 申请 tk 并填到「API Key」。百度、Mapbox、MapTiler 及您自己的服务器也需 Key / URL。国内坐标系（高德/腾讯=GCJ-02，百度=BD-09，天地图=WGS84）与设备侧 WGS84 坐标存在数十米偏移，属正常现象。</p>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
         <button class="ghost" onclick="nav('dashboard')">${ICON.xMark}取消</button>
@@ -1092,17 +1090,19 @@ function stCatItems(){
   return sorted.map(c=>`<button class="st-item${c.id==='basic'?' active':''}" onclick="stCat('${c.id}',this)">${ICON[c.icon]}${esc(c.label)}</button>`).join('');
 }
 
-function maintRow(labelKey, target){
-  return `<div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-    <span>${t(labelKey)}</span>
-    <button class="btn danger" onclick="clearLogs('${target}','${labelKey}')">${ICON.trash}${t('清空日志')}</button>
-  </div>`;
+function maintCheck(target, labelKey){
+  return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="maint_chk" value="${target}">${t(labelKey)}</label>`;
 }
-async function clearLogs(target, labelKey){
-  if (!confirm(t('确认清空') + ' ' + t(labelKey) + '？' + t('此操作不可恢复'))) return;
-  const r = await api('POST','/api/settings',{clear_logs: target});
-  if (r.error){ alert(t(r.error)); return; }
-  toast(t('已清空') + ' ' + t(labelKey), 'ok');
+async function clearMaintChecked(){
+  const targets = Array.from(document.querySelectorAll('.maint_chk:checked')).map(c=>c.value);
+  if (!targets.length){ toast(t('请先勾选要清空的日志'),'warn'); return; }
+  if (!confirm(t('确认清空') + ' ' + targets.length + ' ' + t('项日志') + '？' + t('此操作不可恢复'))) return;
+  let tid = isTenant() ? (state.user.tenant_id||0) : 0;
+  for (const t2 of targets){
+    const r = await api('POST','/api/settings',{clear_logs: t2, clear_logs_tenant: tid});
+    if (r && r.error){ alert(t(r.error)); return; }
+  }
+  toast(t('已清空'),'ok');
 }
 
 async function clearPageLogs(target){
@@ -1311,7 +1311,7 @@ async function changePw(){
     targetSel = `<label>目标用户（管理员可改他人；留空=自己）</label><select id="m_pw_uid"><option value="">我自己</option>${(r.data||[]).map(u=>`<option value="${u.id}">${esc(u.username)}</option>`).join('')}</select>`;
   }
   openModal(`<h3>修改密码</h3>${targetSel}
-    <label>新密码（≥6 位）</label><input id="m_pw_new" type="password">
+    <label>新密码（≥6 字符）</label><input id="m_pw_new" type="password">
     <label>确认新密码</label><input id="m_pw_cfm" type="password">
     <div id="pw_err" class="muted" style="color:var(--err)"></div>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', savePw)">保存</button></div>`);
@@ -1330,7 +1330,7 @@ async function changePwFor(id){
   openModal(`<h3>${t('修改用户')} #${id} ${t('密码')}</h3>
     <div class="rl-sec">
       <div class="row">
-        <div><label>新密码（≥6 位）</label><input id="m_pw_new" type="password"></div>
+        <div><label>新密码（≥6 字符）</label><input id="m_pw_new" type="password"></div>
         <div><label>确认新密码</label><input id="m_pw_cfm" type="password"></div>
       </div>
       <div id="pw_err" class="muted" style="color:var(--err);min-height:16px"></div>
@@ -2093,32 +2093,32 @@ function rev(arr){ return (arr||[]).slice().reverse(); }
 function parseLoraFrame(hexPlain){
   const b = hexToBytes(hexPlain);
   const out = {rows:[]};
-  if (!b.length){ out.error='空帧（无 phy_payload）'; return out; }
+  if (!b.length){ out.error=t('空帧（无 phy_payload）'); return out; }
   const mhdr=b[0];
   const mtype=(mhdr>>5)&0x07, major=mhdr&0x03;
   const MT={0:'Join-request',1:'Join-accept',2:'Unconfirmed Data Up',3:'Unconfirmed Data Down',4:'Confirmed Data Up',5:'Confirmed Data Down',6:'RFU(6)',7:'Proprietary'};
   out.rows.push({k:'MHDR', v:b2h([mhdr]), d:`MType=${mtype} → ${MT[mtype]||'?'}; Major=${major}${major===0?' (LoRaWAN R1)':''}`});
   if (mtype===0){
-    if (b.length<23){ out.error=`Join-request 长度不足（${b.length} 字节，需 23）`; return out; }
-    out.rows.push({k:'AppEUI', v:b2h(b.slice(1,9)), d:'空口小端，网络序 '+b2h(rev(b.slice(1,9)))});
-    out.rows.push({k:'DevEUI', v:b2h(b.slice(9,17)), d:'空口小端，网络序 '+b2h(rev(b.slice(9,17)))});
+    if (b.length<23){ out.error=t('Join-request 长度不足（{n} 字节，需 23）').replace('{n}', b.length); return out; }
+    out.rows.push({k:'AppEUI', v:b2h(b.slice(1,9)), d:t('空口小端，网络序')+' '+b2h(rev(b.slice(1,9)))});
+    out.rows.push({k:'DevEUI', v:b2h(b.slice(9,17)), d:t('空口小端，网络序')+' '+b2h(rev(b.slice(9,17)))});
     out.rows.push({k:'DevNonce', v:b2h(b.slice(17,19))});
     out.rows.push({k:'MIC', v:b2h(b.slice(19,23))});
-    out.note='MIC 需 AppKey 验证，由 NS 完成；此处仅展示原始字节。';
+    out.note=t('MIC 需 AppKey 验证，由 NS 完成；此处仅展示原始字节。');
     return out;
   }
   if (mtype===1){
-    if (b.length<17){ out.error='Join-accept 长度不足'; return out; }
-    out.rows.push({k:'(密文主体)', v:b2h(b.slice(1,b.length-4)), d:'Join-accept 在空口为 AES 加密，需 AppKey 解密后才能解析 AppNonce/NetID/DevAddr/DLSettings/RxDelay/CFList'});
-    out.rows.push({k:'MIC', v:b2h(b.slice(b.length-4)), d:'末 4 字节（密文内）'});
-    out.note='Join-accept 为加密帧，解密由 NS 完成。';
+    if (b.length<17){ out.error=t('Join-accept 长度不足'); return out; }
+    out.rows.push({k:t('(密文主体)'), v:b2h(b.slice(1,b.length-4)), d:t('Join-accept 在空口为 AES 加密，需 AppKey 解密后才能解析 AppNonce/NetID/DevAddr/DLSettings/RxDelay/CFList')});
+    out.rows.push({k:'MIC', v:b2h(b.slice(b.length-4)), d:t('末 4 字节（密文内）')});
+    out.note=t('Join-accept 为加密帧，解密由 NS 完成。');
     return out;
   }
   if (mtype>=2 && mtype<=5){
-    if (b.length<8){ out.error='数据帧长度不足'; return out; }
+    if (b.length<8){ out.error=t('数据帧长度不足'); return out; }
     const up = (mtype===2||mtype===4);
     const devAddr=b.slice(1,5);
-    out.rows.push({k:'DevAddr', v:b2h(devAddr), d:'空口小端，网络序 '+b2h(rev(devAddr))});
+    out.rows.push({k:'DevAddr', v:b2h(devAddr), d:t('空口小端，网络序')+' '+b2h(rev(devAddr))});
     const fctrl=b[5];
     const foptsLen = fctrl&0x0f;
     const flags=[];
@@ -2126,31 +2126,31 @@ function parseLoraFrame(hexPlain){
     flags.push(up ? ((fctrl&0x40)?'ADRACKReq':'') : ((fctrl&0x40)?'FPending':''));
     if (fctrl&0x20) flags.push('ACK');
     if (fctrl&0x10) flags.push('ClassB(FCtrl.b4)');
-    out.rows.push({k:'FCtrl', v:b2h([fctrl]), d:`${(flags.filter(Boolean).join(' / ')||'无标志')} · FOptsLen=${foptsLen}`});
+    out.rows.push({k:'FCtrl', v:b2h([fctrl]), d:`${(flags.filter(Boolean).map(f=>t(f)||f).join(' / ')||t('无标志'))} · FOptsLen=${foptsLen}`});
     const fcnt = b[6] | (b[7]<<8);
-    out.rows.push({k:'FCnt (低16位)', v:String(fcnt), d:'完整 FCnt 由 NS 按设备会话上下文补全'});
+    out.rows.push({k:t('FCnt (低16位)'), v:String(fcnt), d:t('完整 FCnt 由 NS 按设备会话上下文补全')});
     let p=8;
     if (foptsLen>0){
       const fopts=b.slice(p,p+foptsLen);
-      out.rows.push({k:'FOpts', v:b2h(fopts), d: foptsLen===15?'MAC 命令占满，无 FPort/FRMPayload':'MAC 命令（'+foptsLen+' 字节）'});
+      out.rows.push({k:'FOpts', v:b2h(fopts), d: foptsLen===15?t('MAC 命令占满，无 FPort/FRMPayload'):t('MAC 命令（{n} 字节）').replace('{n}', foptsLen)});
       p+=foptsLen;
     }
     const remain=b.length-p;
     if (remain>4){
       const fport=b[p]; p++;
-      out.rows.push({k:'FPort', v:String(fport), d: fport===0?'MAC 层（FRMPayload 为 MAC 命令）':'应用层'});
+      out.rows.push({k:'FPort', v:String(fport), d: fport===0?t('MAC 层（FRMPayload 为 MAC 命令）'):t('应用层')});
       const payload=b.slice(p, b.length-4);
-      out.rows.push({k:'FRMPayload', v:b2h(payload)||'(空)', d:'应用负载（若已配置会话密钥，NS 已解密后存储为 decrypted_hex）'});
+      out.rows.push({k:'FRMPayload', v:b2h(payload)||t('(空)'), d:t('应用负载（若已配置会话密钥，NS 已解密后存储为 decrypted_hex）')});
       out.rows.push({k:'MIC', v:b2h(b.slice(b.length-4))});
-      out.note='MIC 需 NwkSKey 验证，NS 侧已校验；FRMPayload 解密需 AppSKey/NwkSKey。';
+      out.note=t('MIC 需 NwkSKey 验证，NS 侧已校验；FRMPayload 解密需 AppSKey/NwkSKey。');
     } else if (remain===4){
-      out.rows.push({k:'MIC', v:b2h(b.slice(p,p+4)), d:'无 FPort/FRMPayload（纯 MAC/确认帧）'});
+      out.rows.push({k:'MIC', v:b2h(b.slice(p,p+4)), d:t('无 FPort/FRMPayload（纯 MAC/确认帧）')});
     } else {
-      out.error=`帧尾部长度异常（剩余 ${remain} 字节，应 ≥4 用于 MIC）`;
+      out.error=t('帧尾部长度异常（剩余 {n} 字节，应 ≥4 用于 MIC）').replace('{n}', remain);
     }
     return out;
   }
-  out.rows.push({k:'Payload', v:b2h(b.slice(1)), d:'专有/RFU 帧，按透传处理'});
+  out.rows.push({k:'Payload', v:b2h(b.slice(1)), d:t('专有/RFU 帧，按透传处理')});
   return out;
 }
 
@@ -2174,17 +2174,17 @@ async function frameInspector(id){
     }
   }
   if (!rec){
-    openModal(`<h3>帧结构检视 #${id}</h3>
-      <p class="muted">未找到该记录（可能已被清理或不在当前租户可见范围）。</p>
-      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    openModal(`<h3>${t('帧结构检视')} #${id}</h3>
+      <p class="muted">${t('未找到该记录（可能已被清理或不在当前租户可见范围）。')}</p>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('关闭')}</button></div>`);
     return;
   }
   let phy = rec.phy_payload || '';
   if (!phy && rec.raw_json){ try{ const j=JSON.parse(rec.raw_json); phy = j.phy_payload || (j.txpk&&j.txpk.data) || ''; }catch(e){} }
   if (!phy){
-    openModal(`<h3>帧结构检视 #${id}（${kind||'记录'}）</h3>
-      <p class="muted">该记录没有原始帧（phy_payload）可供解析。上行记录通常包含空口帧；若为空，可能是 NS 未记录原始帧。</p>
-      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    openModal(`<h3>${t('帧结构检视')} #${id}（${t(kind||'记录')}）</h3>
+      <p class="muted">${t('该记录没有原始帧（phy_payload）可供解析。上行记录通常包含空口帧；若为空，可能是 NS 未记录原始帧。')}</p>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('关闭')}</button></div>`);
     return;
   }
   const parsed = parseLoraFrame(phy);
@@ -2192,12 +2192,12 @@ async function frameInspector(id){
     ? `<tr><td colspan="3" class="warn-box" style="border:0">${esc(parsed.error)}</td></tr>`
     : parsed.rows.map(r=>`<tr><td class="mono">${esc(r.k)}</td><td class="mono">${esc(r.v)}</td><td class="muted">${esc(r.d||'')}</td></tr>`).join('');
   const noteHtml = parsed.note ? `<p class="muted" style="margin-top:10px">${esc(parsed.note)}</p>` : '';
-  openModal(`<h3>帧结构检视 #${id}（${kind||'记录'}）</h3>
-    <p class="muted" style="word-break:break-all">完整帧 (hex)：<code>${esc(phy)}</code></p>
-    <div style="position:relative"><button class="ad-copy" onclick="copyText('${phy}')">复制帧</button></div>
-    <table class="tbl" style="margin-top:8px"><thead><tr><th>字段</th><th>值 (hex)</th><th>说明</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+  openModal(`<h3>${t('帧结构检视')} #${id}（${t(kind||'记录')}）</h3>
+    <p class="muted" style="word-break:break-all">${t('完整帧 (hex)：')}<code>${esc(phy)}</code></p>
+    <div style="position:relative"><button class="ad-copy" onclick="copyText('${phy}')">${t('复制帧')}</button></div>
+    <table class="tbl" style="margin-top:8px"><thead><tr><th>${t('字段')}</th><th>${t('值 (hex)')}</th><th>${t('说明')}</th></tr></thead><tbody>${rowsHtml}</tbody></table>
     ${noteHtml}
-    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('关闭')}</button></div>`);
 }
 
 function downloadBlob(name, text, mime){
@@ -3458,7 +3458,7 @@ async function viewRoles(){
     const actions = isSys
       ? ''
       : `<button class="btn ghost" onclick="roleEdit(${row.id})">${ICON.pencilSquare}${t('编辑')}</button> <button class="btn danger" onclick="roleDel(${row.id})">${ICON.trash}${t('删除')}</button>`;
-    return `<tr><td>${esc(row.name)}</td><td class="muted">${esc(row.description||'')}</td><td><div style="display:flex;flex-wrap:wrap;gap:4px">${permChips}</div></td><td class="muted">${devTxt}</td><td class="muted">${gwTxt}</td><td class="muted">${row.user_count||row.userCount||0}</td><td>${adminBtn(actions)}</td></tr>`;
+    return `<tr><td>${esc(row.name)}</td><td class="muted">${esc(row.description||'')}</td><td><div style="display:flex;flex-wrap:wrap;gap:4px">${permChips}</div></td><td class="muted">${devTxt}</td><td class="muted">${gwTxt}</td><td class="muted">${row.user_count||row.userCount||0}</td><td style="white-space:nowrap">${adminBtn(actions)}</td></tr>`;
   }).join('')||`<tr><td colspan="7" class="muted">${t('暂无角色')}</td></tr>`;
   document.getElementById('view').innerHTML = `
     <div class="view-head"><h2>${ICON.shieldCheck||''}${t('角色管理')}</h2>${adminBtn(`<button onclick="roleNew()">${ICON.plus}${t('新建角色')}</button>`)}</div>
@@ -3516,7 +3516,7 @@ function roleModal(x){
     ['设备管理', ['applications','devices','gateways','device-profiles','multicast-groups']],
     ['数据管理', ['thing-models','dashboard-data','alerts','notification-groups','scheduled','automations']],
     ['工具集成', ['integrations','api-keys','api-logs','apidocs','loracalc']],
-  ];
+  ].map(([g,ks])=>[t(g),ks]);
   const has = (k)=>Array.isArray(x.permissions) && x.permissions.indexOf(k)!==-1;
   const boxes = groups.map(([glabel,ks],gi)=>{
     const chips = ks.map(k=>`<label class="rl-chip ${has(k)?'on':''}"><input type="checkbox" class="rl_perm" data-group="${gi}" value="${k}" ${has(k)?'checked':''} onchange="rlSyncChips()">${esc(cats[k]||k)}</label>`).join('');

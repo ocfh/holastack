@@ -202,7 +202,7 @@ const NAV_GROUPS = [
 ];
 const hasPerm = (p) => !!state.user && (state.user.role === 'admin' || (state.user.permissions||[]).indexOf(p) !== -1);
 const VIEW_TITLES = {};
-NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => { VIEW_TITLES[it.v] = it.text; }));
+NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => { VIEW_TITLES[it.v] = t(it.text); }));
 const VIEW_ICONS = {};
 NAV_GROUPS.forEach(g => (g.items||[]).forEach(it => { VIEW_ICONS[it.v] = it.icon; }));
 
@@ -216,7 +216,7 @@ function renderNav(){
     .filter(g => g.items.length);
   desk.innerHTML = groups.map(g => {
     const sub = g.items.map(it => `<a href="#${it.v}" class="nav" data-v="${it.v}">${ICON[it.icon]||''}<span>${it.text}</span></a>`).join('');
-    return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${ICON[g.icon]||''}<span>${g.label}</span><span class="caret">${ICON.chevronDown}</span></button><div class="navsub">${sub}</div></div>`;
+    return `<div class="navgrp"><button class="navgrp-btn" onclick="toggleGrp(this)">${ICON[g.icon]||''}<span>${t(g.label)}</span><span class="caret">${ICON.chevronDown}</span></button><div class="navsub">${sub}</div></div>`;
   }).join('');
   const accountGrid = `<a href="javascript:void(0)" onclick="closeNav();changePw()">${ICON.key}<span>修改密码</span></a>`
     + `<a href="javascript:void(0)" class="mp-danger" onclick="closeNav();logout()">${ICON.logout}<span>退出登录</span></a>`;

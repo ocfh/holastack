@@ -246,6 +246,9 @@ class Auth
             if ($r) {
                 $list = json_decode((string) ($r['permissions'] ?? ''), true);
                 if (is_array($list) && $list !== []) {
+                    if (in_array('*', $list, true)) {
+                        return array_keys(self::PERMISSION_CATALOG);
+                    }
                     return $list;
                 }
             }
@@ -254,6 +257,21 @@ class Auth
             return self::TENANT_PERMS;
         }
         return self::OPERATOR_PERMS;
+    }
+
+    public static function roleFromRoleId(int $roleId, string $fallback = self::ROLE_OPERATOR): string
+    {
+        if ($roleId <= 0) {
+            return $fallback;
+        }
+        $r = Database::fetch("SELECT is_system, name FROM roles WHERE id=?", [$roleId]);
+        if (!$r) {
+            return $fallback;
+        }
+        if (!empty($r['is_system']) && in_array($r['name'], self::ROLES, true)) {
+            return $r['name'];
+        }
+        return $fallback;
     }
 
     public static function can(string $perm): bool
