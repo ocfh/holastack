@@ -206,23 +206,37 @@ async function newUser(){
   let tenants = '';
   try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join(''); } catch(e){}
   let roles = '', depts = '';
-  try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!x.is_system).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
+  try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!(x.is_system||x.isSystem)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
   try { const dr = await api('GET','/api/departments'); const flat=[]; (function walk(ns){ (ns||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(dr.data||[],0); depts = flat.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
-  openModal(`<h3>${t('新建用户')}</h3><label>${t('用户名')}</label><input id="m_user"><label>${t('密码')}（≥6 位）</label><input id="m_pass" type="password">
-    <label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" placeholder="user@example.com">
-    <label>${t('角色')}</label><select id="m_role" onchange="roleTenantToggle()">
-      <option value="operator">operator（${t('演示：只读 + 模拟数据')}）</option>
-      <option value="tenant">${t('用户配置')}（${t('仅本用户配置数据，可写')}）</option>
-      <option value="admin">admin（${t('全部权限')}）</option>
-    </select>
-    <div id="m_tenant_box" class="hidden"><label>${t('绑定用户配置')}</label>
-      <select id="m_tenant"><option value="" disabled selected>— ${t('选择用户配置')} —</option>${tenants}</select>
+  openModal(`<h3>${t('新建用户')}</h3>
+    <div class="rl-sec">
+      <div class="row">
+        <div><label>${t('用户名')}</label><input id="m_user"></div>
+        <div><label>${t('密码')}（≥6 位）</label><input id="m_pass" type="password"></div>
+      </div>
+      <div><label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" placeholder="user@example.com"></div>
     </div>
-    <label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select>
-    <label class="check" style="margin:8px 0 0"><input type="checkbox" id="m_create_role" onchange="sameRoleToggle()"><span>${t('创建同名角色')}</span></label>
-    <div class="muted" style="font-size:11px;margin-top:4px" id="m_create_role_hint">${t('勾选后保存时自动以用户名创建同名自定义角色（已存在则复用），默认只读权限集，可稍后在角色管理中调整。')}</div>
-    <label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select>
-    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`);
+    <div class="rl-sec">
+      <div class="rl-sec-title"><h4>${t('角色与权限')}</h4></div>
+      <div class="row">
+        <div><label>${t('角色')}</label><select id="m_role" onchange="roleTenantToggle()">
+          <option value="operator">operator（${t('演示：只读 + 模拟数据')}）</option>
+          <option value="tenant">${t('用户配置')}（${t('仅本用户配置数据，可写')}）</option>
+          <option value="admin">admin（${t('全部权限')}）</option>
+        </select></div>
+        <div id="m_tenant_box" class="hidden"><label>${t('绑定用户配置')}</label>
+          <select id="m_tenant"><option value="" disabled selected>— ${t('选择用户配置')} —</option>${tenants}</select>
+        </div>
+        <div><label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select></div>
+      </div>
+      <label class="rl-switch" style="margin-top:10px"><input type="checkbox" id="m_create_role" onchange="sameRoleToggle()"><span>${t('创建同名角色')}</span></label>
+      <div class="muted" style="font-size:11px;margin-top:4px" id="m_create_role_hint">${t('勾选后保存时自动以用户名创建同名自定义角色（已存在则复用），默认只读权限集，可稍后在角色管理中调整。')}</div>
+    </div>
+    <div class="rl-sec">
+      <div class="rl-sec-title"><h4>${t('组织')}</h4></div>
+      <div><label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`, {wide:true});
   roleTenantToggle();
 }
 function roleTenantToggle(){
@@ -254,27 +268,40 @@ async function delUser(id){ confirmDlg('确认删除该用户？', async ()=>{ c
 
 async function editUser(id){
   const r = await api('GET','/api/users');
-  const u = (r.data||[]).find(x=>x.id===id); if(!u) return;
+  const u = (r.data||[]).find(x=>+x.id===+id || x.id===id); if(!u) return;
   let tenants = '';
   try { const tr = await api('GET','/api/tenants'); tenants = (tr.data||[]).map(row=>`<option value="${row.id}" ${String(row.id)===String(u.tenant_id)?'selected':''}>${esc(row.name)}</option>`).join(''); } catch(e){}
   let roles = '', depts = '';
-  try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!x.is_system).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.role_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
+  try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!(x.is_system||x.isSystem)).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.role_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
   try { const dr = await api('GET','/api/departments'); const flat=[]; (function walk(ns){ (ns||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(dr.data||[],0); depts = flat.map(x=>`<option value="${x.id}" ${String(x.id)===String(u.department_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
-  const isSelf = state.user && state.user.id === id;
-  openModal(`<h3>编辑用户 #${id}（${esc(u.username)}）</h3>
-    <label>用户名</label><input id="m_user" value="${esc(u.username)}" disabled>
-    <label>邮箱（可选，用于头像）</label><input id="m_email" type="email" value="${esc(u.email||'')}" placeholder="user@example.com">
-    <label>角色</label><select id="m_role" onchange="roleTenantToggle()" ${isSelf?'disabled':''}>
-      <option value="operator" ${u.role==='operator'?'selected':''}>operator（演示：只读 + 模拟数据）</option>
-      <option value="tenant" ${u.role==='tenant'?'selected':''}>用户配置（仅本用户配置数据，可写）</option>
-      <option value="admin" ${u.role==='admin'?'selected':''}>admin（全部权限）</option>
-    </select>
-    <div id="m_tenant_box" class="${u.role==='tenant'?'':'hidden'}"><label>绑定用户配置</label>
-      <select id="m_tenant">${u.tenant_id ? '' : '<option value="" disabled selected>— 选择用户配置 —</option>'}${tenants}</select>
+  const isSelf = state.user && +state.user.id === +id;
+  openModal(`<h3>${t('编辑用户')} #${id}（${esc(u.username)}）</h3>
+    <div class="rl-sec">
+      <div class="rl-sec-title"><h4>${t('账号')}</h4><span class="muted">${isSelf?t('不能修改自己的角色'):''}</span></div>
+      <div class="row">
+        <div><label>${t('用户名')}</label><input id="m_user" value="${esc(u.username)}" disabled></div>
+        <div><label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" value="${esc(u.email||'')}" placeholder="user@example.com"></div>
+      </div>
     </div>
-    <label>自定义角色（覆盖菜单权限）</label><select id="m_role_custom"><option value="0">— 默认 —</option>${roles}</select>
-    <label>部门</label><select id="m_dept"><option value="0">— 无 —</option>${depts}</select>
-    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">保存</button></div>`);
+    <div class="rl-sec">
+      <div class="rl-sec-title"><h4>${t('角色与权限')}</h4></div>
+      <div class="row">
+        <div><label>${t('角色')}</label><select id="m_role" onchange="roleTenantToggle()" ${isSelf?'disabled':''}>
+          <option value="operator" ${u.role==='operator'?'selected':''}>operator（${t('演示：只读 + 模拟数据')}）</option>
+          <option value="tenant" ${u.role==='tenant'?'selected':''}>${t('用户配置')}（${t('仅本用户配置数据，可写')}）</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}>admin（${t('全部权限')}）</option>
+        </select></div>
+        <div id="m_tenant_box" class="${u.role==='tenant'?'':'hidden'}"><label>${t('绑定用户配置')}</label>
+          <select id="m_tenant">${u.tenant_id ? '' : '<option value="" disabled selected>— 选择用户配置 —</option>'}${tenants}</select>
+        </div>
+        <div><label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select></div>
+      </div>
+    </div>
+    <div class="rl-sec">
+      <div class="rl-sec-title"><h4>${t('组织')}</h4></div>
+      <div><label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">${t('保存')}</button></div>`, {wide:true});
   roleTenantToggle();
 }
 async function saveUserEdit(id){

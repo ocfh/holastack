@@ -213,7 +213,6 @@ class Database
                 ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['users', 'email', 'TEXT DEFAULT \'\''],
                 ['users', 'role_id', 'INTEGER DEFAULT 0'],
-                ['users', 'department_id', 'INTEGER DEFAULT 0'],
                 ['applications', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['devices', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INTEGER DEFAULT 0'],
@@ -312,7 +311,6 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, port INTEGER NOT NULL DEFAULT 1, payload_hex TEXT NOT NULL DEFAULT \'\', confirmed INTEGER NOT NULL DEFAULT 0, cron TEXT NOT NULL DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, next_run_at INTEGER NOT NULL DEFAULT 0, last_run_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_st_next ON scheduled_tasks(enabled, next_run_at)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', description TEXT DEFAULT \'\', permissions TEXT DEFAULT \'\', is_system INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', parent_id INTEGER NOT NULL DEFAULT 0, description TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', trigger_device_id INTEGER NOT NULL DEFAULT 0, trigger_field TEXT NOT NULL DEFAULT \'\', trigger_operator TEXT NOT NULL DEFAULT \'gt\', trigger_value TEXT NOT NULL DEFAULT \'\', cooldown_seconds INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1, action_type TEXT NOT NULL DEFAULT \'downlink\', action_device_id INTEGER NOT NULL DEFAULT 0, action_port INTEGER NOT NULL DEFAULT 1, action_payload_hex TEXT NOT NULL DEFAULT \'\', action_confirmed INTEGER NOT NULL DEFAULT 0, notify_group_id INTEGER NOT NULL DEFAULT 0, fired_count INTEGER NOT NULL DEFAULT 0, last_fired_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_au_app ON automations(application_id, enabled)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id)');
@@ -370,7 +368,8 @@ class Database
             $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, port INT NOT NULL DEFAULT 1, payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', confirmed TINYINT NOT NULL DEFAULT 0, cron VARCHAR(64) NOT NULL DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, next_run_at INT NOT NULL DEFAULT 0, last_run_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_st_next (enabled, next_run_at))');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', description VARCHAR(255) DEFAULT \'\', permissions TEXT, is_system TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL DEFAULT 0, INDEX idx_roles_tenant (tenant_id))');
             $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', trigger_device_id INT NOT NULL DEFAULT 0, trigger_field VARCHAR(64) NOT NULL DEFAULT \'\', trigger_operator VARCHAR(8) NOT NULL DEFAULT \'gt\', trigger_value VARCHAR(64) NOT NULL DEFAULT \'\', cooldown_seconds INT NOT NULL DEFAULT 60, enabled TINYINT NOT NULL DEFAULT 1, action_type VARCHAR(16) NOT NULL DEFAULT \'downlink\', action_device_id INT NOT NULL DEFAULT 0, action_port INT NOT NULL DEFAULT 1, action_payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', action_confirmed TINYINT NOT NULL DEFAULT 0, notify_group_id INT NOT NULL DEFAULT 0, fired_count INT NOT NULL DEFAULT 0, last_fired_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_au_app (application_id, enabled))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS departments (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', parent_id INT NOT NULL DEFAULT 0, description VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_dept_tenant (tenant_id))');
+            // 2026-09-08：部门功能整体下线，老库遗留的 departments 表直接删掉。
+            try { $pdo->exec('DROP TABLE IF EXISTS departments'); } catch (\Throwable $e) { error_log('drop departments failed: ' . $e->getMessage()); }
             foreach ([
                 ['devices', 'last_seen', 'INT DEFAULT 0'],
                 ['devices', 'last_gw_id', 'VARCHAR(32) DEFAULT \'\''],
@@ -411,7 +410,6 @@ class Database
                 ['users', 'tenant_id', 'INT DEFAULT 0'],
                 ['users', 'email', 'VARCHAR(255) DEFAULT \'\''],
                 ['users', 'role_id', 'INT DEFAULT 0'],
-                ['users', 'department_id', 'INT DEFAULT 0'],
                 ['applications', 'tenant_id', 'INT DEFAULT 0'],
                 ['devices', 'tenant_id', 'INT DEFAULT 0'],
                 ['device_profiles', 'tenant_id', 'INT DEFAULT 0'],

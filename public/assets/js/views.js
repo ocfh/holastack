@@ -1347,9 +1347,13 @@ async function savePw(){
 }
 async function changePwFor(id){
   openModal(`<h3>${t('修改用户')} #${id} ${t('密码')}</h3>
-    <label>新密码（≥6 位）</label><input id="m_pw_new" type="password">
-    <label>确认新密码</label><input id="m_pw_cfm" type="password">
-    <div id="pw_err" class="muted" style="color:var(--err)"></div>
+    <div class="rl-sec">
+      <div class="row">
+        <div><label>新密码（≥6 位）</label><input id="m_pw_new" type="password"></div>
+        <div><label>确认新密码</label><input id="m_pw_cfm" type="password"></div>
+      </div>
+      <div id="pw_err" class="muted" style="color:var(--err);min-height:16px"></div>
+    </div>
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>savePwFor(${id}))">保存</button></div>`);
 }
 async function savePwFor(id){
@@ -3523,12 +3527,34 @@ function roleNew(){
 function roleEdit(id){ const x=__rbc.roles.find(r=>+r.id===+id); if(!x) return; roleModal(x); }
 function rlPermAll(){
   document.querySelectorAll('.rl_perm').forEach(c=>{ c.checked=true; });
+  rlSyncChips();
 }
 function rlPermNone(){
   document.querySelectorAll('.rl_perm').forEach(c=>{ c.checked=false; });
+  rlSyncChips();
 }
 function rlPermInv(){
   document.querySelectorAll('.rl_perm').forEach(c=>{ c.checked=!c.checked; });
+  rlSyncChips();
+}
+function rlGroupToggle(group, on){
+  document.querySelectorAll(`.rl_perm[data-group="${group}"]`).forEach(c=>{ c.checked=on; });
+  rlSyncChips();
+  rlSyncGroupBtn(group);
+}
+function rlSyncChips(){
+  document.querySelectorAll('.rl-chip').forEach(chip=>{
+    const cb = chip.querySelector('.rl_perm');
+    chip.classList.toggle('on', !!(cb && cb.checked));
+  });
+  document.querySelectorAll('.rl_perm[data-group]').forEach(cb=>rlSyncGroupBtn(cb.dataset.group));
+}
+function rlSyncGroupBtn(gi){
+  const cbs = document.querySelectorAll(`.rl_perm[data-group="${gi}"]`);
+  if (!cbs.length) return;
+  const all = Array.from(cbs).every(c=>c.checked);
+  const btn = document.querySelector(`.rl-group-all[data-group="${gi}"]`);
+  if (btn) btn.textContent = all ? t('取消全选') : t('全选');
 }
 function rlGwToggle(){
   const cb = document.getElementById('rl_gw_unlimited');
@@ -3547,41 +3573,56 @@ function roleModal(x){
     ['工具集成', ['integrations','api-keys','api-logs','apidocs','loracalc']],
   ];
   const has = (k)=>Array.isArray(x.permissions) && x.permissions.indexOf(k)!==-1;
-  const boxes = groups.map(([glabel,ks])=>`
-    <div style="margin-bottom:8px">
-      <div class="muted" style="font-weight:600;font-size:12px;margin-bottom:4px">${t(glabel)}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${ks.map(k=>`<label style="margin:0;display:flex;align-items:center;gap:4px;font-weight:400"><input type="checkbox" class="rl_perm" value="${k}" ${has(k)?'checked':''}>${esc(cats[k]||k)}</label>`).join('')}</div>
-    </div>`).join('');
+  const boxes = groups.map(([glabel,ks],gi)=>{
+    const chips = ks.map(k=>`<label class="rl-chip ${has(k)?'on':''}"><input type="checkbox" class="rl_perm" data-group="${gi}" value="${k}" ${has(k)?'checked':''} onchange="rlSyncChips()">${esc(cats[k]||k)}</label>`).join('');
+    return `<div class="rl-group">
+      <div class="rl-group-head"><span>${t(glabel)}</span><button type="button" class="rl-group-all" data-group="${gi}" onclick="rlGroupToggle(${gi}, document.querySelectorAll('.rl_perm[data-group=\\"${gi}\\"]').length !== document.querySelectorAll('.rl_perm[data-group=\\"${gi}\\"]:checked').length)">${t('全选')}</button></div>
+      <div class="rl-chips">${chips}</div>
+    </div>`;
+  }).join('');
   const gwUnl = (x.gateways_unlimited ?? (x.gatewaysUnlimited ? 1 : 0)) ? true : false;
-  const readOnlyNote = isSys ? `<div class="muted" style="font-size:12px">${t('内置角色不可编辑/删除，仅可查看')}</div>` : '';
+  const sysNote = isSys ? `<div class="rl-sec"><div class="rl-sec-title"><h4>${t('内置角色')}</h4><span class="muted">${t('内置角色不可编辑/删除，仅可查看')}</span></div></div>` : '';
   openModal(`<h3>${isNew?t('新建角色'):t('编辑角色')}</h3>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      <div><label>${t('角色名称')}</label><input id="rl_name" value="${esc(x.name||'')}" ${isSys?'disabled':''}></div>
-      <div><label>${t('描述')}</label><input id="rl_desc" value="${esc(x.description||'')}" ${isSys?'disabled':''}></div>
-      <div><label>${t('权限')}</label>
-        ${readOnlyNote}
-        <div style="display:flex;gap:8px;margin:6px 0">
-          <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="rlPermAll()">${t('全选')}</button>
-          <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="rlPermNone()">${t('清空')}</button>
-          <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="rlPermInv()">${t('反选')}</button>
-        </div>
-        ${boxes}
-      </div>
-      <div ${isSys?'hidden':''}><label>${t('资源配额')}</label>
-        <div class="row" style="align-items:flex-end">
-          <div><label>${t('设备上限')}</label><input id="rl_dev_limit" type="number" min="0" value="${+x.devices_limit||+x.devicesLimit||0}" style="width:110px"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不限制设备数量')}</div></div>
-          <div><label>${t('私有网关限额')}</label>
-            <label class="check" style="margin:6px 0 0"><input type="checkbox" id="rl_gw_unlimited" ${gwUnl?'checked':''} onchange="rlGwToggle()"><span>${t('无限制')}</span></label>
-          </div>
-          <div id="rl_gw_limit_div" style="${gwUnl?'display:none':''}"><label>${t('私有网关上限')}</label><input id="rl_gw_limit" type="number" min="0" value="${+x.gateways_limit||+x.gatewaysLimit||0}" style="width:110px"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不允许创建私有网关；正值 = 上限')}</div></div>
-        </div>
-        <div class="muted" style="font-size:11px;margin-top:4px">${t('配额说明：绑定该角色的用户（按租户）创建设备/网关时受此配额约束；未配置时沿用「用户配置」的旧上限逻辑。')}</div>
+    <div class="rl-sec">
+      <div class="row">
+        <div><label>${t('角色名称')}</label><input id="rl_name" value="${esc(x.name||'')}" ${isSys?'disabled':''}></div>
+        <div><label>${t('描述')}</label><input id="rl_desc" value="${esc(x.description||'')}" ${isSys?'disabled':''}></div>
       </div>
     </div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+    <div class="rl-sec">
+      <div class="rl-sec-title">
+        <h4>${t('权限')}</h4>
+        <div class="rl-bulk">
+          <button type="button" onclick="rlPermAll()">${t('全选')}</button>
+          <button type="button" onclick="rlPermNone()">${t('清空')}</button>
+          <button type="button" onclick="rlPermInv()">${t('反选')}</button>
+        </div>
+      </div>
+      ${isSys?'':`<div class="rl-groups">${boxes}</div>`}
+      ${isSys?`<div class="rl-chips">${groups.map(([glabel,ks])=>ks.map(k=>`<label class="rl-chip ${has(k)?'on':''}" style="cursor:default"><input type="checkbox" ${has(k)?'checked':''} disabled>${esc(cats[k]||k)}</label>`).join('')).join('')}</div>`:''}
+    </div>
+    ${isSys?'':`<div class="rl-sec">
+      <div class="rl-sec-title"><h4>${t('资源配额')}</h4><span class="muted">${t('配额说明：绑定该角色的用户（按租户）创建设备/网关时受此配额约束；未配置时沿用「用户配置」的旧上限逻辑。')}</span></div>
+      <div class="rl-quota">
+        <div class="rl-quota-card">
+          <label>${t('设备上限')}</label>
+          <input id="rl_dev_limit" type="number" min="0" value="${+x.devices_limit||+x.devicesLimit||0}">
+          <div class="muted">${t('0 = 不限制设备数量')}</div>
+        </div>
+        <div class="rl-quota-card">
+          <label>${t('私有网关限额')}</label>
+          <label class="rl-switch"><input type="checkbox" id="rl_gw_unlimited" ${gwUnl?'checked':''} onchange="rlGwToggle()"><span>${t('无限制')}</span></label>
+          <div id="rl_gw_limit_div" style="${gwUnl?'display:none':''}">
+            <input id="rl_gw_limit" type="number" min="0" value="${+x.gateways_limit||+x.gatewaysLimit||0}">
+            <div class="muted">${t('0 = 不允许创建私有网关；正值 = 上限')}</div>
+          </div>
+        </div>
+      </div>
+    </div>`}
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
       <button class="ghost" onclick="closeModal()">${t('取消')}</button>
       ${isSys?'':`<button onclick="busy('保存中…', ()=>roleSave(${x.id||0}))">${t('保存')}</button>`}
-    </div>`);
+    </div>`, {wide:true});
   rlGwToggle();
 }
 async function roleSave(id){

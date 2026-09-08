@@ -682,9 +682,10 @@ function renderModal(html){
   }
   box.innerHTML = `<div class="modal-head">${title}</div><div class="modal-body">${tmp.innerHTML}</div>${foot ? `<div class="modal-foot">${foot}</div>` : ''}`;
 }
-function openModal(html){
+function openModal(html, opts){
   closeAllSelMenus();
   renderModal(html);
+  document.getElementById('modalBox').classList.toggle('wide', !!(opts && opts.wide));
   document.getElementById('modal').classList.add('show');
   
   if (isDemo()) {
