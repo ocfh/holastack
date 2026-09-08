@@ -409,7 +409,7 @@ function handleApi(string $method, string $path): array|\stdClass
         }
         $token = Auth::issueToken($u);
         $u['permissions'] = Auth::permissionsFor($u);
-        return ['ok' => true, 'user' => ['id' => $u['id'], 'username' => $u['username'], 'email' => $u['email'] ?? '', 'avatar_url' => WebApp::avatarUrl($u['email'] ?? ''), 'role' => $u['role'], 'role_id' => (int) ($u['role_id'] ?? 0), 'department_id' => (int) ($u['department_id'] ?? 0), 'permissions' => $u['permissions']], 'token' => $token];
+        return ['ok' => true, 'user' => ['id' => $u['id'], 'username' => $u['username'], 'email' => $u['email'] ?? '', 'avatar_url' => WebApp::avatarUrl($u['email'] ?? ''), 'role' => $u['role'], 'role_id' => (int) ($u['role_id'] ?? 0), 'permissions' => $u['permissions']], 'token' => $token];
     }
     if ($resource === 'logout') {
         Auth::logout(Auth::tokenFromRequest());
@@ -1579,28 +1579,13 @@ function handleApi(string $method, string $path): array|\stdClass
             return $out;
 
         case 'departments':
-            if (isset($segs[1]) && $segs[1] !== '') {
-                $id = cs_uuidToInt((string) $segs[1]);
-                if ($method === 'PUT' || $method === 'PATCH') {
-                    $r = WebApp::updateDepartment($id, $body);
-                    if ($e = cs_wrapError($r)) { return $e; }
-                    return [];
-                }
-                if ($method === 'DELETE') {
-                    $r = WebApp::deleteDepartment($id);
-                    if ($e = cs_wrapError($r)) { return $e; }
-                    return [];
-                }
-                return cs_err(12, 'unimplemented', 'method not allowed');
+            // 2026-09-08：部门功能已整体下线，路由保留仅返回 gRPC 风格 404/空列表，
+            // 避免旧客户端 500。
+            if ($method === 'POST') { return cs_err(7, 'permission denied', 'departments feature removed'); }
+            if (isset($segs[1]) && $segs[1] !== '' && ($method === 'PUT' || $method === 'PATCH' || $method === 'DELETE')) {
+                return cs_err(5, 'not found', 'departments feature removed');
             }
-            if ($method === 'POST') {
-                $r = WebApp::createDepartment($body);
-                if ($e = cs_wrapError($r)) { return $e; }
-                return ['id' => cs_intToUuid((int) $r['id'])];
-            }
-            $depts = WebApp::listDepartments();
-            $depts = $depts['data'] ?? $depts;
-            return cs_list($depts, count($depts));
+            return cs_list([], 0);
 
         case 'api-keys':
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
@@ -1881,8 +1866,7 @@ function handleApi(string $method, string $path): array|\stdClass
                         (int) ($body['tenant_id'] ?? 0),
                         $body['new_tenant_name'] ?? null,
                         $body['email'] ?? null,
-                        $roleId,
-                        (int) ($body['department_id'] ?? 0)
+                        $roleId
                     );
                 } catch (\InvalidArgumentException $e) {
                     return cs_invalid('invalid email');
@@ -1899,8 +1883,6 @@ function handleApi(string $method, string $path): array|\stdClass
                     'tenantName'     => $u['tenant_name'] ?? '',
                     'roleId'         => cs_intToUuid((int) ($u['role_id'] ?? 0)),
                     'roleName'       => $u['role_name'] ?? '',
-                    'departmentId'   => cs_intToUuid((int) ($u['department_id'] ?? 0)),
-                    'departmentName' => $u['department_name'] ?? '',
                     'isAdmin'        => ($u['role'] ?? '') === 'admin',
                     'isActive'       => true,
                     // holastack 扩展

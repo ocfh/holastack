@@ -577,7 +577,7 @@ HTML;
                     $t('cs-relays', 'GET', '/api/relays', 'Relay 列表',
                         '映射 relay_gateways/relay_devices 表。GET /api/relays 列 relay 网关设备；GET /api/relays/{devEui}/devices 列 relay 下挂设备；POST 同路径添加下挂设备（body {deviceDevEui}）；DELETE /api/relays/{id} 删除。'),
                     $t('cs-misc', 'GET', '/api/api-keys | /api/uplinks | /api/downlinks | /api/me', '附加资源',
-                        'api-keys/roles/departments/uplinks/downlinks/stats/regions 等沿用 {totalCount, result} 形状（api-keys 列表为 {data} 兼容形状），可在同一路由体系内直接使用。'),
+                        'api-keys/roles/uplinks/downlinks/stats/regions 等沿用 {totalCount, result} 形状（api-keys 列表为 {data} 兼容形状），可在同一路由体系内直接使用。'),
                 ],
             ],
             [

@@ -205,9 +205,8 @@ async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId
 async function newUser(){
   let tenants = '';
   try { const r = await api('GET','/api/tenants'); tenants = (r.data||[]).map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join(''); } catch(e){}
-  let roles = '', depts = '';
+  let roles = '';
   try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!(x.is_system||x.isSystem)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
-  try { const dr = await api('GET','/api/departments'); const flat=[]; (function walk(ns){ (ns||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(dr.data||[],0); depts = flat.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
   openModal(`<h3>${t('新建用户')}</h3>
     <div class="rl-sec">
       <div class="row">
@@ -232,10 +231,6 @@ async function newUser(){
       <label class="rl-switch" style="margin-top:10px"><input type="checkbox" id="m_create_role" onchange="sameRoleToggle()"><span>${t('创建同名角色')}</span></label>
       <div class="muted" style="font-size:11px;margin-top:4px" id="m_create_role_hint">${t('勾选后保存时自动以用户名创建同名自定义角色（已存在则复用），默认只读权限集，可稍后在角色管理中调整。')}</div>
     </div>
-    <div class="rl-sec">
-      <div class="rl-sec-title"><h4>${t('组织')}</h4></div>
-      <div><label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select></div>
-    </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`, {wide:true});
   roleTenantToggle();
 }
@@ -253,7 +248,7 @@ function sameRoleToggle(){
 }
 async function saveUser(){
   const role = v('m_role');
-  const body = {username:v('m_user'), password:v('m_pass'), role, email:v('m_email'), role_id: +v('m_role_custom')||0, department_id: +v('m_dept')||0};
+  const body = {username:v('m_user'), password:v('m_pass'), role, email:v('m_email'), role_id: +v('m_role_custom')||0};
   if (document.getElementById('m_create_role') && document.getElementById('m_create_role').checked) {
     body.create_role_same_name = 1;
   }
@@ -271,9 +266,8 @@ async function editUser(id){
   const u = (r.data||[]).find(x=>+x.id===+id || x.id===id); if(!u) return;
   let tenants = '';
   try { const tr = await api('GET','/api/tenants'); tenants = (tr.data||[]).map(row=>`<option value="${row.id}" ${String(row.id)===String(u.tenant_id)?'selected':''}>${esc(row.name)}</option>`).join(''); } catch(e){}
-  let roles = '', depts = '';
+  let roles = '';
   try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).filter(x=>!(x.is_system||x.isSystem)).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.role_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
-  try { const dr = await api('GET','/api/departments'); const flat=[]; (function walk(ns){ (ns||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(dr.data||[],0); depts = flat.map(x=>`<option value="${x.id}" ${String(x.id)===String(u.department_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
   const isSelf = state.user && +state.user.id === +id;
   openModal(`<h3>${t('编辑用户')} #${id}（${esc(u.username)}）</h3>
     <div class="rl-sec">
@@ -297,16 +291,12 @@ async function editUser(id){
         <div><label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select></div>
       </div>
     </div>
-    <div class="rl-sec">
-      <div class="rl-sec-title"><h4>${t('组织')}</h4></div>
-      <div><label>${t('部门')}</label><select id="m_dept"><option value="0">— ${t('无')} —</option>${depts}</select></div>
-    </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">${t('保存')}</button></div>`, {wide:true});
   roleTenantToggle();
 }
 async function saveUserEdit(id){
   const role = v('m_role');
-  const body = {role, email:v('m_email'), role_id: +v('m_role_custom')||0, department_id: +v('m_dept')||0};
+  const body = {role, email:v('m_email'), role_id: +v('m_role_custom')||0};
   if (role === 'tenant') {
     const t = v('m_tenant');
     if (t && +t > 0) body.tenant_id = +t;

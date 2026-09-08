@@ -140,7 +140,7 @@ class Auth
 
 
 
-    public static function createUser(string $username, string $password, string $role = self::ROLE_ADMIN, int $tenantId = 0, ?string $newTenantName = null, ?string $email = null, int $roleId = 0, int $departmentId = 0): int
+    public static function createUser(string $username, string $password, string $role = self::ROLE_ADMIN, int $tenantId = 0, ?string $newTenantName = null, ?string $email = null, int $roleId = 0): int
     {
         $username = strtolower(trim($username));
         $email = strtolower(trim((string) ($email ?? '')));
@@ -167,8 +167,8 @@ class Auth
             $tid = 0;
         }
         Database::execute(
-            "INSERT INTO users (username, password_hash, role, tenant_id, email, role_id, department_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
-            [$username, $hash, $role, $tid, $email, (int) $roleId, (int) $departmentId, time()]
+            "INSERT INTO users (username, password_hash, role, tenant_id, email, role_id, created_at) VALUES (?,?,?,?,?,?,?)",
+            [$username, $hash, $role, $tid, $email, (int) $roleId, time()]
         );
         return Database::lastInsertId();
     }
@@ -245,7 +245,6 @@ class Auth
         'noc'              => '运维仪表盘',
         'map'              => '位置地图',
         'roles'            => '角色管理',
-        'departments'      => '部门管理',
         'users'            => '用户管理',
         'tenants'          => '用户配置',
         'settings'         => '站点设置',
@@ -256,7 +255,7 @@ class Auth
         'dashboard', 'applications', 'devices', 'gateways', 'device-profiles', 'multicast-groups', 'fuota',
         'thing-models', 'dashboard-data', 'alerts', 'notification-groups', 'scheduled',
         'integrations', 'api-keys', 'api-logs', 'apidocs', 'loracalc',
-        'uplinks', 'downlinks', 'events', 'noc', 'map', 'roles', 'departments',
+        'uplinks', 'downlinks', 'events', 'noc', 'map', 'roles',
     ];
 
     /** 只读操作员默认权限。 */

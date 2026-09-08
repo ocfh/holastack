@@ -316,6 +316,8 @@ class Database
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at)');
+            // 2026-09-08：部门功能整体下线，老库遗留的 departments 表直接删掉。
+            try { $pdo->exec('DROP TABLE IF EXISTS departments'); } catch (\Throwable $e) { error_log('drop departments failed: ' . $e->getMessage()); }
         } else {
             
 
@@ -491,15 +493,15 @@ class Database
         $admin = json_encode(array_keys(\holastack\Auth\Auth::PERMISSION_CATALOG), JSON_UNESCAPED_UNICODE);
         $operator = json_encode(array_values(\holastack\Auth\Auth::OPERATOR_PERMS), JSON_UNESCAPED_UNICODE);
         $seeds = [
-            ['admin', '内置管理员：全部权限（不可编辑/删除）', $admin, 1],
-            ['operator', '内置操作员：只读监控权限（不可编辑/删除）', $operator, 1],
+            ['admin', '拥有全部权限', $admin, 1],
+            ['operator', '只读查看与监控', $operator, 1],
         ];
         foreach ($seeds as [$name, $desc, $perms, $unlimited]) {
             $row = self::fetch("SELECT id FROM roles WHERE is_system=1 AND name=?", [$name]);
             if ($row) {
                 self::execute(
-                    "UPDATE roles SET permissions=?, gateways_unlimited=1, devices_limit=0, gateways_limit=0 WHERE id=?",
-                    [$perms, $row['id']]
+                    "UPDATE roles SET permissions=?, description=?, gateways_unlimited=1, devices_limit=0, gateways_limit=0 WHERE id=?",
+                    [$perms, $desc, $row['id']]
                 );
             } else {
                 self::execute(

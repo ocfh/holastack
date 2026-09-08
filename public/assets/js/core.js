@@ -208,7 +208,6 @@ const NAV_GROUPS = [
   { label:'系统管理', admin:true, icon:'cog6Tooth', items:[
     {v:'users', perm:'users', text:'用户管理', icon:'user'},
     {v:'roles', perm:'roles', text:'角色管理', icon:'shieldCheck'},
-    {v:'departments', perm:'departments', text:'部门管理', icon:'buildingOffice'},
     {v:'settings', perm:'settings', text:'站点设置', icon:'cog6Tooth'},
   ]},
 ];
@@ -602,7 +601,6 @@ async function nav(v, silent=false){
     else if (v==='automations') await viewAutomations();
     else if (v==='notification-groups') { __alert.tab='groups'; await viewAlerts(); }
     else if (v==='roles') await viewRoles();
-    else if (v==='departments') await viewDepartments();
     else if (v==='settings') await viewSettings();
     else document.getElementById('view').innerHTML = '<div class="muted">未知页面</div>';
     

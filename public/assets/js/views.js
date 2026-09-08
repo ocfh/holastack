@@ -877,7 +877,7 @@ async function viewUsers(){
       {key:'_raw',     label:'',         type:'raw'},
     ],
     rows: state.users,
-    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span>${u.role_id?` <span class="tag" title="角色">${esc(u.role_name||('#'+u.role_id))}</span>`:''}${u.department_id?` <span class="chip" title="部门">${esc(u.department_name||('#'+u.department_id))}</span>`:''}</td>
+    rowHtml: u => `<tr><td>${u.id}</td><td>${esc(u.username)}</td><td class="muted">${u.email?esc(u.email):'—'}</td><td><span class="tag">${u.role}</span>${u.role_id?` <span class="tag" title="角色">${esc(u.role_name||('#'+u.role_id))}</span>`:''}</td>
      <td class="muted">${u.tenant_id ? esc(u.tenant_name || ('#用户配置'+u.tenant_id)) : '—'}</td>
      <td class="muted">${new Date(u.created_at*1000).toLocaleString()}</td>
      <td><button class="btn ghost" onclick="editUser(${u.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delUser(${u.id}))">${ICON.trash}删除</button> <button class="btn ghost" onclick="changePwFor(${u.id})">${ICON.key}改密</button></td></tr>`,
@@ -3505,15 +3505,14 @@ async function viewRoles(){
   __rbc.catalog = catalog; __rbc.roles = roles;
   const rows = roles.map(row=>{
     const isSys = row.is_system || row.isSystem;
-    const tags = isSys ? `<span class="chip muted">${t('内置')}</span>` : `<span class="chip">${t('自定义')}</span>`;
-    const permChips = Array.isArray(row.permissions) ? row.permissions.map(p=>`<span class="chip">${esc(catalog[p]||p)}</span>`).join('') : '';
+    const permChips = Array.isArray(row.permissions) ? row.permissions.map(p=>`<span class="tag">${esc(catalog[p]||p)}</span>`).join('') : '';
     const gwUnl = row.gateways_unlimited || row.gatewaysUnlimited;
     const gwTxt = gwUnl ? t('无限制') : ((+row.gateways_limit||+row.gatewaysLimit||0) ? `${t('上限')} ${row.gateways_limit||row.gatewaysLimit}` : t('未配置'));
     const devTxt = (+row.devices_limit||+row.devicesLimit||0) ? `${t('上限')} ${row.devices_limit||row.devicesLimit}` : t('未配置');
     const actions = isSys
       ? ''
       : `<button class="btn ghost" onclick="roleEdit(${row.id})">${ICON.pencilSquare}${t('编辑')}</button> <button class="btn danger" onclick="roleDel(${row.id})">${ICON.trash}${t('删除')}</button>`;
-    return `<tr><td>${esc(row.name)}${tags}</td><td class="muted">${esc(row.description||'')}</td><td>${permChips}</td><td class="muted">${devTxt}</td><td class="muted">${gwTxt}</td><td class="muted">${row.user_count||row.userCount||0}</td><td>${adminBtn(actions)}</td></tr>`;
+    return `<tr><td>${esc(row.name)}</td><td class="muted">${esc(row.description||'')}</td><td><div style="display:flex;flex-wrap:wrap;gap:4px">${permChips}</div></td><td class="muted">${devTxt}</td><td class="muted">${gwTxt}</td><td class="muted">${row.user_count||row.userCount||0}</td><td>${adminBtn(actions)}</td></tr>`;
   }).join('')||`<tr><td colspan="7" class="muted">${t('暂无角色')}</td></tr>`;
   document.getElementById('view').innerHTML = `
     <div class="view-head"><h2>${ICON.shieldCheck||''}${t('角色管理')}</h2>${adminBtn(`<button onclick="roleNew()">${ICON.plus}${t('新建角色')}</button>`)}</div>
@@ -3647,65 +3646,4 @@ async function roleDel(id){
   toast(t('已删除'),'ok'); viewRoles();
 }
 
-/* ================= 部门管理 (P5) ================= */
-async function viewDepartments(){
-  const r = await api('GET','/api/departments'); const tree=r.data||[];
-  __rbc.deptTree = tree;
-  const flat=[];
-  (function walk(nodes, depth){ (nodes||[]).forEach(n=>{ flat.push({...n, depth}); walk(n.children, depth+1); }); })(tree, 0);
-  const nameMap={}; flat.forEach(n=>nameMap[n.id]=n.name);
-  const rows = flat.map(row=>`
-    <tr>
-      <td><span style="padding-left:${row.depth*22}px">${row.depth?ICON.chevronDown||'':'·'}${esc(row.name)}</span></td>
-      <td class="muted">${row.parent_id?esc(nameMap[row.parent_id]||'#'+row.parent_id):'—'}</td>
-      <td class="muted">${esc(row.description||'')}</td>
-      <td>${adminBtn(`
-        <button class="btn ghost" onclick="deptNew(${row.id})">${ICON.plus}${t('子部门')}</button>
-        <button class="btn ghost" onclick="deptEdit(${row.id})">${ICON.pencilSquare}${t('编辑')}</button>
-        <button class="btn danger" onclick="deptDel(${row.id})">${ICON.trash}${t('删除')}</button>`)}
-      </td>
-    </tr>`).join('')||`<tr><td colspan="4" class="muted">${t('暂无部门')}</td></tr>`;
-  document.getElementById('view').innerHTML = `
-    <div class="view-head"><h2>${ICON.buildingOffice||''}${t('部门管理')}</h2>${adminBtn(`<button onclick="deptNew(0)">${ICON.plus}${t('新建部门')}</button>`)}</div>
-    <div class="card" style="padding:4px 0"><table><thead><tr><th>${t('名称')}</th><th>${t('上级部门')}</th><th>${t('描述')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="muted" style="font-size:12px;margin-top:8px">${t('部门提示')}</div>`;
-}
-function deptParentOptions(selId){
-  const flat=[]; (function walk(nodes,d){ (nodes||[]).forEach(n=>{ flat.push({...n,d}); walk(n.children,d+1); }); })(__rbc.deptTree||[], 0);
-  return `<option value="0">${t('顶级部门')}</option>`+flat.filter(n=>n.id!==+selId).map(n=>{
-    const indent = n.d? '　'.repeat(n.d):'';
-    return `<option value="${n.id}" ${+n.id===+selId?'selected':''}>${indent}${esc(n.name)}</option>`;
-  }).join('');
-}
-function deptNew(parentId){ deptModal({id:0,name:'',parent_id:parentId||0,description:''}); }
-function deptEdit(id){
-  const flat=[]; (function walk(nodes){ (nodes||[]).forEach(n=>{ flat.push(n); walk(n.children); }); })(__rbc.deptTree||[],0);
-  const x=flat.find(n=>n.id===id); if(x) deptModal(x);
-}
-function deptModal(x){
-  const isNew = !x.id;
-  openModal(`<h3>${isNew?t('新建部门'):t('编辑部门')}</h3>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      <div><label>${t('部门名称')}</label><input id="dept_name" value="${esc(x.name||'')}"></div>
-      <div><label>${t('上级部门')}</label><select id="dept_parent">${deptParentOptions(x.parent_id||0)}</select></div>
-      <div><label>${t('描述')}</label><input id="dept_desc" value="${esc(x.description||'')}"></div>
-    </div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
-      <button class="ghost" onclick="closeModal()">${t('取消')}</button>
-      <button onclick="busy('保存中…', ()=>deptSave(${x.id||0}))">${t('保存')}</button>
-    </div>`);
-}
-async function deptSave(id){
-  const body = { name: v('dept_name'), parent_id: +v('dept_parent')||0, description: v('dept_desc') };
-  const r = id ? await api('PUT','/api/departments/'+id, body) : await api('POST','/api/departments', body);
-  if(r && r.error){ toast(String(r.error),'err'); return; }
-  closeModal(); toast(t('已保存'),'ok'); viewDepartments();
-}
-async function deptDel(id){
-  const ok = await new Promise(res=>confirmDlg(t('确定删除该部门？'), res));
-  if(!ok) return;
-  const r = await api('DELETE','/api/departments/'+id);
-  if(r && r.error){ toast(String(r.error),'err'); return; }
-  toast(t('已删除'),'ok'); viewDepartments();
-}
-window.__rbc = window.__rbc || { roles:[], catalog:{}, deptTree:[] };
+window.__rbc = window.__rbc || { roles:[], catalog:{} };

@@ -11,7 +11,6 @@ use holastack\Storage\Alert;
 use holastack\Storage\Automation;
 use holastack\Storage\ScheduledTask;
 use holastack\Storage\Role;
-use holastack\Storage\Department;
 use holastack\Auth\ApiKey;
 use holastack\Integration\Integration;
 use holastack\Core\Multicast;
@@ -1242,19 +1241,18 @@ class WebApp
         if ($cur['role'] === Auth::ROLE_ADMIN) {
             return Database::fetchAll(
                 "SELECT u.id, u.username, u.email, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name,
-                        u.role_id, u.department_id, COALESCE(r.name,'') AS role_name, COALESCE(d.name,'') AS department_name, u.created_at
+                        u.role_id, COALESCE(r.name,'') AS role_name, u.created_at
                  FROM users u
                  LEFT JOIN tenants t ON t.id=u.tenant_id
                  LEFT JOIN roles r ON r.id=u.role_id
-                 LEFT JOIN departments d ON d.id=u.department_id
                  ORDER BY u.id DESC"
             );
         }
         return [[
             'id' => $cur['id'], 'username' => $cur['username'], 'email' => $cur['email'] ?? '', 'role' => $cur['role'],
             'tenant_id' => (int) ($cur['tenant_id'] ?? 0), 'tenant_name' => '', 'created_at' => 0,
-            'role_id' => (int) ($cur['role_id'] ?? 0), 'department_id' => (int) ($cur['department_id'] ?? 0),
-            'role_name' => '', 'department_name' => '',
+            'role_id' => (int) ($cur['role_id'] ?? 0),
+            'role_name' => '',
         ]];
     }
 
@@ -1354,11 +1352,7 @@ class WebApp
         if ($roleId > 0 && !Role::get($roleId)) {
             return ['error' => 'invalid role_id'];
         }
-        $deptId = (int) ($p['department_id'] ?? $u['department_id'] ?? 0);
-        if ($deptId > 0 && !Department::get($deptId)) {
-            return ['error' => 'invalid department_id'];
-        }
-        Database::execute("UPDATE users SET role=?, tenant_id=?, email=?, role_id=?, department_id=? WHERE id=?", [$role, $tid, $email, $roleId, $deptId, $id]);
+        Database::execute("UPDATE users SET role=?, tenant_id=?, email=?, role_id=? WHERE id=?", [$role, $tid, $email, $roleId, $id]);
         return ['ok' => true];
     }
 
@@ -1882,37 +1876,6 @@ class WebApp
         return Role::delete($id);
     }
 
-    public static function listDepartments(): array
-    {
-        $s = self::scope();
-        $rows = Department::list($s['is_admin'] ? null : $s['tenant_id']);
-        return ['data' => Department::tree($rows)];
-    }
-    public static function createDepartment(array $p): array
-    {
-        $s = self::scope();
-        if (!$s['can_write']) {
-            return ['error' => 'forbidden'];
-        }
-        $p['tenant_id'] = (int) ($p['tenant_id'] ?? ($s['is_admin'] ? 0 : $s['tenant_id']));
-        return Department::create($p);
-    }
-    public static function updateDepartment(int $id, array $p): array
-    {
-        $s = self::scope();
-        if (!$s['can_write']) {
-            return ['error' => 'forbidden'];
-        }
-        return Department::update($id, $p);
-    }
-    public static function deleteDepartment(int $id): array
-    {
-        $s = self::scope();
-        if (!$s['can_write']) {
-            return ['error' => 'forbidden'];
-        }
-        return Department::delete($id);
-    }
 
     
 
