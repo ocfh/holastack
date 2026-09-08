@@ -4,10 +4,6 @@ namespace holastack\Storage;
 use holastack\DB\Database;
 use holastack\Core\Cron;
 
-/**
- * 周期定时任务：按 cron 周期把下行命令入队（复用 downlinks 表）。
- * 调度执行体可被 Web API（手动立即执行）与 NS 常驻循环调用。
- */
 class ScheduledTask
 {
     public static function list(?int $tenantId = null): array
@@ -84,9 +80,6 @@ class ScheduledTask
         return ['id' => $id];
     }
 
-    /**
-     * 立即执行一次：将命令入队（pending downlink），并推进 next_run_at。
-     */
     public static function run(array $task): array
     {
         $dev = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [(int) $task['device_id']]);
@@ -118,9 +111,6 @@ class ScheduledTask
         return ['id' => (int) $task['id'], 'downlink_id' => $dlId, 'next_run_at' => $next];
     }
 
-    /**
-     * 返回到期应执行的任务（enabled=1 且 next_run_at<=now）。
-     */
     public static function due(int $now): array
     {
         return Database::fetchAll("SELECT * FROM scheduled_tasks WHERE enabled=1 AND next_run_at>0 AND next_run_at<=?", [$now]);
@@ -139,7 +129,7 @@ class ScheduledTask
         }
         $n = Cron::next($cron, $from);
         if ($n === null) {
-            // 60 天内无匹配，仅记录但不置 0，避免下次反复重算
+
         }
         return $n;
     }

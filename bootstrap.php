@@ -1,12 +1,6 @@
 <?php
 
-
-
-
-
 namespace holastack;
-
-
 
 spl_autoload_register(function ($class) {
     $prefix = 'holastack\\';
@@ -25,7 +19,5 @@ if (!is_dir(ELW_LOG_DIR)) {
     @mkdir(ELW_LOG_DIR, 0777, true);
 }
 
-
-
-require_once __DIR__ . '/src/mbpolyfill.php';   // mbstring 未加载时的兜底（须在任何使用 mb_* 的代码前）
+require_once __DIR__ . '/src/mbpolyfill.php';
 require_once __DIR__ . '/src/langHelpers.php';

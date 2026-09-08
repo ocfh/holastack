@@ -3,31 +3,17 @@ namespace holastack\Auth;
 
 use holastack\DB\Database;
 
-
-
-
-
-
-
-
-
-
 class Auth
 {
     public const ROLE_ADMIN = 'admin';
     public const ROLE_TENANT = 'tenant';
     public const ROLE_OPERATOR = 'operator';
 
-    
-
     public const ROLES = [self::ROLE_ADMIN, self::ROLE_TENANT, self::ROLE_OPERATOR];
-
-    
-
 
     public static function tokenFromRequest(): ?string
     {
-        // ChirpStack 风格头（v4 REST）：Grpc-Metadata-Authorization: Bearer <token>
+
         $grpc = $_SERVER['HTTP_GRPC_METADATA_AUTHORIZATION'] ?? null;
         if (is_string($grpc) && preg_match('/Bearer\s+(\S+)/i', $grpc, $m)) {
             return $m[1];
@@ -103,11 +89,6 @@ class Auth
         return self::currentUser() !== null;
     }
 
-    
-
-
-
-
     public static function hasRole(string $role): bool
     {
         $u = self::currentUser();
@@ -120,7 +101,6 @@ class Auth
         if ($role === self::ROLE_TENANT) {
             return in_array($u['role'], [self::ROLE_ADMIN, self::ROLE_TENANT], true);
         }
-        
 
         return true;
     }
@@ -132,13 +112,6 @@ class Auth
             Database::execute("DELETE FROM auth_tokens WHERE token=?", [$token]);
         }
     }
-
-    
-
-
-
-
-
 
     public static function createUser(string $username, string $password, string $role = self::ROLE_ADMIN, int $tenantId = 0, ?string $newTenantName = null, ?string $email = null, int $roleId = 0): int
     {
@@ -172,9 +145,6 @@ class Auth
         );
         return Database::lastInsertId();
     }
-
-    
-
 
     public static function guardApi(string $minRole = self::ROLE_OPERATOR): void
     {
@@ -220,7 +190,6 @@ class Auth
         }
     }
 
-    /** 权限目录：key => 展示名。用于角色权限点选与前端菜单过滤。 */
     public const PERMISSION_CATALOG = [
         'dashboard'        => '仪表盘',
         'applications'     => '应用',
@@ -250,7 +219,6 @@ class Auth
         'settings'         => '站点设置',
     ];
 
-    /** 租户管理员默认权限（除平台级项）。 */
     public const TENANT_PERMS = [
         'dashboard', 'applications', 'devices', 'gateways', 'device-profiles', 'multicast-groups', 'fuota',
         'thing-models', 'dashboard-data', 'alerts', 'notification-groups', 'scheduled',
@@ -258,17 +226,12 @@ class Auth
         'uplinks', 'downlinks', 'events', 'noc', 'map', 'roles',
     ];
 
-    /** 只读操作员默认权限。 */
     public const OPERATOR_PERMS = [
         'dashboard', 'applications', 'devices', 'gateways', 'device-profiles', 'multicast-groups', 'fuota',
         'thing-models', 'dashboard-data', 'alerts', 'notification-groups', 'scheduled', 'automations',
         'api-logs', 'apidocs', 'loracalc', 'uplinks', 'downlinks', 'events', 'noc', 'map',
     ];
 
-    /**
-     * 当前用户（须携带 role_id 经过 currentUser 加载）的有效权限集合。
-     * admin 全量；否则优先取自定义角色 permissions；再退到系统角色默认集。
-     */
     public static function permissionsFor(?array $user = null): array
     {
         $user = $user ?? self::currentUser();
@@ -293,7 +256,6 @@ class Auth
         return self::OPERATOR_PERMS;
     }
 
-    /** 当前用户是否持有指定权限（admin 恒为 true）。 */
     public static function can(string $perm): bool
     {
         if (!self::isLoggedIn()) {

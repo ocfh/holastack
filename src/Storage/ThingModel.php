@@ -68,9 +68,6 @@ class ThingModel
         return ['id' => $id];
     }
 
-    /**
-     * 校验并清洗字段定义，返回标准化后的字段数组。
-     */
     public static function normalizeFields($fields): array
     {
         if (is_string($fields)) {
@@ -104,9 +101,6 @@ class ThingModel
         return is_array($a) ? self::normalizeFields($a) : [];
     }
 
-    /**
-     * 根据模型 codec 对解密后的 payload(hex) 解码，返回 [key => ['value'=>?, 'text'=>string]]。
-     */
     public static function decodePayload(array $fields, string $codec, string $hex): array
     {
         $codec = strtoupper($codec);
@@ -180,7 +174,6 @@ class ThingModel
             return ['value' => $txt, 'text' => $txt];
         }
 
-        // 数值类型
         $num = self::bytesToNumber($raw, $srcType, $endian);
         $scale = (float) ($f['scale'] ?? 1.0);
         $add = (float) ($f['add'] ?? 0.0);
@@ -197,7 +190,7 @@ class ThingModel
         if ($str === false || trim($str) === '') {
             return [];
         }
-        // 部分设备把 JSON 当作 UTF-8 文本传输，先尝试原样，若失败再尝试去掉末尾空白
+
         $obj = json_decode($str, true);
         if (!is_array($obj)) {
             return [];
@@ -314,14 +307,11 @@ class ThingModel
 
     private static function cleanText(string $s): string
     {
-        // 去掉字符串两端的非可打印字节（C 风格字符串常有 \0 填充）
+
         $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $s);
         return trim($s);
     }
 
-    /**
-     * 将解码结果写入读数历史并更新设备最新值。
-     */
     public static function persist(int $devId, int $appId, array $decoded, int $fcnt): void
     {
         if (!$decoded) {

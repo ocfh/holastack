@@ -1,16 +1,6 @@
 <?php
 namespace holastack\Integration;
 
-
-
-
-
-
-
-
-
-
-
 class AmqpClient
 {
     private $socket;
@@ -33,25 +23,25 @@ class AmqpClient
 
     private static function encShortStr(string $s): string
     {
-        return chr(strlen($s)) . $s; 
+        return chr(strlen($s)) . $s;
 
     }
 
     private static function encLongStr(string $s): string
     {
-        return pack('N', strlen($s)) . $s; 
+        return pack('N', strlen($s)) . $s;
 
     }
 
     private function frame(int $type, int $channel, string $payload): string
     {
         return chr($type)
-            . pack('n', $channel)   
+            . pack('n', $channel)
 
-            . pack('N', strlen($payload)) 
+            . pack('N', strlen($payload))
 
             . $payload
-            . "\xce";               
+            . "\xce";
 
     }
 
@@ -101,14 +91,10 @@ class AmqpClient
         $channel = unpack('n', $hdr[1] . $hdr[2])[1];
         $size = unpack('N', $hdr[3] . $hdr[4] . $hdr[5] . $hdr[6])[1];
         $payload = $size > 0 ? $this->readn($size) : '';
-        $this->readn(1); 
+        $this->readn(1);
 
         return ['type' => $type, 'channel' => $channel, 'payload' => $payload];
     }
-
-    
-
-
 
     private function readMethod(int $cls, int $mth): ?array
     {
@@ -118,7 +104,7 @@ class AmqpClient
                 return null;
             }
             if ($fr['type'] === 8) {
-                continue; 
+                continue;
 
             }
             if ($fr['type'] === 1 && strlen($fr['payload']) >= 4) {
@@ -140,45 +126,34 @@ class AmqpClient
         }
         stream_set_timeout($this->socket, 3);
 
-        
-
         if (@fwrite($this->socket, "AMQP\x00\x00\x09\x01") === false) {
             return false;
         }
 
-        
-
         if ($this->readMethod(10, 10) === null) {
             return false;
         }
-        
 
         $response = "\0" . $this->user . "\0" . $this->pass;
-        $args = pack('N', 0)                          
+        $args = pack('N', 0)
 
-            . self::encShortStr('PLAIN')              
+            . self::encShortStr('PLAIN')
 
-            . self::encLongStr($response)             
+            . self::encLongStr($response)
 
-            . self::encShortStr('en_US');             
+            . self::encShortStr('en_US');
 
         $this->writeFrame(1, 0, pack('n', 10) . pack('n', 11) . $args);
-
-        
 
         if ($this->readMethod(10, 30) === null) {
             return false;
         }
         $this->writeFrame(1, 0, pack('n', 10) . pack('n', 31) . pack('n', 0) . pack('N', 0) . pack('n', 0));
 
-        
-
         $this->writeFrame(1, 0, pack('n', 10) . pack('n', 40) . self::encShortStr($this->vhost) . self::encShortStr('') . "\x00");
         if ($this->readMethod(10, 41) === null) {
             return false;
         }
-
-        
 
         $this->writeFrame(1, $this->channel, pack('n', 20) . pack('n', 10) . self::encShortStr(''));
         if ($this->readMethod(20, 11) === null) {
@@ -187,31 +162,22 @@ class AmqpClient
         return true;
     }
 
-    
-
-
-
     public function publish(string $exchange, string $routingKey, string $message): bool
     {
         if (!$this->socket) {
             return false;
         }
-        
 
-        $args = pack('n', 0)                         
+        $args = pack('n', 0)
 
             . self::encShortStr($exchange)
             . self::encShortStr($routingKey)
-            . "\x00" . "\x00";                       
+            . "\x00" . "\x00";
 
         $this->writeFrame(1, $this->channel, pack('n', 60) . pack('n', 40) . $args);
 
-        
-
         $header = pack('n', 60) . pack('n', 0) . pack('J', strlen($message)) . pack('n', 0x0000);
         $this->writeFrame(2, $this->channel, $header);
-
-        
 
         $this->writeFrame(3, $this->channel, $message);
         return true;
@@ -220,7 +186,6 @@ class AmqpClient
     public function disconnect(): void
     {
         if ($this->socket) {
-            
 
             @$this->writeFrame(1, $this->channel, pack('n', 20) . pack('n', 40) . pack('n', 0) . pack('n', 0) . self::encShortStr(''));
             @$this->writeFrame(1, 0, pack('n', 10) . pack('n', 50) . pack('n', 0) . pack('n', 0) . self::encShortStr(''));

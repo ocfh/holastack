@@ -1,42 +1,9 @@
 <?php
 namespace holastack\Core;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Beacon
 {
-    public const BEACON_PERIOD = 128; 
-
-
-    
-
-
-
-
-
-
-
-
-
+    public const BEACON_PERIOD = 128;
 
     public static function buildFrame(
         int $gpsSeconds,
@@ -62,19 +29,14 @@ class Beacon
             $crc1 = self::crc16($crc1Input);
             $macPayload = $rfu1 . $paramByte . $time . pack('v', $crc1) . $gwSpecific . $rfu2 . pack('v', self::crc16($gwSpecific . $rfu2));
         } else {
-            
 
             $crc1 = self::crc16($rfu1 . $time);
             $macPayload = $rfu1 . $time . pack('v', $crc1) . $gwSpecific . $rfu2 . pack('v', self::crc16($gwSpecific . $rfu2));
         }
 
-        return $macPayload; 
+        return $macPayload;
 
     }
-
-    
-
-
 
     public static function crc16(string $data): int
     {
@@ -91,24 +53,6 @@ class Beacon
         return $crc & 0xFFFF;
     }
 
-    
-
-
-
-
-
-
-
-
-    /**
-     * 计算 ping slot 偏移（LoRaWAN 规范 §13.2）。
-     * - 块布局：beaconTime(4, LE) | DevAddr(4, LE) | 0x0000(2) | pad(6)，固定 16 字节。
-     * - 密钥：1.0.x 用规范规定的全零固定密钥；1.1 用 FNwkSIntKey。
-     *   此前误把 1.0.x 的密钥改成 NwkSKey，导致 NS 算出的 ping-offset 与设备端不一致，下行永远错过窗口。
-     * - 1.1 的结果需先 & 0x0FFF 再取模（规范 §13.2 1.1 版）；1.0.x 不掩码（与设备端一致）。
-     * @param string $key 16 字节原始密钥（hex2bin 后的二进制）；传空串表示 1.0.x 全零密钥
-     * @param bool $mask12 是否进行 &0x0FFF 掩码（1.1 为 true）
-     */
     public static function computePingOffset(int $gpsSeconds, int $devAddr, int $pingPeriod30, string $key = '', bool $mask12 = false): int
     {
         if ($pingPeriod30 <= 0) {

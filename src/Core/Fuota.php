@@ -4,29 +4,8 @@ namespace holastack\Core;
 use holastack\DB\Database;
 use holastack\Crypto\AES;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Fuota
 {
-    
 
     public const CID_FRAG_SESSION_SETUP_REQ = 0x08;
     public const CID_FRAG_DATA_BLOCK_REQ    = 0x09;
@@ -35,12 +14,8 @@ class Fuota
     public const CID_CLK_SYNC_REQ           = 0x0C;
     public const CID_MC_GROUP_DELETE_REQ    = 0x0D;
 
-    
-
     public const FPORT_SETUP  = 200;
     public const FPORT_STATUS = 201;
-
-    
 
     public const STATE_PENDING       = 'PENDING';
     public const STATE_SETUP         = 'SETUP';
@@ -49,11 +24,7 @@ class Fuota
     public const STATE_DONE          = 'DONE';
     public const STATE_FAILED        = 'FAILED';
 
-    
-
     public const ACTIVE_STATES = [self::STATE_SETUP, self::STATE_FRAGMENTATION, self::STATE_STATUS];
-
-    
 
     public static function isFuotaCid(int $cid): bool
     {
@@ -67,32 +38,24 @@ class Fuota
         ], true);
     }
 
-    
-
-
-
-
     public static function fuotaCidPayloadLen(int $cid): int
     {
         switch ($cid) {
-            case self::CID_FRAG_SESSION_SETUP_REQ: return 1; 
+            case self::CID_FRAG_SESSION_SETUP_REQ: return 1;
 
-            case self::CID_FRAG_DATA_BLOCK_REQ:    return 1; 
+            case self::CID_FRAG_DATA_BLOCK_REQ:    return 1;
 
-            case self::CID_FRAG_STATUS_REQ:        return 6; 
+            case self::CID_FRAG_STATUS_REQ:        return 6;
 
-            case self::CID_MC_GROUP_SETUP_REQ:     return 1; 
+            case self::CID_MC_GROUP_SETUP_REQ:     return 1;
 
-            case self::CID_CLK_SYNC_REQ:           return 1; 
+            case self::CID_CLK_SYNC_REQ:           return 1;
 
-            case self::CID_MC_GROUP_DELETE_REQ:    return 1; 
+            case self::CID_MC_GROUP_DELETE_REQ:    return 1;
 
             default:                               return -1;
         }
     }
-
-    
-
 
     public static function listCampaigns(int $tenantId = 0, bool $admin = false): array
     {
@@ -192,14 +155,6 @@ class Fuota
         return $camp;
     }
 
-    
-
-
-    
-
-
-
-
     public static function fragmentFirmware(string $bin, int $fragSize, int $redundancy = 1): array
     {
         if ($fragSize <= 0) {
@@ -211,10 +166,8 @@ class Fuota
         for ($i = 0; $i < $fragN; $i++) {
             $fragments[] = substr($bin, $i * $fragSize, $fragSize);
         }
-        
 
         for ($r = 0; $r < $redundancy; $r++) {
-            
 
             $fragments[] = $fragments[($fragN - 1 - ($r % $fragN))] ?? '';
         }
@@ -227,16 +180,6 @@ class Fuota
             'redundancy' => $redundancy,
         ];
     }
-
-    
-
-
-    
-
-
-
-
-
 
     public static function buildFragSessionSetupReq(
         int $fragIndex, int $fragSize, int $fragN, string $fragAuthDigest, bool $udrOn = false
@@ -254,18 +197,12 @@ class Fuota
              . chr($session)
              . pack('v', $fragN & 0xFFFF)
              . substr($fragAuthDigest, 0, 4);
-        
 
         if (strlen($out) % 2 === 1) {
             $out .= "\x00";
         }
         return $out;
     }
-
-    
-
-
-
 
     public static function buildFragDataBlockReq(int $fragIndex, int $blockN, string $data, bool $more = false): string
     {
@@ -277,26 +214,16 @@ class Fuota
              . $data;
     }
 
-    
-
-
-
     public static function buildFragStatusReq(): string
     {
         return chr(self::CID_FRAG_STATUS_REQ);
     }
 
-    
-
-
-
-
-
     public static function buildMcGroupSetupReq(
         int $mcGroupId, string $mcAddrBin, string $mcNwkSKey, string $mcKEKey, int $mcDr, int $mcFreq
     ): string {
         $mcKeyEnc = AES::ecbEncrypt($mcKEKey, $mcNwkSKey);
-        $mcFreqBytes = substr(pack('V', $mcFreq & 0xFFFFFF), 0, 3); 
+        $mcFreqBytes = substr(pack('V', $mcFreq & 0xFFFFFF), 0, 3);
 
         return chr(self::CID_MC_GROUP_SETUP_REQ)
              . chr($mcGroupId & 0xFF)
@@ -306,32 +233,15 @@ class Fuota
              . $mcFreqBytes;
     }
 
-    
-
-
-
-
     public static function buildClkSyncReq(bool $ansRequired = true): string
     {
         return chr(self::CID_CLK_SYNC_REQ) . chr(($ansRequired ? 1 : 0) << 7);
     }
 
-    
-
-
-
     public static function buildMcGroupDeleteReq(int $mcGroupId): string
     {
         return chr(self::CID_MC_GROUP_DELETE_REQ) . chr($mcGroupId & 0xFF);
     }
-
-    
-
-
-    
-
-
-
 
     public static function buildFuotaSetupReq(string $descriptor, string $fwVersion, int $fwSize, int $fwCrc): string
     {
@@ -342,20 +252,10 @@ class Fuota
              . pack('V', $fwCrc & 0xFFFFFFFF);
     }
 
-    
-
-
-
-
     public static function buildFuotaStatusReq(int $fragIndex = 0, int $statusType = 0): string
     {
         return chr((($fragIndex & 0x07) << 5) | ($statusType & 0x1F));
     }
-
-    
-
-
-    
 
     public static function parseFragSessionSetupAns(string $payload): array
     {
@@ -367,8 +267,6 @@ class Fuota
         ];
     }
 
-    
-
     public static function parseFragDataBlockAns(string $payload): array
     {
         $b = ord($payload[0] ?? "\x00");
@@ -378,8 +276,6 @@ class Fuota
             'buffer_full' => (bool) ($b & 0x04),
         ];
     }
-
-    
 
     public static function parseMcGroupSetupAns(string $payload): array
     {
@@ -391,15 +287,11 @@ class Fuota
         ];
     }
 
-    
-
     public static function parseClkSyncAns(string $payload): array
     {
         $b = ord($payload[0] ?? "\x00");
         return ['clk_sync_error' => (bool) ($b & 0x01)];
     }
-
-    
 
     public static function parseFragStatusAns(string $payload): array
     {
@@ -415,8 +307,6 @@ class Fuota
         ];
     }
 
-    
-
     public static function parseFuotaSetupAns(string $payload): array
     {
         $b = ord($payload[0] ?? "\x00");
@@ -427,8 +317,6 @@ class Fuota
             'fw_size_error'    => (bool) ($b & 0x08),
         ];
     }
-
-    
 
     public static function parseFuotaStatusAns(string $payload): array
     {
@@ -441,7 +329,6 @@ class Fuota
             $out['frag_nb_received'] = unpack('v', substr($payload, 1, 2))[1] ?? 0;
             $out['frag_nb_missing']  = unpack('v', substr($payload, 3, 2))[1] ?? 0;
         } else {
-            
 
             $bitmap = substr($payload, 1);
             $missing = 0;
@@ -453,14 +340,6 @@ class Fuota
         }
         return $out;
     }
-
-    
-
-
-    
-
-
-
 
     public static function startCampaign(int $campaignId, string $firmwareBin, array $opts = []): array
     {
@@ -483,8 +362,6 @@ class Fuota
         $frag = self::fragmentFirmware($firmwareBin, (int) $camp['fragment_size'], (int) $camp['redundancy']);
         $fragN = count($frag['fragments']);
         $sessionSetup = self::buildFragSessionSetupReq(0, $frag['frag_size'], $frag['frag_n'], $frag['digest'], false);
-
-        
 
         Database::execute("DELETE FROM fuota_frames WHERE campaign_id=?", [$campaignId]);
         foreach ($frag['fragments'] as $idx => $data) {
@@ -534,11 +411,6 @@ class Fuota
         return self::startCampaign($campaignId, $firmwareBin, []);
     }
 
-    
-
-
-
-
     public static function activeCampaignForDevice(string $devEui): ?array
     {
         $dev = Database::fetch("SELECT id FROM devices WHERE LOWER(dev_eui)=?", [strtolower($devEui)]);
@@ -561,12 +433,6 @@ class Fuota
         return ['campaign' => $row, 'deployment' => $row];
     }
 
-    
-
-
-
-
-
     public static function handleMacAnswer(array $ctx): array
     {
         $cid = (int) $ctx['cid'];
@@ -576,7 +442,7 @@ class Fuota
         $log = '';
 
         switch ($cid) {
-            case self::CID_FRAG_SESSION_SETUP_REQ: 
+            case self::CID_FRAG_SESSION_SETUP_REQ:
 
                 $ans = self::parseFragSessionSetupAns($ctx['payload']);
                 $log = 'FragSessionSetupAns ' . json_encode($ans, JSON_UNESCAPED_UNICODE);
@@ -593,7 +459,7 @@ class Fuota
                 }
                 break;
 
-            case self::CID_FRAG_DATA_BLOCK_REQ: 
+            case self::CID_FRAG_DATA_BLOCK_REQ:
 
                 $ans = self::parseFragDataBlockAns($ctx['payload']);
                 $log = 'FragDataBlockAns ' . json_encode($ans, JSON_UNESCAPED_UNICODE);
@@ -605,7 +471,7 @@ class Fuota
                 }
                 break;
 
-            case self::CID_FRAG_STATUS_REQ: 
+            case self::CID_FRAG_STATUS_REQ:
 
                 $ans = self::parseFragStatusAns($ctx['payload']);
                 $log = 'FragStatusAns ' . json_encode($ans, JSON_UNESCAPED_UNICODE);
@@ -615,7 +481,7 @@ class Fuota
                 );
                 break;
 
-            case self::CID_MC_GROUP_SETUP_REQ: 
+            case self::CID_MC_GROUP_SETUP_REQ:
 
                 $ans = self::parseMcGroupSetupAns($ctx['payload']);
                 $log = 'McGroupSetupAns ' . json_encode($ans, JSON_UNESCAPED_UNICODE);
@@ -632,13 +498,13 @@ class Fuota
                 }
                 break;
 
-            case self::CID_CLK_SYNC_REQ: 
+            case self::CID_CLK_SYNC_REQ:
 
                 $ans = self::parseClkSyncAns($ctx['payload']);
                 $log = 'ClkSyncAns ' . json_encode($ans, JSON_UNESCAPED_UNICODE);
                 break;
 
-            case self::CID_MC_GROUP_DELETE_REQ: 
+            case self::CID_MC_GROUP_DELETE_REQ:
 
                 $log = 'McGroupDeleteAns';
                 break;
@@ -649,11 +515,6 @@ class Fuota
         $dep = Database::fetch("SELECT state FROM fuota_deployments WHERE id=?", [$depId]);
         return ['log' => $log, 'deployment_state' => $dep ? $dep['state'] : null];
     }
-
-    
-
-
-
 
     public static function handleAppPayload(array $ctx): array
     {
@@ -686,7 +547,6 @@ class Fuota
                      $nbMissing === 0 ? self::STATE_DONE : self::STATE_STATUS, $now, $depId]
                 );
             } else {
-                
 
                 Database::execute(
                     "UPDATE fuota_deployments SET status_ans=1, frag_nb_missing=?,
@@ -700,11 +560,6 @@ class Fuota
         return ['log' => ''];
     }
 
-    
-
-
-
-
     public static function buildGroupSetupForCampaign(array $camp, array $group): string
     {
         $keKey = hex2bin((string) ($camp['mc_ke_key'] ?? ''));
@@ -713,7 +568,7 @@ class Fuota
         }
         $freqHz = (int) ($group['frequency'] ?? 0);
         if ($freqHz <= 0) {
-            $freqHz = 868500000; 
+            $freqHz = 868500000;
 
         }
         return self::buildMcGroupSetupReq(
@@ -733,10 +588,6 @@ class Fuota
             [$campaignId, $offset, $count]
         );
     }
-
-    
-
-
 
     public static function finalizeCampaign(int $campaignId): array
     {
@@ -758,7 +609,6 @@ class Fuota
                 $failed++;
             }
         }
-        
 
         $state = ($done === 0 && $failed > 0) ? self::STATE_FAILED : self::STATE_DONE;
         Database::execute(
@@ -767,18 +617,6 @@ class Fuota
         );
         return ['state' => $state, 'done' => $done, 'failed' => $failed, 'total' => count($deps)];
     }
-
-    
-
-
-    
-
-
-
-
-
-
-
 
     public static function buildMulticastDown(array $group, int $fPort, string $payload, string $fopts = ''): string
     {

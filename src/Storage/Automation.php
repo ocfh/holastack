@@ -3,15 +3,6 @@ namespace holastack\Storage;
 
 use holastack\DB\Database;
 
-/**
- * 联动模型（自动化）：设备字段满足触发条件时自动执行动作。
- *
- * 触发：设备某字段（温度等）与指定操作符/阈值比较成立；
- * 动作：下发下行命令到指定设备，或向通知组 Webhook 推送消息。
- * 采用冷却时间（cooldown_seconds）避免同一条件反复刷动作。
- *
- * 评估入口由 NetworkServer 在上行解码后调用：Automation::evaluateLinkages()。
- */
 class Automation
 {
     public const OPERATORS = ['gt', 'ge', 'lt', 'le', 'eq', 'neq', 'in'];
@@ -86,9 +77,6 @@ class Automation
         return ['id' => $id];
     }
 
-    /**
-     * @return array 触发条件操作符及用于下拉的标签映射
-     */
     public static function operatorOptions(): array
     {
         return [
@@ -102,11 +90,6 @@ class Automation
         ];
     }
 
-    /**
-     * 上行解码后评估联动规则。
-     * @param array $device  设备行（含 id, tenant_id, app_id）
-     * @param array $decoded [field_key => ['value'=>?, 'text'=>string]]
-     */
     public static function evaluateLinkages(array $device, array $decoded): void
     {
         if ($decoded === []) {
@@ -179,7 +162,6 @@ class Automation
             return 'downlink #' . Database::lastInsertId() . ' ' . $detail;
         }
 
-        // notify：向通知组 Webhook 推送
         Alert::notifyForAutomation((int) ($row['notify_group_id'] ?? 0), 'automation', $name . '：' . $detail, [
             'automation_id' => (int) $row['id'],
             'source_device' => $src,

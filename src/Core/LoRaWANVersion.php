@@ -1,22 +1,9 @@
 <?php
 
-
-
-
-
-
-
-
-
-
-
-
-
 namespace holastack\Core;
 
 class LoRaWANVersion
 {
-    
 
     public const DEFAULT = '1.0.3';
 

@@ -3,15 +3,8 @@ namespace holastack\Core;
 
 use holastack\Crypto\LoRaWANCrypto;
 
-
-
-
-
-
-
 class Frame
 {
-    
 
     public const MTYPE_JOIN_REQUEST       = 0x00;
     public const MTYPE_JOIN_ACCEPT        = 0x01;
@@ -25,12 +18,8 @@ class Frame
         return (ord($phy[0]) >> 5) & 0x07;
     }
 
-    
-
-
     public static function parseJoinRequest(string $phy): array
     {
-        
 
         return [
             'mhdr'     => $phy[0],
@@ -43,17 +32,9 @@ class Frame
 
     public static function joinRequestDataForMic(string $phy): string
     {
-        return substr($phy, 0, 19); 
+        return substr($phy, 0, 19);
 
     }
-
-    
-
-
-    
-
-
-
 
     public static function buildJoinAccept(
         string $appKey, string $appNonce, string $netId, string $devAddr,
@@ -73,14 +54,9 @@ class Frame
         }
         $plaintext .= $mic;
 
-        
-
         $encryptedBody = LoRaWANCrypto::encryptJoinAccept($appKey, substr($plaintext, 1));
         return "\x20" . $encryptedBody;
     }
-
-    
-
 
     public static function parseDataUp(string $phy): array
     {
@@ -95,7 +71,6 @@ class Frame
         $fport = null;
         $frmpayload = '';
         if (strlen($phy) > $pos + 4) {
-            
 
             $fport = ord($phy[$pos]);
             $pos++;
@@ -126,7 +101,6 @@ class Frame
         if ($fcntLo >= $lastLo) {
             return ($lastHi << 16) | $fcntLo;
         }
-        
 
         return (($lastHi + 1) << 16) | $fcntLo;
     }
@@ -143,20 +117,6 @@ class Frame
         }
         return LoRaWANCrypto::frmPayloadCrypt($key, $dir, $devAddr, $fcnt, $payload);
     }
-
-    
-
-
-    
-
-
-
-
-
-
-
-
-
 
     public static function buildDataDown(
         string $nwkSKey, string $appSKey, int $dir, string $devAddr, int $fcnt,
@@ -178,13 +138,6 @@ class Frame
         $mic = LoRaWANCrypto::dataMIC($nwkSKey, $dir, $devAddr, $fcnt, $dataWithoutMic);
         return $dataWithoutMic . $mic;
     }
-
-    
-
-
-    
-
-
 
     public static function buildJoinAccept1_1(
         string $nwkKey, string $appNonce, string $netId, string $devAddr,
@@ -212,8 +165,6 @@ class Frame
         return LoRaWANCrypto::dataMICUp1_1($fNwkSIntKey, $sNwkSIntKey, $devAddr, $fcnt, $dataWithoutMic, $txDr, $txCh) === $mic;
     }
 
-    
-
     public static function decryptFRMPayload1_1(string $nwkSEncKey, string $appSKey, int $dir, string $devAddr, int $fcnt, ?int $fport, string $payload): string
     {
         if ($payload === '' || $fport === null) {
@@ -222,12 +173,6 @@ class Frame
         $key = ($fport === 0) ? $nwkSEncKey : $appSKey;
         return LoRaWANCrypto::frmPayloadCrypt($key, $dir, $devAddr, $fcnt, $payload);
     }
-
-    
-
-
-
-
 
     public static function buildDataDown1_1(
         string $sNwkSIntKey, string $nwkSEncKey, string $appSKey, string $devAddr, int $fcnt,

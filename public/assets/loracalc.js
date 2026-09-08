@@ -1,15 +1,6 @@
-
 (function () {
   'use strict';
 
-  /* ============================================================
-   * LoRa / LoRaWAN 参数计算器 —— 复刻 Semtech 官方 LoRa Calculator
-   * 中文版 · 双页（LoRa 射频 / LoRaWAN 网络）· 纯前端计算
-   * 设备电流/灵敏度取自各器件数据手册典型值（与官方计算器设备模型一致）
-   * ============================================================ */
-
-  // ---- 设备模型（数据手册典型值）----
-  // tx 表：[功率dBm, 电流mA]，线性插值；txDC=DC-DC 稳压，txLDO=LDO 稳压
   const Lc_DEVICES = {
     LR1110: {
       label: 'LR1110', freqMin: 150, freqMax: 960, freqDef: 868.1,
@@ -67,13 +58,11 @@
   };
   const Lc_DEVICE_ORDER = ['LR1110', 'LR112x', 'SX1280', 'SX1261', 'SX1262', 'SX127X'];
 
-  // SF 最小解调 SNR（LoRa）——官方计算器实际使用的表（略低于教科书值）
   const Lc_SNR = { 5: -2.5, 6: -5.5, 7: -8.2, 8: -11, 9: -14, 10: -16.7, 11: -19.5, 12: -21.5 };
-  const Lc_FSK_SNR = 10; // FSK 解调典型所需 SNR
-  // LoRa 标称带宽 → 实际频率（官方计算器取值，如 8kHz=7810Hz）
+  const Lc_FSK_SNR = 10;
+
   const Lc_BW_HZ = { 8: 7810, 10: 10417, 15: 15625, 20: 20833, 31: 31250, 41: 41667, 62: 62500, 125: 125000, 250: 250000, 500: 500000, 200: 203125, 400: 406250, 800: 812500 };
 
-  // LoRaWAN 区域 → DR 映射 [SF, BW(kHz)] 与默认频率 / RX2-DR
   const Lc_REGIONS = {
     EU868: { freq: 868.1, rx2: 0, drs: { 0: [12, 125], 1: [11, 125], 2: [10, 125], 3: [9, 125], 4: [8, 125], 5: [7, 125], 6: [7, 250] } },
     US915: { freq: 903.9, rx2: 8, drs: { 0: [10, 125], 1: [9, 125], 2: [8, 125], 3: [7, 125], 4: [8, 500], 8: [12, 500], 9: [11, 500], 10: [10, 500], 11: [9, 500], 12: [8, 500], 13: [7, 500] } },
@@ -87,7 +76,6 @@
     CN779: { freq: 779.5, rx2: 0, drs: { 0: [12, 125], 1: [11, 125], 2: [10, 125], 3: [9, 125], 4: [8, 125], 5: [7, 125] } }
   };
 
-  // ---- 工具函数 ----
   function Lc_interp(tbl, p) {
     if (p <= tbl[0][0]) return tbl[0][1];
     const last = tbl[tbl.length - 1];
@@ -135,8 +123,6 @@
   function Lc_chk(id) { const el = document.getElementById(id); return !!(el && el.checked); }
   function Lc_val(id, def) { const el = document.getElementById(id); return el ? el.value : def; }
 
-  // ---- LoRa 空中时间（与官方 Semtech 计算器一致）----
-  // 负载符号数：SF5/6 用官方低 SF 公式（round-half-up/ceil，无 -4SF 无尾部 +8）；SF7+ 用标准公式
   function Lc_payloadSyms(sf, bwKHz, payload, crcOn, implicit, ldro, crN) {
     const ih = implicit ? 1 : 0, de = ldro ? 1 : 0, crc = crcOn ? 1 : 0;
     const den = 4 * (sf - 2 * de);
@@ -174,7 +160,7 @@
     return -174 + 10 * Math.log10(bwHz) + nf + Lc_FSK_SNR;
   }
   function Lc_xtalLoRa(tsym, fHz, boosted) {
-    // 官方公式：MaxCrystalTolerance(Hz) = 8/tsym；ppm = Hz/freq
+
     return (8 / tsym) / fHz * 1e6;
   }
   function Lc_xtalFsk(bitrateHz, fHz) {
@@ -184,7 +170,6 @@
     return Math.pow(10, (lb - 32.45 - 20 * Math.log10(fMHz)) / (10 * n));
   }
 
-  // ---- 模板构建 ----
   function Lc_deviceOpts(sel) {
     return Lc_DEVICE_ORDER.map(d => `<option value="${d}"${d === sel ? ' selected' : ''}>${Lc_DEVICES[d].label}</option>`).join('');
   }
@@ -460,7 +445,6 @@
 </div>`;
   }
 
-  // ---- Tab 切换 ----
   function Lc_switchTab(which) {
     const lora = which === 'LoRa';
     document.getElementById('panelLoRa').classList.toggle('hidden', !lora);
@@ -469,7 +453,6 @@
     document.getElementById('tabLW').classList.toggle('active', !lora);
   }
 
-  // ---- 设备联动（LoRa 页）----
   function Lc_rDevice() {
     const dev = Lc_DEVICES[Lc_val('r_device', 'LR1110')];
     document.getElementById('r_reg').innerHTML = Lc_regOpts(dev, dev.defReg);
@@ -499,7 +482,6 @@
     Lc_rCalc();
   }
 
-  // ---- LoRa 页计算 ----
   function Lc_rCalc() {
     const dev = Lc_DEVICES[Lc_val('r_device', 'LR1110')];
     const reg = Lc_val('r_reg', 'DC-DC');
@@ -532,7 +514,7 @@
       tsym = 1 / (fdr * 1000);
       totalSyms = r.bits;
       preambleSyms = preambleBits / (fdr * 1000);
-      sens = Lc_sensFsk(Lc_num('r_fdr', 50) * 2, dev.nf); // 近似：以 2×数据速率估算占用带宽
+      sens = Lc_sensFsk(Lc_num('r_fdr', 50) * 2, dev.nf);
       xtal = Lc_xtalFsk(fdr * 1000, fHz);
       effDr = (payload * 8) / toaSec;
       document.getElementById('r_midx').textContent = '调制指数 Modulation Index：' + Lc_fmt(2 * fdev / fdr, 3);
@@ -571,12 +553,11 @@
     document.getElementById('r_xtal').textContent = Lc_fmt(xtal, 2);
     document.getElementById('r_radiocons').textContent = Lc_fmt(Itx, 1);
 
-    // 能耗：周期 T = tx + rx + rxPeriod
     const T = Math.max(1e-6, (txPeriod + rxDur + rxPeriod) / 1000);
     const fTx = (txPeriod / 1000) / T, fRx = (rxDur / 1000) / T, fSl = (rxPeriod / 1000) / T;
-    const avgTx = Itx * 1000 * fTx;     // µA
-    const avgRx = Irx * 1000 * fRx;     // µA
-    const avgSl = sleepUA * fSl;        // µA
+    const avgTx = Itx * 1000 * fTx;
+    const avgRx = Irx * 1000 * fRx;
+    const avgSl = sleepUA * fSl;
     const avgTot = avgTx + avgRx + avgSl;
     document.getElementById('r_txcur').textContent = Lc_fmt(Itx, 1);
     document.getElementById('r_rxcur').textContent = Lc_fmt(Irx, 1);
@@ -586,7 +567,6 @@
     document.getElementById('r_avgTot').textContent = Lc_uA(avgTot);
   }
 
-  // ---- 设备联动（LoRaWAN 页）----
   function Lc_wDevice() {
     const dev = Lc_DEVICES[Lc_val('w_device', 'SX1262')];
     document.getElementById('w_reg').innerHTML = Lc_regOpts(dev, dev.defReg);
@@ -621,7 +601,6 @@
     Lc_wCalc();
   }
 
-  // ---- LoRaWAN 页计算 ----
   function Lc_wCalc() {
     const dev = Lc_DEVICES[Lc_val('w_device', 'SX1262')];
     const reg = Lc_val('w_reg', 'DC-DC');
@@ -655,9 +634,9 @@
     const rxPerDown = rx1pct * rx1.toaSec + (1 - rx1pct) * rx2.toaSec;
 
     const uplinksPerHour = 3600 / interval;
-    const txActiveH = (1 + retrans) * toaUp * uplinksPerHour;       // s/h
+    const txActiveH = (1 + retrans) * toaUp * uplinksPerHour;
     const downlinksPerHour = dlday / 24;
-    const rxActiveH = downlinksPerHour * rxPerDown;                  // s/h
+    const rxActiveH = downlinksPerHour * rxPerDown;
     const sleepH = Math.max(0, 3600 - txActiveH - rxActiveH);
 
     const Itx = Lc_txCurrent(dev, txpower, reg, rfpath);
@@ -693,7 +672,6 @@
   }
   function Lc_VAL_check(id, def) { const v = Lc_val(id, def); return v || def; }
 
-  // ---- CSS ----
   const Lc_CSS = `
 .loracalc{--lc-panel2:var(--bg-subtle)}
 .loracalc *{box-sizing:border-box}
@@ -740,7 +718,6 @@
     Lc_cssInjected = true;
   }
 
-  // ---- 入口 ----
   if (typeof window !== 'undefined') {
     window.viewLoraCalc = async function () {
       const view = document.getElementById('view');

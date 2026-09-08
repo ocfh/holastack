@@ -1,11 +1,5 @@
 <?php
 
-
-
-
-
-
-
 namespace holastack\Storage;
 
 use holastack\DB\Database;
@@ -13,10 +7,6 @@ use holastack\DB\Database;
 class ApiLog
 {
     const MAX_ROWS = 10000;
-
-    
-
-
 
     public static function record(array $entry): void
     {
@@ -44,7 +34,6 @@ class ApiLog
         } catch (\Throwable $e) {
             error_log('ApiLog::record failed: ' . $e->getMessage());
         }
-        
 
         try {
             $cnt = (int) Database::fetch("SELECT COUNT(*) AS c FROM api_logs")['c'];
@@ -57,16 +46,11 @@ class ApiLog
         }
     }
 
-    
-
-
-
     public static function clientIp(): string
     {
         foreach (['HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'HTTP_CLIENT_IP', 'REMOTE_ADDR'] as $k) {
             $v = $_SERVER[$k] ?? '';
             if (is_string($v) && $v !== '') {
-                
 
                 $ip = trim(explode(',', $v)[0]);
                 if (filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -76,13 +60,6 @@ class ApiLog
         }
         return '';
     }
-
-    
-
-
-
-
-
 
     public static function list(array $user, array $filters = [], int $limit = 200, int $offset = 0): array
     {

@@ -1,11 +1,6 @@
 <?php
 namespace holastack\Integration;
 
-
-
-
-
-
 class MqttClient
 {
     private $socket;
@@ -23,10 +18,10 @@ class MqttClient
         $parts = parse_url($server);
         $scheme = strtolower($parts['scheme'] ?? 'tcp');
         $this->host = $parts['host'] ?? '127.0.0.1';
-        // 带 ssl/tls/mqtts scheme 时若未显式给端口，默认回退到 8883
+
         $defaultPort = in_array($scheme, ['ssl', 'tls', 'mqtts'], true) ? 8883 : 1883;
         $this->port = (int) ($parts['port'] ?? $defaultPort);
-        // scheme 显式写了 ssl/tls/mqtts，或调用方强制 tls=true，都走 TLS
+
         $this->tls = $tls || in_array($scheme, ['ssl', 'tls', 'mqtts'], true);
         $this->verifyPeer = $verifyPeer;
         $this->username = $username;
@@ -76,7 +71,7 @@ class MqttClient
         }
         stream_set_timeout($this->socket, 3);
 
-        $flags = 0x02; 
+        $flags = 0x02;
 
         if ($this->username !== '') {
             $flags |= 0x80;
@@ -95,8 +90,6 @@ class MqttClient
         $packet = "\x10" . self::encodeRemainingLength(strlen($variable) + strlen($payload)) . $variable . $payload;
         $this->write($packet);
 
-        
-
         $ack = $this->read(4);
         return $ack !== false;
     }
@@ -106,7 +99,7 @@ class MqttClient
         if (!$this->socket) {
             return false;
         }
-        // 只实现 QoS 0/1；QoS2 请求按 QoS1 处理（工业上行场景够用，避免半实现的 QoS2 状态机）
+
         $qos = $qos > 0 ? 1 : 0;
         $variable = self::encodeString($topic);
         if ($qos === 1) {
@@ -114,14 +107,14 @@ class MqttClient
             $variable .= pack('n', $this->packetId);
         }
         $variable .= $message;
-        // PUBLISH 固定头：0x30 | qos<<1（dup=0, retain=0）
+
         $header = chr(0x30 | ($qos << 1));
         $packet = $header . self::encodeRemainingLength(strlen($variable)) . $variable;
         if (!$this->write($packet)) {
             return false;
         }
         if ($qos === 1) {
-            // 等待 PUBACK（type=4）：固定头 1B + 剩余长度 1B，标准 PUBACK 剩余长度恒为 2
+
             $ack = $this->read(2);
             if ($ack === false || strlen($ack) < 2 || (ord($ack[0]) >> 4) !== 4) {
                 return false;

@@ -5,39 +5,15 @@ use holastack\DB\Database;
 use holastack\Crypto\AES;
 use holastack\Crypto\LoRaWANCrypto;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Roaming
 {
-    
 
     public const MSG_JOIN_REQ    = 'JoinReq';
     public const MSG_XMIT_DATA   = 'XmitDataReq';
     public const MSG_JOIN_ANS    = 'JoinAns';
     public const MSG_PR_UPD_ANS  = 'PrUpdAns';
 
-    
-
     private static $clients = [];
-
-    
-
 
     public static function setup(): int
     {
@@ -49,7 +25,7 @@ class Roaming
         foreach ($rows as $r) {
             $netId = strtoupper((string) ($r['net_id'] ?? ''));
             if ($netId === '' || $netId === '000000') {
-                continue; 
+                continue;
 
             }
             self::$clients[$netId] = new RoamingClient([
@@ -87,8 +63,6 @@ class Roaming
         return array_keys(self::$clients);
     }
 
-    
-
     public static function localNsId(): string
     {
         return strtoupper(str_pad((string) (defined('ELW_NET_ID') ? ELW_NET_ID : '000000'), 6, '0', STR_PAD_LEFT));
@@ -100,14 +74,6 @@ class Roaming
             || count(self::$clients) > 0;
     }
 
-    
-
-
-    
-
-
-
-
     public static function isRoamingDevAddr(string $devAddrBin): bool
     {
         if (!self::isEnabled()) {
@@ -117,12 +83,10 @@ class Roaming
             return false;
         }
         $netId = self::netIdFromDevAddr($devAddrBin);
-        
 
         if ($netId === self::localNsId()) {
             return false;
         }
-        
 
         if ($netId === '000000' || $netId === '000001') {
             return false;
@@ -130,22 +94,11 @@ class Roaming
         return true;
     }
 
-    
-
-
-
-
     public static function netIdFromDevAddr(string $devAddrBin): string
     {
         $b = unpack('C4', $devAddrBin);
         return strtoupper(sprintf('%02X%02X%02X', $b[1], $b[2], $b[3]));
     }
-
-    
-
-
-
-
 
     public static function clientForJoinEui(string $appEuiBin): ?RoamingClient
     {
@@ -166,11 +119,6 @@ class Roaming
         return null;
     }
 
-    
-
-
-
-
     public static function getNetIdsForDevAddr(string $devAddrBin): array
     {
         $out = [];
@@ -181,20 +129,11 @@ class Roaming
             }
         }
         if (empty($out) && count(self::$clients) === 1) {
-            
 
             $out = array_keys(self::$clients);
         }
         return $out;
     }
-
-    
-
-
-    
-
-
-
 
     public static function rxInfoToGwInfo(string $rfRegion, array $rxInfos): array
     {
@@ -202,7 +141,7 @@ class Roaming
         foreach ($rxInfos as $rx) {
             $gwId = (string) ($rx['gw_id'] ?? '');
             $out[] = [
-                'ID'        => substr($gwId, 4, 4), 
+                'ID'        => substr($gwId, 4, 4),
 
                 'RSSI'      => (int) ($rx['rssi'] ?? 0),
                 'SNR'       => (float) ($rx['snr'] ?? 0),
@@ -215,11 +154,6 @@ class Roaming
         }
         return $out;
     }
-
-    
-
-
-
 
     public static function ulMetaDataToRxInfo(array $gwInfos): ?array
     {
@@ -234,15 +168,6 @@ class Roaming
         }
         return $best;
     }
-
-    
-
-
-    
-
-
-
-
 
     public static function buildJoinReq(RoamingClient $client, array $join): array
     {
@@ -260,13 +185,6 @@ class Roaming
             'CFList'     => $join['cf_list'] ?? '',
         ];
     }
-
-    
-
-
-
-
-
 
     public static function buildXmitDataReq(RoamingClient $client, array $ul): array
     {
@@ -298,16 +216,6 @@ class Roaming
         ];
     }
 
-    
-
-
-    
-
-
-
-
-
-
     public static function sign(RoamingClient $client, array $message): string
     {
         $kek = self::kekForLabel($client->kekLabel);
@@ -331,12 +239,6 @@ class Roaming
         return str_repeat("\x00", 16);
     }
 
-    
-
-
-
-
-
     public static function verifyInboundSignature(string $senderNetId, array $resp, string $authHex): bool
     {
         $client = self::getClient($senderNetId);
@@ -347,19 +249,11 @@ class Roaming
         $body = $senderNetId . ($resp['ReceiverID'] ?? '') . ($resp['MessageType'] ?? '') . ($resp['PHYPayload'] ?? '');
         $expected = bin2hex(AES::cmac($kek, $body));
         if ($authHex === '') {
-            return $client->kekLabel === ''; 
+            return $client->kekLabel === '';
 
         }
         return hash_equals($expected, strtolower($authHex));
     }
-
-    
-
-
-    
-
-
-
 
     public static function forward(RoamingClient $client, array $message): array
     {
@@ -393,7 +287,6 @@ class Roaming
             CURLOPT_TIMEOUT        => max(2, (int) ceil($client->asyncTimeout / 1000) + 5),
             CURLOPT_CONNECTTIMEOUT=> 5,
         ]);
-        
 
         if ($client->tlsCert !== '' && $client->tlsKey !== '') {
             curl_setopt($ch, CURLOPT_SSLCERT, $client->tlsCert);
@@ -402,7 +295,7 @@ class Roaming
         if ($client->caCert !== '') {
             curl_setopt($ch, CURLOPT_CAINFO, $client->caCert);
         } else {
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); 
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 
         }
         $resp = curl_exec($ch);
@@ -416,15 +309,6 @@ class Roaming
         return is_array($dec) ? $dec : ['raw' => $resp, 'http_code' => $httpCode];
     }
 
-    
-
-
-    
-
-
-
-
-
     public static function handleInboundAns(array $resp): array
     {
         $type = $resp['MessageType'] ?? '';
@@ -432,7 +316,6 @@ class Roaming
         if ($phy === '') {
             return ['ok' => false, 'error' => 'empty PHYPayload'];
         }
-        
 
         $devEui = strtolower($resp['DevEUI'] ?? '');
         $devAddr = strtolower($resp['DevAddr'] ?? '');
@@ -446,7 +329,6 @@ class Roaming
         if (!$pending) {
             return ['ok' => false, 'error' => 'no pending correlation', 'phy' => $phy];
         }
-        
 
         Database::execute("DELETE FROM roaming_pending WHERE id=?", [$pending['id']]);
         return [
@@ -463,8 +345,6 @@ class Roaming
         ];
     }
 
-    
-
     public static function rememberPending(string $kind, string $devEui, string $devAddr, string $gwId, string $peer, int $ulTmst, string $region, float $freq, string $datr, int $dlDelayMs): void
     {
         Database::execute(
@@ -478,11 +358,6 @@ class Roaming
     }
 }
 
-
-
-
-
-
 class RoamingClient
 {
     public $netId;
@@ -495,9 +370,9 @@ class RoamingClient
     public $tlsCert;
     public $tlsKey;
     public $authorization;
-    public $asyncTimeout; 
+    public $asyncTimeout;
 
-    public $lifetime;     
+    public $lifetime;
 
     public $validateMic;
 

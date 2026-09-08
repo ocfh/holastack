@@ -1,31 +1,12 @@
 <?php
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\Roaming;
 
-
-
 Roaming::setup();
 
 header('Content-Type: application/json');
-
-
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -48,8 +29,6 @@ if (!in_array($messageType, [Roaming::MSG_JOIN_ANS, Roaming::MSG_PR_UPD_ANS], tr
     exit;
 }
 
-
-
 $senderNetId = strtoupper((string) ($resp['SenderID'] ?? ''));
 $authHex = (string) ($_SERVER['HTTP_X_DOWNLINK_AUTH'] ?? '');
 if (!Roaming::verifyInboundSignature($senderNetId, $resp, $authHex)) {
@@ -59,8 +38,6 @@ if (!Roaming::verifyInboundSignature($senderNetId, $resp, $authHex)) {
     exit;
 }
 
-
-
 $corr = Roaming::handleInboundAns($resp);
 if (!$corr['ok']) {
     http_response_code(404);
@@ -68,8 +45,6 @@ if (!$corr['ok']) {
     error_log("roaming-inbound: $messageType from $senderNetId has no pending correlation (phy=" . substr($corr['phy'] ?? '', 0, 32) . "...)");
     exit;
 }
-
-
 
 $phy = base64_decode($corr['phy'], true);
 if ($phy === false || $phy === '') {
@@ -84,12 +59,9 @@ $datr = $corr['datr'];
 $ulTmst = (int) $corr['ul_tmst'];
 $dlDelayMs = (int) $corr['dl_delay'];
 
-
 $dlTmst = ($ulTmst + $dlDelayMs * 1000) & 0xFFFFFFFF;
 
-
-
-$powe = ($freq >= 869400000 && $freq <= 869650000) ? 29 : 16; 
+$powe = ($freq >= 869400000 && $freq <= 869650000) ? 29 : 16;
 
 $txpk = [
     'imme' => false,
@@ -100,14 +72,12 @@ $txpk = [
     'modu' => 'LORA',
     'datr' => $datr,
     'codr' => '4/5',
-    'ipol' => true,   
+    'ipol' => true,
 
     'size' => strlen($phy),
     'data' => base64_encode($phy),
 ];
 $json = json_encode(['txpk' => $txpk]);
-
-
 
 $ver = "\x02";
 $tok = "\x00\x00";
@@ -129,8 +99,6 @@ if (!$sent) {
 }
 
 error_log("roaming-inbound: $messageType -> PULL_RESP peer=$peer gw={$corr['gw_id']} dl_tmst=$dlTmst freq=$freq datr=$datr phy=" . bin2hex($phy));
-
-
 
 echo json_encode([
     'SenderID'   => $resp['ReceiverID'] ?? Roaming::localNsId(),

@@ -4,54 +4,22 @@ namespace holastack\Core;
 use holastack\DB\Database;
 use holastack\Crypto\AES;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Relay
 {
-    
 
-    public const CID_RELAY_CONF_REQ            = 0x40; 
+    public const CID_RELAY_CONF_REQ            = 0x40;
 
-    public const CID_END_DEVICE_CONF_REQ       = 0x41; 
+    public const CID_END_DEVICE_CONF_REQ       = 0x41;
 
-    public const CID_FILTER_LIST_REQ           = 0x42; 
+    public const CID_FILTER_LIST_REQ           = 0x42;
 
-    public const CID_UPDATE_UPLINK_LIST_REQ    = 0x43; 
+    public const CID_UPDATE_UPLINK_LIST_REQ    = 0x43;
 
-    public const CID_CTRL_UPLINK_LIST_REQ      = 0x44; 
+    public const CID_CTRL_UPLINK_LIST_REQ      = 0x44;
 
-    public const CID_CONFIGURE_FWD_LIMIT_REQ   = 0x45; 
+    public const CID_CONFIGURE_FWD_LIMIT_REQ   = 0x45;
 
-    public const CID_NOTIFY_NEW_END_DEVICE_REQ = 0x46; 
-
-
-    
-
+    public const CID_NOTIFY_NEW_END_DEVICE_REQ = 0x46;
 
     public static function listGateways(): array
     {
@@ -88,9 +56,6 @@ class Relay
         Database::execute("DELETE FROM relay_gateways WHERE id=?", [$id]);
     }
 
-    
-
-
     public static function listDevices(int $gatewayId): array
     {
         return Database::fetchAll(
@@ -98,14 +63,6 @@ class Relay
             [$gatewayId]
         );
     }
-
-    
-
-
-
-
-
-
 
     public static function provisionEndDevice(int $gatewayId, string $devEui, array $keys = []): array
     {
@@ -172,15 +129,6 @@ class Relay
         Database::execute("DELETE FROM relay_devices WHERE id=?", [$id]);
     }
 
-    
-
-
-    
-
-
-
-
-
     public static function encodeFreq(int $freqHz): string
     {
         if ($freqHz >= 2400000000) {
@@ -190,8 +138,6 @@ class Relay
         return chr($v & 0xFF) . chr(($v >> 8) & 0xFF) . chr(($v >> 16) & 0xFF);
     }
 
-    
-
     public static function decodeFreq(string $b3): int
     {
         if (strlen($b3) < 3) {
@@ -200,13 +146,6 @@ class Relay
         $v = ord($b3[0]) | (ord($b3[1]) << 8) | (ord($b3[2]) << 16);
         return $v >= 12000000 ? $v * 200 : $v * 100;
     }
-
-    
-
-
-    
-
-
 
     public static function uplinkMetadataFromBytes(string $b): array
     {
@@ -222,13 +161,6 @@ class Relay
         ];
     }
 
-    
-
-
-
-
-
-
     public static function uplinkMetadataToBytes(int $dr, int $snr, int $rssi, int $worChannel): string
     {
         $snr = max(-20, min(11, $snr));
@@ -241,19 +173,12 @@ class Relay
         return chr($b0) . chr($b1) . chr($b2);
     }
 
-    
-
-
-    
-
     public static function forwardUplinkReqToBytes(int $dr, int $snr, int $rssi, int $worChannel, int $freqHz, string $phyPayload): string
     {
         return self::uplinkMetadataToBytes($dr, $snr, $rssi, $worChannel)
              . self::encodeFreq($freqHz)
              . $phyPayload;
     }
-
-    
 
     public static function forwardUplinkReqFromBytes(string $b): array
     {
@@ -267,8 +192,6 @@ class Relay
         ];
     }
 
-    
-
     public static function forwardDownlinkReqToBytes(string $phyPayload): string
     {
         return $phyPayload;
@@ -278,13 +201,6 @@ class Relay
     {
         return $b;
     }
-
-    
-
-
-    
-
-
 
     public static function channelSettingsFromBytes(string $b): array
     {
@@ -309,14 +225,6 @@ class Relay
         return chr($b0) . chr($b1);
     }
 
-    
-
-
-    
-
-
-
-
     public static function buildRelayConfReq(
         int $secondChAckOffset,
         int $secondChDr,
@@ -331,11 +239,6 @@ class Relay
              . self::encodeFreq($secondChFreqHz);
     }
 
-    
-
-
-
-
     public static function decodeRelayConfReq(string $payload): array
     {
         if (strlen($payload) < 5) {
@@ -346,11 +249,6 @@ class Relay
             'second_ch_freq'   => self::decodeFreq(substr($payload, 2, 3)),
         ];
     }
-
-    
-
-
-
 
     public static function decodeRelayConfAns(string $payload): array
     {
@@ -365,35 +263,14 @@ class Relay
         ];
     }
 
-    
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     public static function scheduleConf(array &$device, array $rp): string
     {
         $out = '';
         $rs = json_decode($device['relay_state'] ?? '', true);
         if (!is_array($rs)) {
-            $rs = []; 
+            $rs = [];
 
         }
-        
 
         $cur = [
             'enabled'                   => (bool) ($rs['enabled'] ?? false),
@@ -425,11 +302,11 @@ class Relay
                 $req = self::buildRelayConfReq(
                     $want['second_channel_ack_offset'],
                     $want['second_channel_dr'],
-                    $want['second_channel_freq'] > 0 ? 1 : 0, 
+                    $want['second_channel_freq'] > 0 ? 1 : 0,
 
                     $want['default_channel_index'],
                     $want['cad_periodicity'],
-                    $want['enabled'] ? 1 : 0,                 
+                    $want['enabled'] ? 1 : 0,
 
                     $want['second_channel_freq']
                 );
@@ -458,7 +335,7 @@ class Relay
                     $want['ed_smart_enable_level'],
                     $want['second_channel_ack_offset'],
                     $want['second_channel_dr'],
-                    $want['second_channel_freq'] > 0 ? 1 : 0, 
+                    $want['second_channel_freq'] > 0 ? 1 : 0,
 
                     $want['ed_back_off'],
                     $want['second_channel_freq']
@@ -470,26 +347,14 @@ class Relay
         return $out;
     }
 
-    
-
-
-
-
-
-
-
-
-
     public static function handleRelayConfAns(array &$device, string $ansPayload): array
     {
         $ans = self::decodeRelayConfAns($ansPayload);
         $pending = MacCommands::getPending($device, self::CID_RELAY_CONF_REQ);
         if ($pending === null) {
-            
 
             return ['bytes' => null, 'mustRespond' => false, 'acked' => false];
         }
-        
 
         $reqPayload = substr($pending, 1);
         $req = self::decodeRelayConfReq($reqPayload);
@@ -512,20 +377,9 @@ class Relay
         return ['bytes' => null, 'mustRespond' => false, 'acked' => $allAck];
     }
 
-    
-
-
-    
-
     public const FL_ACTION_NO_RULE = 0;
     public const FL_ACTION_FORWARD = 1;
     public const FL_ACTION_FILTER  = 2;
-
-    
-
-
-
-
 
     public static function buildFilterListReq(int $filterListIdx, int $action, array $euiBytes): string
     {
@@ -533,15 +387,12 @@ class Relay
         $b0 = ($len & 0x17) | (($action & 0x03) << 5) | (($filterListIdx & 0x0F) << 7);
         $b1 = ($filterListIdx >> 1) & 0x07;
         $out = chr(self::CID_FILTER_LIST_REQ) . chr($b0) . chr($b1);
-        
 
         foreach (array_reverse($euiBytes) as $b) {
             $out .= chr($b & 0xFF);
         }
         return $out;
     }
-
-    
 
     public static function decodeFilterListAns(string $payload): array
     {
@@ -553,15 +404,6 @@ class Relay
         ];
     }
 
-    
-
-
-
-
-
-
-
-
     public static function handleFilterListAns(array &$device, string $ansPayload): array
     {
         $ans = self::decodeFilterListAns($ansPayload);
@@ -569,7 +411,6 @@ class Relay
         if ($pending === null) {
             return ['bytes' => null, 'mustRespond' => false, 'acked' => false];
         }
-        
 
         $reqPayload = substr($pending, 1);
         $b0 = ord($reqPayload[0] ?? "\x00");
@@ -592,7 +433,6 @@ class Relay
                 }
             }
             unset($f);
-            
 
             if ($action === self::FL_ACTION_NO_RULE) {
                 $filters = array_values(array_filter($filters, fn ($f) => (int) ($f['index'] ?? -1) !== $idx));
@@ -604,21 +444,10 @@ class Relay
         return ['bytes' => null, 'mustRespond' => false, 'acked' => $allAck];
     }
 
-    
-
-
-    
-
     public const RMA_DISABLE = 0;
     public const RMA_ENABLE  = 1;
     public const RMA_DYNAMIC = 2;
     public const RMA_ED_CTRL = 3;
-
-    
-
-
-
-
 
     public static function buildEndDeviceConfReq(
         int $relayModeActivation,
@@ -635,8 +464,6 @@ class Relay
         return chr(self::CID_END_DEVICE_CONF_REQ) . chr($b0) . chr($cs0) . chr($cs1) . self::encodeFreq($secondChFreqHz);
     }
 
-    
-
     public static function decodeEndDeviceConfAns(string $payload): array
     {
         $b = ord($payload[0] ?? "\x00");
@@ -648,17 +475,6 @@ class Relay
         ];
     }
 
-    
-
-
-
-
-
-
-
-
-
-
     public static function handleEndDeviceConfAns(array &$device, string $ansPayload): array
     {
         $ans = self::decodeEndDeviceConfAns($ansPayload);
@@ -666,7 +482,6 @@ class Relay
         if ($pending === null) {
             return ['bytes' => null, 'mustRespond' => false, 'acked' => false];
         }
-        
 
         $reqPayload = substr($pending, 1);
         $actMode = ord($reqPayload[0] ?? "\x00");

@@ -1,10 +1,5 @@
 <?php
 
-
-
-
-
-
 namespace holastack\Storage;
 
 use holastack\DB\Database;
@@ -26,13 +21,6 @@ class Tenant
         if (empty($p['name'])) {
             return ['error' => 'name required'];
         }
-        
-
-        
-
-        
-
-        
 
         $unlimited = !empty($p['private_gateways_unlimited']) ? 1 : 0;
         $limit = (int) ($p['private_gateways_limit'] ?? 0);
@@ -85,7 +73,6 @@ class Tenant
 
     public static function delete(int $id): array
     {
-        
 
         Database::execute("UPDATE applications SET tenant_id=0 WHERE tenant_id=?", [$id]);
         Database::execute("UPDATE devices SET tenant_id=0 WHERE tenant_id=?", [$id]);

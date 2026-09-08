@@ -66,7 +66,7 @@ async function toggleLogCol(head){
 
 function dashRingCard(title, total, online, offline, split, extra){
   const r=70, cx=90, cy=90, sw=18, C=2*Math.PI*r;
-  
+
   const cs = getComputedStyle(document.documentElement);
   const cLine = cs.getPropertyValue('--line').trim() || '#2b3650';
   const cTxt  = cs.getPropertyValue('--txt').trim() || '#e6ecf5';
@@ -93,7 +93,7 @@ function dashRingCard(title, total, online, offline, split, extra){
   } else {
     legend = `<div class="hl-row"><span>应用总数</span><b>${total}</b></div>`;
   }
-  
+
   legend += extra || '';
   return `<div class="ring-card">
     <svg viewBox="0 0 180 180" class="ring">${arcs}
@@ -154,7 +154,7 @@ async function viewApplications(){
      <td>${adminBtn(`<button class="btn ghost" onclick="editApplication(${a.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delApplication(${a.id}))">${ICON.trash}删除</button>`)} <button class="btn ghost" onclick="newDevice(${a.id})">${ICON.plus}设备</button></td></tr>`,
     emptyText:'暂无应用',
   };
-  
+
   const [filteredRows, filteredTotal] = filterAndSortRows(cfg);
   cfg.rows = paginateRows(filteredRows, state, {pageKey:'appsPage', limitKey:'appsLimit', offsetKey:'appsOffset'})[0];
   cfg.presorted = true;
@@ -180,7 +180,7 @@ async function viewDevices(){
   const apps = ar.data||[];
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? esc(a.name) : ('#'+id); };
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.devAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  
+
   const activationValues = [
     {value:'', label:'全部'},
     {value:'OTAA', label:'OTAA'},
@@ -254,7 +254,7 @@ async function viewDevices(){
   const table = buildSortableTable(devCfg);
   const pager = buildPager({ total: devsTotal, limit: state.devsLimit, offset: state.devsOffset, pageKey:'devsPage', limitKey:'devsLimit', offsetKey:'devsOffset', totalKey:'devsTotal', refresh:'viewDevices' });
   window.devsSort_sort = col => _tableToggleSort('devsSort','viewDevices',col);
-  
+
   window.devsSort_fstatus = (col, v) => {
     const map = {activation:'devsFActivation', cls:'devsFCls', online:'devsFOnline', status:'devsFStatus'};
     _tableSetFStatus(map[col] || 'devsFStatus', 'viewDevices', v);
@@ -325,7 +325,7 @@ function hexToBytes(hex){
 function decodeCayenneLpp(hex){
   const b=hexToBytes(hex); let i=0; const out=[];
   const need=(n)=>{ if(b.length-i<n) return null; const s=b.slice(i,i+n); i+=n; return s; };
-  // Cayenne LPP 规范：多字节字段一律大端（MSB first），有符号需手动扩号
+
   const s16=(x)=>{ const v=(x[0]<<8)|x[1]; return (v&0x8000)?(v-0x10000):v; };
   while(i+2<=b.length){
     const chan=b[i], type=b[i+1]; i+=2;
@@ -392,14 +392,6 @@ function codecRuntimeChanged(){
   const rt=(document.getElementById('codec_rt')||{}).value;
   const w=document.getElementById('codec_script_wrap'); if(w) w.style.display = rt==='JS'?'':'none';
 }
-let __liveES=null;
-async function toggleLiveEvents(){
-  if(__liveES){ __liveES.close(); __liveES=null; state.live=false; toast('已关闭实时事件流','info'); viewEvents(); return; }
-  state.live=true; toast('已开启实时事件流','ok'); viewEvents();
-  __liveES=new EventSource('/api/stream?token='+encodeURIComponent(state.token||''));
-  __liveES.onmessage=e=>{ try{ const d=JSON.parse(e.data); if(d&&d.id&&state.view==='events') viewEvents(); }catch(_){} };
-  __liveES.onerror=()=>{ };
-}
 async function deviceDetail(id){
   const r = await api('GET','/api/devices'); state.devs = r.data||[];
   const d=(state.devs||[]).find(x=>x.id===id); if(!d)return;
@@ -445,9 +437,6 @@ async function deviceDetail(id){
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
   drawSignalChart('sigChart', ups.map(u=>({rssi:+(u.rssi||0), snr:+(u.snr||0)})));
 }
-
-
-
 
 async function copyKeyField(input, label){
   const val = input.value || '';
@@ -519,7 +508,7 @@ async function viewUplinks(){
   const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : '', 'limit='+state.upsLimit, 'offset='+state.upsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
   if (typeof r.total === 'number') state.upsTotal = r.total;
-  
+
   const devQ = [tq, state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
     api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
@@ -530,7 +519,7 @@ async function viewUplinks(){
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.upsFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.upsAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  
+
   const fcntValues = [{value:'', label:'全部'}].concat(
     [...new Set((state.ups||[]).map(u=>u.fcnt).filter(v=>v!==null && v!==undefined && v!==''))].sort((a,b)=>a-b)
       .map(f=>({value:String(f), label:'FCnt '+f}))
@@ -629,7 +618,6 @@ async function showRaw(id){
   openModal(`<h3>${t('原始 JSON')} #${id}</h3><div style="position:relative"><button class="ad-copy" onclick="copyModalPre()">复制</button><pre>${esc(JSON.stringify(j,null,2))}</pre></div><div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
-
 const DL_STATUS = {
   pending:    {label:'待发送', cls:'pending'},
   scheduled:  {label:'已调度', cls:'pending'},
@@ -644,7 +632,7 @@ async function viewDownlinks(){
   const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : '', 'limit='+state.dlsLimit, 'offset='+state.dlsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
   if (typeof r.total === 'number') state.dlsTotal = r.total;
-  
+
   const devQ = [tq, state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
   const [dr, ar, tf] = await Promise.all([
     api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
@@ -656,7 +644,7 @@ async function viewDownlinks(){
   const devName = id => { const d = devs.find(x=>x.id===id); return d ? (d.name+' (#'+id+')') : ('#'+id); };
   const devOpts = `<option value="">全部设备</option>` + devs.map(d=>`<option value="${d.id}" ${String(d.id)===String(state.dlDevFilter)?'selected':''}>#${d.id} ${esc(d.name)} (${hex(d.dev_eui)})</option>`).join('');
   const appOpts = `<option value="">全部应用</option>` + apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.dlAppFilter)?'selected':''}>${esc(a.name)}</option>`).join('');
-  
+
   const statusValues = [
     {value:'',label:'全部'},
     ...Object.entries(DL_STATUS).map(([k,v]) => ({value:k,label:v.label})),
@@ -719,7 +707,7 @@ async function viewDownlinks(){
 }
 async function showDownlinkRaw(id){
   const d=(state.dls||[]).find(x=>x.id===id); if(!d)return;
-  
+
   if (d.raw_json && d.raw_json !== '') {
     let proto = {};
     try { proto = JSON.parse(d.raw_json); } catch(e) {}
@@ -729,7 +717,7 @@ async function showDownlinkRaw(id){
       <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
     return;
   }
-  
+
   let bytes=[], ascii='';
   const hexStr = (d.payload_hex||'').replace(/\s+/g,'');
   for (let i=0;i<hexStr.length;i+=2){ const b=parseInt(hexStr.substr(i,2),16); bytes.push(b); ascii += (b>=32&&b<127)?String.fromCharCode(b):'.'; }
@@ -758,14 +746,14 @@ async function showDownlinkRaw(id){
 
 async function viewEvents(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  
+
   const [rd, rg, tf] = await Promise.all([
     api('GET','/api/devices' + (tq ? '?'+tq : '')),
     api('GET','/api/gateways' + (tq ? '?'+tq : '')),
     tenantFilterHtml()
   ]);
   state.devs = rd.data||[]; state.gws = rg.data||[];
-  
+
   let q = [];
   if (tq) q.push(tq);
   if (state.evsDevFilter) q.push('dev_id=' + state.evsDevFilter);
@@ -782,16 +770,14 @@ async function viewEvents(){
   const gwOpts = ['<option value="">全部网关</option>'].concat(
     state.gws.map(g=>`<option value="${esc(g.gw_id)}" ${g.gw_id===state.evsGwFilter?'selected':''}>${esc(g.gw_id)} · ${esc(g.name)}</option>`)
   ).join('');
-  
-  
+
   const levelValues = [
     {value:'', label:'全部'},
     {value:'info',  label:'info · 信息'},
     {value:'warn',  label:'warn · 警告'},
     {value:'error', label:'error · 错误'},
   ];
-  
-  
+
   const typeValues = [
     {value:'',       label:'全部'},
     {value:'gateway', label:'网关上下线'},
@@ -827,7 +813,7 @@ async function viewEvents(){
     rowHtml: e => {
       const lvl = e.level==='error' ? 'err' : (e.level==='warn' ? 'pending' : 'ok');
       const who = e.gateway_id ? ('gw '+e.gateway_id) : (e.dev_id ? ('dev #'+e.dev_id) : '');
-      
+
       const tCls = e.type==='join' ? 'ok' : (e.type==='downlink' || e.type==='txack' ? 'pending' : (e.type==='gateway' ? 'muted' : ''));
       return `<tr><td><span class="tag ${tCls}">${esc(e.type)}</span></td><td><span class="tag ${lvl}">${e.level}</span></td>
         <td class="muted">${esc(who)}</td><td class="cell-scroll" style="max-width:320px">${esc(e.message)}</td><td class="muted">${new Date(e.created_at*1000).toLocaleString()}</td>
@@ -836,7 +822,7 @@ async function viewEvents(){
     emptyText:'暂无事件',
   });
   const pager = buildPager({ total: state.evsTotal, limit: state.evsLimit, offset: state.evsOffset, pageKey:'evsPage', limitKey:'evsLimit', offsetKey:'evsOffset', totalKey:'evsTotal', refresh:'viewEvents' });
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['events']]||''}网关日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('events','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('events','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('events')">${ICON.trash}${t('清空日志')}</button> <button id="liveBtn" class="btn ghost ${state.live?'on':''}" onclick="toggleLiveEvents()">${state.live?'● 实时中':'实时'}</button> ${logRefreshCtrl()}</div></div>
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['events']]||''}网关日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('events','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('events','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('events')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
       ${tf}
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${devOpts}</select></div>
@@ -896,25 +882,23 @@ async function viewUsers(){
     ${pager}`;
 }
 
-
-
 async function viewApiLogs(){
   const showTenant = isAdmin() || isDemo();
   const params = [];
   if (state.apiLogFilter.path) params.push('path_contains=' + encodeURIComponent(state.apiLogFilter.path));
   if (state.apiLogFilter.ip) params.push('ip=' + encodeURIComponent(state.apiLogFilter.ip));
-  
+
   if (state.apiLogFilter.method) params.push('method=' + state.apiLogFilter.method);
   if (showTenant && state.apiLogFilter.tenant_id) params.push('tenant_id=' + state.apiLogFilter.tenant_id);
   if (state.apiLogFilter.application_id) params.push('application_id=' + state.apiLogFilter.application_id);
-  
+
   params.push('limit=' + (state.apiLogLimit|0 || 50));
   params.push('offset=' + (state.apiLogOffset|0 || 0));
   const url = '/api/api-logs' + (params.length ? '?' + params.join('&') : '');
   const r = await api('GET', url);
   const rowsAll = (r.data || []);
   state.apiLogTotal = +r.total || 0;
-  
+
   let tenantOpts = '';
   let appOpts = '';
   if (showTenant) {
@@ -932,7 +916,7 @@ async function viewApiLogs(){
     if (s>=500) return `<span class="tag pending">${s}</span>`;
     return `<span class="tag">${s}</span>`;
   };
-  
+
   const statusValues = [
     {value:'',label:'全部', match: () => true},
     {value:'2xx',label:'2xx 成功', match: s => s>=200 && s<300},
@@ -1024,7 +1008,6 @@ function resetApiLogFilter(){
   busy('重置中…', viewApiLogs);
 }
 
-
 async function viewSettings(){
   if (!isAdmin()) { nav('dashboard'); return; }
   const r = await api('GET','/api/settings'); const s = r.data||{};
@@ -1096,7 +1079,7 @@ function stCat(id, btn){
   document.querySelectorAll('.st-cat').forEach(c => c.classList.toggle('hidden', c.id !== 'stcat-'+id));
   document.querySelectorAll('.st-item').forEach(b => b.classList.toggle('active', b === btn));
 }
-// 站点设置分类菜单：PC 侧栏 / 移动横条共用，按文字长度由短到长排序
+
 function stCatItems(){
   const defs = [
     {id:'basic', icon:'cpuChip',            label:'基础信息'},
@@ -1121,7 +1104,7 @@ async function clearLogs(target, labelKey){
   if (r.error){ alert(t(r.error)); return; }
   toast(t('已清空') + ' ' + t(labelKey), 'ok');
 }
-// 每页右上角的"清空日志"：按当前用户/页面作用域清理，避免误清他人数据
+
 async function clearPageLogs(target){
   const map = {
     uplinks:  ['uplinks', '上行消息日志', viewUplinks],
@@ -1132,16 +1115,16 @@ async function clearPageLogs(target){
   const m = map[target];
   if (!m) return;
   const [apiTarget, label, refresh] = m;
-  // 作用域：租户只能清自己；admin 仅当该页确实有租户筛选时才按筛选清，否则清全部
+
   let tid = 0;
   if (isTenant()) {
-    tid = state.user.tenant_id || 0;          // 租户：强制只清自己租户
+    tid = state.user.tenant_id || 0;
   } else if (target === 'api') {
     tid = (state.apiLogFilter && state.apiLogFilter.tenant_id) ? state.apiLogFilter.tenant_id : 0;
   } else if (target === 'events') {
-    tid = state.tenantFilter || 0;            // 网关日志页自带租户筛选
+    tid = state.tenantFilter || 0;
   } else {
-    tid = 0;                                  // 上行/下行页无租户筛选，admin 清全部
+    tid = 0;
   }
   const scopeTxt = tid ? t('（仅清理当前用户配置）') : t('（将清空全部）');
   if (!confirm(t('确认清空') + ' ' + t(label) + '？' + t('此操作不可恢复') + scopeTxt)) return;
@@ -1150,14 +1133,13 @@ async function clearPageLogs(target){
   toast(t('已清空') + ' ' + t(label) + (tid ? t('（当前用户配置）') : t('（全部）')), 'ok');
   refresh();
 }
-// 日志页自动刷新（原计算器 lc-refresh 的自动刷新下拉，迁移到右下角悬浮组件）：手动/5s/10s/15s/30s/1m 轮询当前日志页
+
 let logRefreshTimer = null;
 const LOG_REFRESH_VIEWS = ['uplinks','downlinks','events','api-logs'];
 const LOG_REFRESH_OPTS = [[0,'停止刷新'],[5,'5 秒'],[10,'10 秒'],[15,'15 秒'],[30,'30 秒'],[60,'1 分钟']];
 let refreshFloatOpen = false;
 let logRefreshTarget = null;
 
-// 头部不再显示大号下拉，改为右下角悬浮窗（见 renderRefreshFloat）
 function logRefreshCtrl(){ return ''; }
 
 function refreshFloatText(){
@@ -1209,29 +1191,29 @@ function setLogRefresh(sec){
   document.removeEventListener('pointerdown', closeRefreshFloatOuter);
   stopLogRefresh();
   logRefreshTarget = sec>0 ? state.view : null;
-  // 将当前日志页的刷新间隔保存到浏览器，下次进入沿用
+
   try { if (LOG_REFRESH_VIEWS.includes(state.view)) localStorage.setItem('elw_refresh_'+state.view, String(sec)); } catch(e){}
   if (sec>0){
     const target = state.view;
     logRefreshTimer = setInterval(()=>{
-      // 仅当用户仍停留在该日志页（以地址栏 hash 为准）才静默刷新，否则停止，避免静默渲染把用户拉回日志页
+
       if (((location.hash||'').slice(1)||'dashboard') !== target){ stopLogRefresh(); return; }
       nav(target, true);
     }, sec*1000);
   }
   renderRefreshFloat();
 }
-// 进入日志页时，读取本地保存的刷新间隔并延续自动刷新；若已在该页运行则跳过以免重置定时器
+
 function restoreLogRefresh(){
   const v = state.view;
   if (!LOG_REFRESH_VIEWS.includes(v)) return;
   if (logRefreshTimer && logRefreshTarget === v) return;
-  // 未显式存储过时默认 10 秒（用户预期默认值）；已存储的值（含 0=停止刷新）一律沿用
+
   let sec = 10;
   try { const raw = localStorage.getItem('elw_refresh_'+v); sec = raw==null ? 10 : parseInt(raw,10); } catch(e){ sec = 10; }
   setLogRefresh(isNaN(sec) ? 0 : sec);
 }
-// 移动端悬浮主操作按钮（新建/清空日志），显示在右下角"回顶/回底"按钮上方；清空为红色
+
 const FAB_PRIMARY = {
   applications:      {icon:ICON.plus,  title:'新建应用',     onClick:"newApplication()",           danger:false},
   devices:           {icon:ICON.plus,  title:'添加设备',     onClick:"newDevice()",               danger:false},
@@ -1272,7 +1254,7 @@ async function saveSettings(){
   const r = await api('POST','/api/settings', body);
   if (r.error) { toast(r.error, 'err'); return; }
   await applyPublicSettings();
-  
+
   await applyLanguage(body.ui_lang);
   toast(t('设置已保存'), 'ok');
 }
@@ -1293,12 +1275,11 @@ async function applyPublicSettings(){
       else ll.innerHTML = '';
     }
     if (d.site_name) document.title = d.site_name;
-    
+
     window.ELW_API_BASE_URL = d.api_base_url || '';
     const fav = document.getElementById('faviconLink');
     if (fav && d.favicon_url) fav.href = d.favicon_url;
-    
-    
+
     const siteName = d.site_name || 'HolaStack';
     const rawFooter = d.footer || ('© ' + new Date().getFullYear() + ' ' + siteName);
     const safeFooter = String(rawFooter).replace(/<script[\s\S]*?<\/script>/gi, '');
@@ -1310,7 +1291,7 @@ async function applyPublicSettings(){
     if (ln) {
       if (d.login_notice && d.login_notice.trim()) {
         ln.innerHTML = `<span class="ln-ico">${ICON.speakerWave}</span><span class="ln-txt">${esc(d.login_notice)}</span>`;
-        
+
         ln.classList.toggle('single', !/(\r\n|\n|\r)/.test(d.login_notice.trim()));
         ln.classList.remove('hidden');
       }
@@ -1319,7 +1300,7 @@ async function applyPublicSettings(){
   } catch(e) {}
 }
 async function changePw(){
-  
+
   if (isDemo()) {
     toast(t('演示模式：当前为只读账号，不能修改密码'), 'warn');
     return;
@@ -1363,18 +1344,17 @@ async function savePwFor(id){
   const r=await api('POST','/api/users/password',{user_id:id,new_password:np}); if(r.error){err.textContent=r.error;return;} closeModal(); alert('已修改该用户密码');
 }
 
-
 const randHex = (n) => Array.from({length:n},()=>Math.floor(Math.random()*16).toString(16)).join('');
 async function viewDeviceProfiles(){
   const q = state.tenantFilter ? ('?tenant_id='+state.tenantFilter) : '';
   const [r, tf] = await Promise.all([api('GET','/api/device-profiles'+q), tenantFilterHtml()]);
   state.dps = r.data||[];
-  
+
   const clsOf = d => {
     const cls = []; if(+d.supports_class_b) cls.push('B'); if(+d.supports_class_c) cls.push('C');
     return cls.length ? cls.join('+') : 'A';
   };
-  
+
   const regions = [...new Set((state.dps||[]).map(d=>d.region).filter(Boolean))].sort();
   const regionValues = [{value:'', label:'全部'}, ...regions.map(rg=>({value:rg, label:rg}))];
   const classValues = [
@@ -1426,7 +1406,6 @@ async function viewDeviceProfiles(){
     ${table}
     ${pager}`;
 }
-
 
 async function viewTenants(){
   const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
@@ -1560,9 +1539,6 @@ async function mcDetail(id){
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
-/* ----------------------------------------------------------------------------
- * 固件升级（FUOTA / Multicast Firmware Update）
- * ------------------------------------------------------------------------- */
 const FUOTA_STATES = ['PENDING','SETUP','FRAGMENTATION','STATUS','DONE','FAILED'];
 const FUOTA_STATE_CLS = {PENDING:'',SETUP:'ok',FRAGMENTATION:'ok',STATUS:'ok',DONE:'ok',FAILED:'err'};
 const FUOTA_STATE_LABEL = {PENDING:'待启动',SETUP:'参数下发',FRAGMENTATION:'分包传输',STATUS:'状态查询',DONE:'已完成',FAILED:'失败'};
@@ -1757,7 +1733,7 @@ async function fuotaUpload(campId){
     });
   } catch(e){ toast('读取文件失败：'+(e.message||e),'err'); btn.disabled=false; btn.textContent='上传并启动'; return; }
   bar.style.width = '25%'; txt.textContent = '正在上送 ('+Math.round(file.size/1024)+' KB)…';
-  // 固件分片计数（用于进度条粗略显示）
+
   const fragN = Math.max(1, Math.ceil(file.size / Math.max(1, frag)));
   const r = await api('POST','/api/fuota/'+campId+'/start',{
     firmware_base64: b64,
@@ -1771,9 +1747,6 @@ async function fuotaUpload(campId){
   setTimeout(()=>{ closeModal(); nav('fuota'); }, 1200);
 }
 
-/* ----------------------------------------------------------------------------
- * NOC 仪表盘 (网络运维中心)
- * ------------------------------------------------------------------------- */
 let nocClockTimer = null;
 function bar(pct, color){
   pct = Math.max(0, Math.min(100, pct|0));
@@ -1866,13 +1839,6 @@ async function viewNoc(){
   startNocClock();
 }
 
-/* ----------------------------------------------------------------------------
- * 位置地图 (设备 / 网关地理分布)
- * ------------------------------------------------------------------------- */
-// ----------------------------------------------------------------------------
-// 位置地图（设备 / 网关地理分布）—— 第三方地图 API 接入（Leaflet 瓦片）
-// ----------------------------------------------------------------------------
-// 可在站点设置选择提供商；无需 Key 的可直接用，needKey=1 的需在设置里填 Key。
 window.MAP_PROVIDERS = [
   { id:'',    name:'（无，使用内置简图）', url:'', needKey:0 },
   { id:'custom', name:'自定义瓦片 URL',  url:null, needKey:0 },
@@ -1915,7 +1881,7 @@ async function renderLeafletMap(devs, gws, prov, mapKey){
   const map = L.map(canvas, { zoomControl:true }).setView([30, 105], 3);
   window.__leafletMap = map;
   L.tileLayer(url, { maxZoom: prov.maxZ||19, attribution: prov.name, subdomains: prov.sub?prov.sub.split(''):undefined }).addTo(map);
-  // 天地图：vec_w/img_w/ter_w 为底图（无注记），叠加 cva_w 矢量注记层显示地名/路名
+
   if (prov.id && String(prov.id).indexOf('tianditu')===0){
     L.tileLayer('https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk='+encodeURIComponent(mapKey||''),
       { maxZoom: prov.maxZ||18, attribution:'天地图注记', subdomains:'01234567' }).addTo(map);
@@ -1935,7 +1901,7 @@ async function renderLeafletMap(devs, gws, prov, mapKey){
   const side = document.getElementById('mapSide');
   if (side) side.innerHTML = `<div class="map-sum"><div><b>${devs.length}</b> 设备（<b>${(devs||[]).filter(hasCoord).length}</b> 有坐标）</div><div><b>${gws.length}</b> 网关（<b>${(gws||[]).filter(hasCoord).length}</b> 有坐标）</div><div class="muted">提供商：${escHtml(prov.name)}｜点击标记查看信息</div></div>`;
 }
-/* ---------- 天地图官方 JS API（T.Map）渲染 ---------- */
+
 function tdtDot(color){
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18">'
     + '<circle cx="9" cy="9" r="6.5" fill="'+color+'" stroke="#ffffff" stroke-width="2.5"/></svg>';
@@ -1949,7 +1915,7 @@ function injectTiandituSdk(tk){
   return new Promise((res) => {
     if (!tk){ res(); return; }
     if (window.T && T.Map && window.__tdtTk === tk){ res(); return; }
-    // tk 变化：清掉旧实例与旧脚本，避免拿到旧授权
+
     try { if (window.__tdtMap && window.__tdtMap.destroy) window.__tdtMap.destroy(); } catch(e){}
     window.__tdtMap = null; window.T = undefined;
     document.querySelectorAll('script[data-tdt-sdk]').forEach(s => { try{ s.remove(); }catch(e){} });
@@ -1959,7 +1925,7 @@ function injectTiandituSdk(tk){
     sb.onload = () => { window.__tdtTk = tk; setTimeout(res, 60); };
     sb.onerror = () => { window.__tdtTk = null; res(); };
     document.head.appendChild(sb);
-    setTimeout(res, 12000); // 兜底超时，防网络挂起卡死
+    setTimeout(res, 12000);
   });
 }
 async function renderTiandituMap(devs, gws, tk){
@@ -2004,7 +1970,6 @@ async function renderTiandituMap(devs, gws, tk){
     map.centerAndZoom(new T.LngLat(105, 30), 3);
   }
 
-  // 图层切换（矢量 / 影像 / 影像+注记 / 地形）
   const box = document.createElement('div');
   box.className = 'tdt-layer-box';
   box.innerHTML = '<button data-t="TMAP_NORMAL_MAP" class="on">矢量</button>'
@@ -2039,10 +2004,10 @@ async function viewMap(){
   const set = await getMapSettings();
   const prov = (window.MAP_PROVIDERS||[]).find(p=>p.id===set.map_provider)
             || (window.MAP_PROVIDERS||[]).find(p=>p.id==='gaode');
-  // 自定义瓦片 URL：用站点设置里填写的 map_url 作为瓦片地址
+
   const tileUrl = (prov && prov.id==='custom') ? (set.map_url||'') : (prov && prov.url || '');
   const name = (prov && prov.id==='custom') ? '自定义瓦片 URL' : (prov ? prov.name : '');
-  // 天地图：走官方 JS API（T.Map），需填 tk
+
   if (prov && prov.id && String(prov.id).indexOf('tianditu')===0){
     if (!set.map_key){ toast('天地图需在「设置→地图服务」填写 API Key','warn'); renderMap(devs, gws); }
     else { try { await renderTiandituMap(devs, gws, set.map_key); }
@@ -2122,9 +2087,6 @@ function mapShowDev(id){
   </div>`;
 }
 
-// ===================================================================
-// 帧检视：LoRaWAN PHY 逐字段解析
-// ===================================================================
 function b2h(arr, sep){ return (arr||[]).map(x=>('0'+((x&0xff)>>>0).toString(16)).slice(-2)).join(sep||''); }
 function rev(arr){ return (arr||[]).slice().reverse(); }
 
@@ -2136,7 +2098,7 @@ function parseLoraFrame(hexPlain){
   const mtype=(mhdr>>5)&0x07, major=mhdr&0x03;
   const MT={0:'Join-request',1:'Join-accept',2:'Unconfirmed Data Up',3:'Unconfirmed Data Down',4:'Confirmed Data Up',5:'Confirmed Data Down',6:'RFU(6)',7:'Proprietary'};
   out.rows.push({k:'MHDR', v:b2h([mhdr]), d:`MType=${mtype} → ${MT[mtype]||'?'}; Major=${major}${major===0?' (LoRaWAN R1)':''}`});
-  if (mtype===0){ // Join-request
+  if (mtype===0){
     if (b.length<23){ out.error=`Join-request 长度不足（${b.length} 字节，需 23）`; return out; }
     out.rows.push({k:'AppEUI', v:b2h(b.slice(1,9)), d:'空口小端，网络序 '+b2h(rev(b.slice(1,9)))});
     out.rows.push({k:'DevEUI', v:b2h(b.slice(9,17)), d:'空口小端，网络序 '+b2h(rev(b.slice(9,17)))});
@@ -2145,14 +2107,14 @@ function parseLoraFrame(hexPlain){
     out.note='MIC 需 AppKey 验证，由 NS 完成；此处仅展示原始字节。';
     return out;
   }
-  if (mtype===1){ // Join-accept（空口为密文）
+  if (mtype===1){
     if (b.length<17){ out.error='Join-accept 长度不足'; return out; }
     out.rows.push({k:'(密文主体)', v:b2h(b.slice(1,b.length-4)), d:'Join-accept 在空口为 AES 加密，需 AppKey 解密后才能解析 AppNonce/NetID/DevAddr/DLSettings/RxDelay/CFList'});
     out.rows.push({k:'MIC', v:b2h(b.slice(b.length-4)), d:'末 4 字节（密文内）'});
     out.note='Join-accept 为加密帧，解密由 NS 完成。';
     return out;
   }
-  if (mtype>=2 && mtype<=5){ // 数据帧 上行/下行
+  if (mtype>=2 && mtype<=5){
     if (b.length<8){ out.error='数据帧长度不足'; return out; }
     const up = (mtype===2||mtype===4);
     const devAddr=b.slice(1,5);
@@ -2193,11 +2155,10 @@ function parseLoraFrame(hexPlain){
 }
 
 async function frameInspector(id){
-  // 1) 优先从内存列表找（响应最快）
+
   let rec = (state.ups||[]).find(x=>x.id===id) || (state.dls||[]).find(x=>x.id===id);
   let kind = rec ? ((state.ups||[]).includes(rec) ? 'uplink' : 'downlink') : '';
-  // 2) 内存没有则从 API 取单条（避免 SPA 跨页面点击时丢上下文）
-  // 单条端点返回 {uplink:{...}} / {downlink:{...}}（原生 snake_case，csAdapt 透传）
+
   if (!rec){
     try {
       const up = await api('GET', '/api/uplinks/' + id);
@@ -2239,9 +2200,6 @@ async function frameInspector(id){
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
 }
 
-// ===================================================================
-// 包捕获导出（上行 / 下行 / 事件）
-// ===================================================================
 function downloadBlob(name, text, mime){
   const blob = new Blob([text], {type: mime||'text/plain'});
   const url = URL.createObjectURL(blob);
@@ -2265,9 +2223,6 @@ async function exportCapture(kind, fmt){
   toast(`已导出 ${data.length} 条 ${kind}（${fmt.toUpperCase()}）`, 'ok');
 }
 
-// ===================================================================
-// 解码器模板库
-// ===================================================================
 const DECODER_TEMPLATES = [
   { name:'HEX 透传（原样输出）', desc:'把负载 hex 当作字符串返回，便于调试与抓包对照。',
     code:`// function(hex, bytes) -> 字段数组
@@ -2333,7 +2288,6 @@ async function useDecoderTemplate(i){
   closeModal();
 }
 
-// ===================== 物模型 =====================
 let __tm = { id:0, fields:[] };
 
 async function viewThingModels(){
@@ -2498,7 +2452,7 @@ function tmCollectFields(){
     }
     if(f.key) out.push(f);
   });
-  if(out.includes(null) !== true){ /* ok */ }
+  if(out.includes(null) !== true){  }
   return out.filter(Boolean);
 }
 
@@ -2541,7 +2495,6 @@ async function tmDel(id){
   tmLoad();
 }
 
-// 仅用于「测试解码」的前端预览（SEGMENT/JSON）。真实入库以上行时服务器解码为准。
 function tmTest(){
   const hex = (document.getElementById('tmf_hex')||{}).value || '';
   const codec = (document.getElementById('tmf_codec')||{}).value || 'SEGMENT';
@@ -2614,7 +2567,7 @@ function tmDecodeJson(fields, hex){
   const bin = tmHexToBin(hex);
   const str = bin.map(b=>String.fromCharCode(b)).join('');
   let obj;
-  try{ obj = JSON.parse(str.trim()); }catch(e){ /* 可能带 BOM/格式 */ try{ obj = JSON.parse(str.replace(/^\uFEFF/,'')); }catch(e2){ return {error:'JSON 解析失败：'+str}; } }
+  try{ obj = JSON.parse(str.trim()); }catch(e){  try{ obj = JSON.parse(str.replace(/^\uFEFF/,'')); }catch(e2){ return {error:'JSON 解析失败：'+str}; } }
   const out = {};
   fields.forEach(f=>{
     const path = (f.jsonKey||f.key).split('.');
@@ -2628,7 +2581,6 @@ function tmDecodeJson(fields, hex){
   return out;
 }
 
-// ===================== 数据看板 =====================
 window.__dd = { dev:0 };
 
 async function viewDashboardData(){
@@ -2740,7 +2692,6 @@ function fmtNum(v){
   return Number(v).toFixed(1);
 }
 
-// ==================== 告警管理 ====================
 const __alert = { rules: [], groups: [], devices: [] };
 
 async function viewAlerts(){
@@ -2810,7 +2761,7 @@ async function alertReloadRules(){
       <button class="btn err" onclick="alertRuleDel(${r.id})">${ICON.trash}${t('删除')}</button>
     </div>`;
   }).join('') : '<div class="muted">'+t('暂无告警规则，点击「新建规则」')+'</div>';
-  // 预取设备名用于显示
+
   if(list.some(r=>r.device_id && r.device_id>0)) alertCacheDevices(list);
 }
 
@@ -2960,7 +2911,6 @@ async function alertRuleDel(id){
   toast(t('已删除'),'ok'); alertReloadRules();
 }
 
-// --- 告警日志/最新告警 ---
 let __alertLogState = {status:'', offset:0};
 async function alertRenderLog(host, activeOnly){
   __alertLogState = {status: activeOnly?'triggered':'', offset:0, active:activeOnly};
@@ -3016,7 +2966,6 @@ async function alertRenderGroups(host){
   await grpReload();
 }
 
-// --- 通知组 ---
 let __grpModal = null;
 async function viewNotificationGroups(){
   const view = document.getElementById('view');
@@ -3090,7 +3039,6 @@ async function grpDel(id){
   toast(t('已删除'),'ok'); grpReload();
 }
 
-// --- 定时任务 ---
 let __sched = { devices: [] };
 function schedFmtTS(ts){ return ts ? new Date(ts*1000).toLocaleString() : '—'; }
 function schedCronDesc(expr){
@@ -3156,7 +3104,7 @@ async function schedReload(){
       <button class="btn err ghost" onclick="schedDel(${x.id})">${ICON.trash}${t('删除')}</button>
     </div>`).join('') : '<div class="muted">'+t('暂无定时任务，点击「新建定时任务」')+'</div>';
 }
-// cron 预设生成
+
 function schedBuildCron(){
   const mode = document.getElementById('st_mode').value;
   if(mode==='custom') return (document.getElementById('st_cron').value||'').trim();
@@ -3303,7 +3251,6 @@ function schedNew(){ schedModal({id:0,name:'',device_id:0,port:1,payload_hex:'',
 function schedEdit(x){ schedModal(x); }
 document.addEventListener('input', ev=>{ if(ev.target && /^st_(min|hm|wd_hm|dow|cron)$/.test(ev.target.id)) schedRefreshPreview(); });
 
-/* ================= 联动模型 / 自动化 (P6) ================= */
 var __au = { apps:[], devices:[], groups:[], list:[], modal:null };
 async function viewAutomations(){
   const view = document.getElementById('view');
@@ -3499,7 +3446,6 @@ async function autoDel(id){
   toast(t('已删除'),'ok'); autoReload();
 }
 
-/* ================= 角色管理（含资源配额，原「用户配置」已合并至此） ================= */
 async function viewRoles(){
   const r = await api('GET','/api/roles'); const roles=r.data||[]; const catalog=r.catalog||{};
   __rbc.catalog = catalog; __rbc.roles = roles;
@@ -3517,7 +3463,7 @@ async function viewRoles(){
   document.getElementById('view').innerHTML = `
     <div class="view-head"><h2>${ICON.shieldCheck||''}${t('角色管理')}</h2>${adminBtn(`<button onclick="roleNew()">${ICON.plus}${t('新建角色')}</button>`)}</div>
     <div class="card" style="padding:4px 0"><table><thead><tr><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('权限')}</th><th>${t('设备上限')}</th><th>${t('私有网关上限')}</th><th>${t('用户数')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="muted" style="font-size:12px;margin-top:8px">${t('角色配额提示')}</div>`;
+    <div class="muted" style="font-size:12px;margin-top:8px">${t('内置角色只读；自定义角色可设设备/网关配额')}</div>`;
 }
 function roleNew(){
   const defPerms = Object.keys(__rbc.catalog||{}).filter(k=>['dashboard','devices','alerts','uplinks','downlinks'].indexOf(k)!==-1);
@@ -3601,7 +3547,7 @@ function roleModal(x){
       ${isSys?`<div class="rl-chips">${groups.map(([glabel,ks])=>ks.map(k=>`<label class="rl-chip ${has(k)?'on':''}" style="cursor:default"><input type="checkbox" ${has(k)?'checked':''} disabled>${esc(cats[k]||k)}</label>`).join('')).join('')}</div>`:''}
     </div>
     ${isSys?'':`<div class="rl-sec">
-      <div class="rl-sec-title"><h4>${t('资源配额')}</h4><span class="muted">${t('配额说明：绑定该角色的用户（按租户）创建设备/网关时受此配额约束；未配置时沿用「用户配置」的旧上限逻辑。')}</span></div>
+      <div class="rl-sec-title"><h4>${t('资源配额')}</h4><span class="muted">${t('绑定该角色的用户创建设备/网关时受此配额约束')}</span></div>
       <div class="rl-quota">
         <div class="rl-quota-card">
           <label>${t('设备上限')}</label>

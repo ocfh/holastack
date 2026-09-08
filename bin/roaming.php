@@ -1,13 +1,5 @@
 <?php
 
-
-
-
-
-
-
-
-
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\Roaming;

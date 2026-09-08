@@ -1,34 +1,26 @@
 <?php
 namespace holastack\Core;
 
-/**
- * 极简 5 字段 cron 解析 + 下一次执行时间计算。
- * 支持：星号、步长（斜杠加数字，如 每5分钟）、单值、区间A-B、逗号列表（分钟/小时/日/月/周）。
- * 日(dom)与周(dow)按标准 cron 语义为 OR 关系。
- */
 class Cron
 {
     private const RANGE = [
-        0 => 59, // minute
-        1 => 23, // hour
-        2 => 31, // day of month
-        3 => 12, // month
-        4 => 6,  // day of week (0=Sunday)
+        0 => 59,
+        1 => 23,
+        2 => 31,
+        3 => 12,
+        4 => 6,
     ];
 
-    /**
-     * 返回 expr 在 from 之后的第一个匹配时间点（unix 秒），60 天内找不到返回 null。
-     */
     public static function next(string $expr, int $from): ?int
     {
         $parts = self::parse($expr);
         if ($parts === null) {
             return null;
         }
-        $t = $from - $from % 60 + 60; // 对齐到分钟并前进到下一分钟
+        $t = $from - $from % 60 + 60;
         $limit = $t + 60 * 86400;
-        $domFull = count($parts[2]) === 32; // 0..31 全量
-        $dowFull = count($parts[4]) === 7;  // 0..6 全量
+        $domFull = count($parts[2]) === 32;
+        $dowFull = count($parts[4]) === 7;
         while ($t < $limit) {
             $ds = getdate($t);
             $monthOk = isset($parts[3][$ds['mon']]);
@@ -37,7 +29,7 @@ class Cron
             if ($domFull && $dowFull) {
                 $dayOk = true;
             } elseif (!$domFull && !$dowFull) {
-                $dayOk = $domOk || $dowOk; // 标准 cron：任一字段匹配即可
+                $dayOk = $domOk || $dowOk;
             } elseif (!$domFull) {
                 $dayOk = $domOk;
             } else {
@@ -51,9 +43,6 @@ class Cron
         return null;
     }
 
-    /**
-     * @return array|null 5 个稀疏 true-map；非法表达式返回 null
-     */
     public static function parse(string $expr): ?array
     {
         $fields = preg_split('/\s+/', trim($expr));

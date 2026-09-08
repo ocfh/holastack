@@ -1,13 +1,6 @@
-
-
-
-
-
-
 (function () {
   'use strict';
 
-  
   function Ad_ensureCss() {
     var existing = document.getElementById('ad-css');
     if (existing) existing.remove();
@@ -57,8 +50,6 @@
     document.head.appendChild(st);
   }
 
-  
-  
   function Ad_select(id) {
     var items = document.querySelectorAll('.ad-item');
     items.forEach(function (it) { it.classList.toggle('active', it.getAttribute('data-ad') === id); });
@@ -74,7 +65,6 @@
     }
   }
 
-  
   function Ad_copy(text, btn) {
     var reset = function () { var t0 = btn.textContent; btn.textContent = (typeof t === 'function' ? t('已复制 ✓') : '已复制 ✓'); setTimeout(function () { btn.textContent = t0; }, 1200); };
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -135,7 +125,6 @@
     if (bd) bd.classList.remove('show');
   }
 
-
   if (typeof window !== 'undefined') {
     window.viewApiDocs = async function () {
       var view = document.getElementById('view');
@@ -147,7 +136,7 @@
       root.style.setProperty('--ad-top', (hh + 16) + 'px');
       root.style.setProperty('--ad-maxh', 'calc(100vh - ' + (hh + 32) + 'px)');
       try {
-        
+
         var tok = (window.state && window.state.token) || localStorage.getItem('elw_token') || '';
         var res = await fetch('/api/view/apidocs', tok ? { headers: { 'X-Elw-Token': tok } } : {});
         if (!res.ok) { view.innerHTML = '<p class="muted">' + (typeof t === 'function' ? t('加载失败') : '加载失败') + '</p>'; return; }
@@ -156,7 +145,7 @@
         view.innerHTML = '<p class="muted">' + (typeof t === 'function' ? t('加载失败') : '加载失败') + '</p>';
         return;
       }
-      
+
       var first = view.querySelector('.ad-item');
       if (first) Ad_select(first.getAttribute('data-ad'));
       Ad_mobileChrome();

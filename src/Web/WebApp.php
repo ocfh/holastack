@@ -17,24 +17,12 @@ use holastack\Core\Multicast;
 use holastack\Core\Fuota;
 use holastack\Core\LoRaWANVersion;
 
-
-
-
-
-
 class WebApp
 {
-    
 
     const GW_OFFLINE_TIMEOUT = 300;
-    
 
     const DEV_OFFLINE_TIMEOUT = 600;
-
-    
-
-    
-
 
     private static function scope(): array
     {
@@ -79,11 +67,6 @@ class WebApp
         return $s['tenant_id'];
     }
 
-    /**
-     * 资源配额解析：优先取该租户下用户所绑定角色的配额（gateways_unlimited/gateways_limit/devices_limit），
-     * 角色未配置（全 0）时回退到租户（用户配置）自身的 private_gateways_* 旧逻辑。
-     * 返回 ['gateways_unlimited'=>bool, 'gateways_limit'=>int, 'devices_limit'=>int, 'source'=>'role'|'tenant'|'none']
-     */
     public static function quotaForTenant(int $tenantId): array
     {
         if ($tenantId > 0) {
@@ -114,7 +97,6 @@ class WebApp
         return ['gateways_unlimited' => false, 'gateways_limit' => 0, 'devices_limit' => 0, 'source' => 'none'];
     }
 
-    /** 校验租户网关配额（角色优先），超限返回错误信息，否则 null。 */
     private static function checkGatewayQuota(int $tenantId): ?string
     {
         $q = self::quotaForTenant($tenantId);
@@ -137,7 +119,6 @@ class WebApp
         return null;
     }
 
-    /** 校验租户设备配额（仅来自角色配置，租户旧字段不控设备），超限返回错误信息，否则 null。 */
     private static function checkDeviceQuota(int $tenantId): ?string
     {
         $q = self::quotaForTenant($tenantId);
@@ -169,9 +150,6 @@ class WebApp
         $rows = Database::fetchAll("SELECT id FROM applications WHERE tenant_id=?", [$tid]);
         return array_map(static fn($r) => (int) $r['id'], $rows);
     }
-
-    
-
 
     private static function demoDevices(?int $appId = null): array
     {
@@ -384,9 +362,6 @@ class WebApp
             }
         }
         $now = time();
-        
-
-        
 
         $pool = [
             ['uplink',   'info',  '上行数据帧'],
@@ -398,12 +373,10 @@ class WebApp
             ['txack',    'warn',  '网关下行发射失败'],
             ['ack',      'info',  '设备已确认下行帧'],
         ];
-        
 
         if ($devId !== null && $devId > 0) {
             $pool = array_values(array_filter($pool, static fn($p) => !in_array($p[0], ['gateway', 'txack'], true)));
         }
-        
 
         if ($type !== null && $type !== '') {
             $pool = array_values(array_filter($pool, static fn($p) => $p[0] === $type));
@@ -464,7 +437,6 @@ class WebApp
         if (self::getApplicationByName($p['name'])) {
             return ['error' => '应用名称已存在'];
         }
-        
 
         $appEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['app_eui'] ?? ''));
         if ($appEui === '') {
@@ -521,7 +493,6 @@ class WebApp
         if (Database::fetch("SELECT id FROM devices WHERE dev_eui=?", [$devEui])) {
             return ['error' => 'DevEUI 已存在'];
         }
-        
 
         $class = strtoupper($p['class'] ?? 'A');
         if (!in_array($class, ['A', 'B', 'C'], true)) {
@@ -535,7 +506,6 @@ class WebApp
         if (!self::canAccess($app)) {
             return ['error' => 'forbidden: application not in your tenant'];
         }
-        
 
         $tid = (int) ($app['tenant_id'] ?? 0);
         if ($tid <= 0) {
@@ -567,7 +537,6 @@ class WebApp
             if (strlen($joinEui) !== 16) {
                 return ['error' => 'join_eui must be 16 hex chars'];
             }
-            
 
             $nwkKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_key'] ?? $appKey));
             Database::execute(
@@ -575,7 +544,7 @@ class WebApp
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [$appId, $tid, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
             );
-        } else { 
+        } else {
 
             $devAddr = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['dev_addr'] ?? ''));
             $nwk = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_s_key'] ?? ''));
@@ -595,10 +564,6 @@ class WebApp
         return ['id' => Database::lastInsertId()];
     }
 
-    /**
-     * Bulk import devices (CSV or JSON) into an application.
-     * Reuses createDevice() for per-row validation so ABP/OTAA rules stay identical.
-     */
     public static function importDevices(int $appId, string $raw, string $format): array
     {
         $app = self::getApplication($appId);
@@ -693,7 +658,7 @@ class WebApp
                 [$tid]
             );
         }
-        $timeout = time() - self::GW_OFFLINE_TIMEOUT; 
+        $timeout = time() - self::GW_OFFLINE_TIMEOUT;
 
         foreach ($rows as &$g) {
             $g['status'] = ((int) ($g['last_seen'] ?? 0) >= $timeout) ? 'online' : 'offline';
@@ -804,11 +769,6 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    
-
-
-
-
     public static function countUplinks(?int $devId = null, ?int $appId = null, ?int $tenantId = null): int
     {
         if (self::scope()['demo']) { return 120; }
@@ -847,10 +807,6 @@ class WebApp
         return (int) Database::fetch($sql, $params)['c'];
     }
 
-    /**
-     * 按 ID 取单条上行记录（带租户隔离）。
-     * 找不到或越权时返回 null。
-     */
     public static function getUplink(int $id, ?int $tenantId = null): ?array
     {
         if ($id <= 0) { return null; }
@@ -869,9 +825,6 @@ class WebApp
         return $row;
     }
 
-    /**
-     * 按 ID 取单条下行记录（带租户隔离）。
-     */
     public static function getDownlink(int $id, ?int $tenantId = null): ?array
     {
         if ($id <= 0) { return null; }
@@ -917,9 +870,6 @@ class WebApp
         );
         return ['id' => Database::lastInsertId(), 'status' => 'pending'];
     }
-
-    
-
 
     public static function getApplication(int $id): ?array
     {
@@ -980,9 +930,6 @@ class WebApp
         return ['ok' => true];
     }
 
-    
-
-
     public static function getDevice(int $id): ?array
     {
         $dev = Database::fetch("SELECT * FROM devices WHERE id=?", [$id]);
@@ -1022,7 +969,6 @@ class WebApp
         if (array_key_exists('device_profile_id', $p)) {
             $setParts[] = 'device_profile_id=?';
             $params[] = (int) $p['device_profile_id'];
-            
 
             $dp = DeviceProfile::getOrDefault((int) $p['device_profile_id']);
             if (!$dp) {
@@ -1053,8 +999,6 @@ class WebApp
             $setParts[] = 'app_key=?';
             $params[] = $appKey;
         }
-
-        
 
         if ($device['activation'] === 'OTAA') {
             if (!empty($p['dev_eui'])) {
@@ -1097,9 +1041,6 @@ class WebApp
         return ['ok' => true];
     }
 
-    
-
-
     public static function getGateway(string $gwId): ?array
     {
         $gw = Database::fetch("SELECT * FROM gateways WHERE gw_id=?", [$gwId]);
@@ -1126,7 +1067,6 @@ class WebApp
             return ['error' => 'unsupported region'];
         }
         $tid = self::createTenantId($p);
-        
 
         $t = $tid > 0 ? Tenant::get($tid) : null;
         $quotaErr = $tid > 0 ? self::checkGatewayQuota($tid) : null;
@@ -1157,7 +1097,6 @@ class WebApp
 
     public static function updateGateway(string $gwId, array $p): array
     {
-        
 
         if (!self::getGateway($gwId)) {
             return ['error' => 'gateway not found or forbidden'];
@@ -1166,7 +1105,7 @@ class WebApp
         if ($region && !in_array($region, Region::supported(), true)) {
             return ['error' => 'unsupported region'];
         }
-        // 手动 GPS 坐标：不依赖网关 stat 上报（很多网关 forwarder 不发 GPS）
+
         Database::execute(
             "UPDATE gateways SET name=?, region=?, rf_config=?, latitude=?, longitude=?, altitude=? WHERE gw_id=?",
             [$p['name'] ?? '', $region, self::rfConfigJson($p['rf_config'] ?? null),
@@ -1176,9 +1115,6 @@ class WebApp
         return ['gw_id' => $gwId];
     }
 
-    /**
-     * 网关射频配置：接受数组/对象或 JSON 字符串，统一存为 JSON 字符串。
-     */
     private static function rfConfigJson($v): string
     {
         if ($v === null || $v === '') {
@@ -1194,9 +1130,6 @@ class WebApp
         return '';
     }
 
-    /**
-     * 解析经纬度：空/非法返回 null（前端 hasCoord 视为「无坐标」）。
-     */
     private static function parseCoord($v): ?float
     {
         if ($v === null || $v === '') {
@@ -1206,9 +1139,6 @@ class WebApp
         return is_finite($f) ? $f : null;
     }
 
-    /**
-     * 解析海拔（米）：空/非法返回 null。
-     */
     private static function parseAlt($v): ?float
     {
         if ($v === null || $v === '') {
@@ -1220,7 +1150,6 @@ class WebApp
 
     public static function deleteGateway(string $gwId): array
     {
-        
 
         if (!self::getGateway($gwId)) {
             return ['error' => 'gateway not found or forbidden'];
@@ -1229,14 +1158,10 @@ class WebApp
         return ['ok' => true];
     }
 
-    
-
-
     public static function listUsers(): array
     {
         $cur = Auth::currentUser();
         if (!$cur) return [];
-        
 
         if ($cur['role'] === Auth::ROLE_ADMIN) {
             return Database::fetchAll(
@@ -1265,19 +1190,16 @@ class WebApp
         if (!$cur) {
             return ['error' => 'not authenticated'];
         }
-        
 
         if ($cur['role'] === Auth::ROLE_OPERATOR) {
             return ['error' => 'forbidden: operator is read-only'];
         }
-        
 
         if ($cur['role'] !== Auth::ROLE_ADMIN && (int)$cur['id'] !== $targetUserId) {
             return ['error' => 'forbidden: can only change own password'];
         }
         $hash = password_hash($newPassword, PASSWORD_DEFAULT);
         Database::execute("UPDATE users SET password_hash=? WHERE id=?", [$hash, $targetUserId]);
-        
 
         Database::execute("DELETE FROM auth_tokens WHERE user_id=?", [$targetUserId]);
         return ['ok' => true];
@@ -1289,12 +1211,10 @@ class WebApp
         if (!$cur) {
             return ['error' => 'not authenticated'];
         }
-        
 
         if ((int)$cur['id'] === $id) {
             return ['error' => 'cannot delete self'];
         }
-        
 
         if ($cur['role'] !== Auth::ROLE_ADMIN) {
             return ['error' => 'forbidden'];
@@ -1367,7 +1287,6 @@ class WebApp
 
     public static function getStats(): array
     {
-        
 
         $s = self::scope();
         if ($s['demo']) {
@@ -1384,11 +1303,10 @@ class WebApp
         }
         $tid = self::effectiveTenant();
         $appIds = self::visibleAppIds();
-        $appClause = null;   
+        $appClause = null;
 
         if ($appIds !== null) {
             if (!$appIds) {
-                
 
                 return [
                     'applications' => 0, 'devices' => 0, 'gateways' => 0,
@@ -1417,7 +1335,6 @@ class WebApp
             : Database::fetch("SELECT COUNT(*) c FROM gateways")['c'];
         $ups = $appFilter("SELECT COUNT(*) c FROM uplinks")['c'];
         $dls = $appFilter("SELECT COUNT(*) c FROM downlinks")['c'];
-        
 
         $dps = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM device_profiles WHERE tenant_id=?", [$tid])['c']
@@ -1426,14 +1343,12 @@ class WebApp
         $gwsOnline = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE tenant_id=? AND last_seen >= ?", [$tid, time() - self::GW_OFFLINE_TIMEOUT])['c']
             : Database::fetch("SELECT COUNT(*) c FROM gateways WHERE last_seen >= ?", [time() - self::GW_OFFLINE_TIMEOUT])['c'];
-        
 
         $devsOnline = $appFilter(
             "SELECT COUNT(*) c FROM devices WHERE status='active' AND last_seen >= ?",
             [time() - self::DEV_OFFLINE_TIMEOUT]
         )['c'];
         $devsOffline = max(0, (int)$devs - (int)$devsOnline);
-        
 
         $deviceLogs = Database::fetchAll(
             "SELECT id, dev_id, dev_addr, fcnt, port, rssi, snr, decrypted_hex, payload_hex, received_at FROM uplinks"
@@ -1458,9 +1373,6 @@ class WebApp
     {
         return Region::supported();
     }
-
-    
-
 
     public static function listDeviceProfiles(?int $tenantId = null): array
     {
@@ -1565,8 +1477,6 @@ class WebApp
         }
         return ['data' => ThingModel::readings($devId, $fieldKey, $from, $to)];
     }
-
-    // ---------------- 告警管理 ----------------
 
     public static function listAlertRules(?int $appId): array
     {
@@ -1679,8 +1589,6 @@ class WebApp
         return Alert::deleteGroup($id);
     }
 
-    // ---------------- 定时任务 ----------------
-
     public static function listScheduledTasks(): array
     {
         $rows = ScheduledTask::list(self::effectiveTenant());
@@ -1765,8 +1673,6 @@ class WebApp
         }
         return ['id' => $r['id'], 'downlink_id' => $r['downlink_id'], 'next_run_at' => $r['next_run_at'], 'ok' => 1];
     }
-
-    // ---------------- 联动模型（自动化） ----------------
 
     public static function listAutomations(): array
     {
@@ -1876,13 +1782,8 @@ class WebApp
         return Role::delete($id);
     }
 
-
-    
-
-
     public static function listApiKeys(int $applicationId, ?int $tenantId = null): array
     {
-        
 
         if (self::scope()['demo']) {
             $now = time();
@@ -1900,7 +1801,6 @@ class WebApp
             }
             return ApiKey::list($applicationId);
         }
-        
 
         $appIds = self::visibleAppIds($tenantId);
         if ($appIds === null || !$appIds) {
@@ -1931,12 +1831,8 @@ class WebApp
         return ApiKey::delete($id);
     }
 
-    
-
-
     public static function listIntegrations(int $applicationId, ?int $tenantId = null): array
     {
-        
 
         if (self::scope()['demo']) {
             $now = time();
@@ -1956,7 +1852,6 @@ class WebApp
             }
             return Integration::list($applicationId);
         }
-        
 
         $appIds = self::visibleAppIds($tenantId);
         if ($appIds === null || !$appIds) {
@@ -1998,9 +1893,6 @@ class WebApp
         }
         return Integration::delete($id);
     }
-
-    
-
 
     public static function listMulticastGroups(?int $appId = null, ?int $tenantId = null): array
     {
@@ -2098,7 +1990,6 @@ class WebApp
     }
     public static function deleteMulticastGroup(int $id): array
     {
-        
 
         if (!self::getMulticastGroup($id)) {
             return ['error' => 'group not found or forbidden'];
@@ -2159,9 +2050,6 @@ class WebApp
         return ['ok' => true];
     }
 
-    
-
-
     public static function listFuotaCampaigns(): array
     {
         $tid = self::effectiveTenant();
@@ -2208,7 +2096,6 @@ class WebApp
         if (!$dev || !self::appInScope((int) $dev['app_id'])) {
             return ['error' => 'device not found or forbidden'];
         }
-        
 
         $inGroup = Database::fetch(
             "SELECT multicast_group_id FROM multicast_group_devices WHERE multicast_group_id=? AND LOWER(dev_eui)=?",
@@ -2252,7 +2139,6 @@ class WebApp
         return ['ok' => true];
     }
 
-    
     public static function clearLogs(string $target, ?int $tenantId = null): array
     {
         $tables = [
@@ -2265,7 +2151,7 @@ class WebApp
             return ['error' => 'invalid log target'];
         }
         $s = self::scope();
-        // 非管理员只能清理自己租户的日志；管理员若传了 tenant_id 则按租户清理，否则清理全部
+
         $tid = $s['is_admin']
             ? ($tenantId && $tenantId > 0 ? (int) $tenantId : null)
             : ($s['tenant_id'] ?: null);
@@ -2281,7 +2167,7 @@ class WebApp
                 [$tid, $tid]
             );
         } else {
-            // uplinks / downlinks：通过应用归属租户过滤
+
             Database::execute("DELETE FROM " . $tbl . " WHERE app_id IN (SELECT id FROM applications WHERE tenant_id=?)", [$tid]);
         }
         return ['target' => $target, 'tenant_id' => $tid, 'cleared' => true];

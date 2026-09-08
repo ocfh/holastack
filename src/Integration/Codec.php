@@ -1,12 +1,6 @@
 <?php
 namespace holastack\Integration;
 
-
-
-
-
-
-
 class Codec
 {
     public const RUNTIME_NONE = 'NONE';
@@ -20,16 +14,9 @@ class Codec
 
     public static function isJsAvailable(): bool
     {
-        return false; 
+        return false;
 
     }
-
-    
-
-
-
-
-
 
     public static function decodeUplink(string $runtime, string $hex): ?array
     {
@@ -41,7 +28,6 @@ class Codec
             case self::RUNTIME_CAYENNE_LPP:
                 return self::decodeCayenneLpp($bin);
             case self::RUNTIME_JS:
-                
 
                 return null;
             case self::RUNTIME_NONE:
@@ -49,9 +35,6 @@ class Codec
                 return null;
         }
     }
-
-    
-
 
     public static function decodeCayenneLpp(string $bin): ?array
     {
@@ -64,7 +47,7 @@ class Codec
             $i += 2;
             $r = self::decodeType($type, $bin, $i);
             if ($r === null) {
-                break; 
+                break;
 
             }
             $out[] = ['channel' => $chan, 'type' => $r['name'], 'value' => $r['value']];
@@ -82,7 +65,7 @@ class Codec
             $i += $bytes;
             return $s;
         };
-        // Cayenne LPP 规范：多字节字段一律大端（MSB first），有符号需手动扩号
+
         $s16 = function (string $b): int {
             $v = unpack('n', $b)[1];
             return $v >= 0x8000 ? $v - 65536 : $v;
@@ -92,31 +75,31 @@ class Codec
             return $v >= 0x80000000 ? $v - 4294967296 : $v;
         };
         switch ($type) {
-            case 0x00: case 0x01: // 数字输入/输出 U8
+            case 0x00: case 0x01:
 
                 $b = $need(1); if ($b === null) return null;
                 return ['name' => $type === 0 ? 'digital_in' : 'digital_out', 'value' => ord($b)];
-            case 0x02: case 0x03: // 模拟输入/输出 S16 BE /100
+            case 0x02: case 0x03:
 
                 $b = $need(2); if ($b === null) return null;
                 return ['name' => $type === 0x02 ? 'analog_in' : 'analog_out', 'value' => $s16($b) / 100.0];
-            case 0x65: // 照度 U16 BE lux
+            case 0x65:
 
                 $b = $need(2); if ($b === null) return null;
                 return ['name' => 'luminosity', 'value' => unpack('n', $b)[1]];
-            case 0x66: // 存在检测 U8
+            case 0x66:
 
                 $b = $need(1); if ($b === null) return null;
                 return ['name' => 'presence', 'value' => ord($b)];
-            case 0x67: // 温度 S16 BE /10 ℃
+            case 0x67:
 
                 $b = $need(2); if ($b === null) return null;
                 return ['name' => 'temperature', 'value' => $s16($b) / 10.0];
-            case 0x68: // 湿度 U8 /2 %
+            case 0x68:
 
                 $b = $need(1); if ($b === null) return null;
                 return ['name' => 'humidity', 'value' => ord($b) / 2.0];
-            case 0x71: // 加速度计 3×S16 BE /1000 g
+            case 0x71:
 
                 $b = $need(6); if ($b === null) return null;
                 return ['name' => 'accelerometer', 'value' => [
@@ -124,11 +107,11 @@ class Codec
                     $s16(substr($b, 2, 2)) / 1000.0,
                     $s16(substr($b, 4, 2)) / 1000.0,
                 ]];
-            case 0x72: // 气压 U16 BE /10 hPa
+            case 0x72:
 
                 $b = $need(2); if ($b === null) return null;
                 return ['name' => 'barometer', 'value' => unpack('n', $b)[1] / 10.0];
-            case 0x73: // 陀螺仪 3×S16 BE /100 °/s
+            case 0x73:
 
                 $b = $need(6); if ($b === null) return null;
                 return ['name' => 'gyrometer', 'value' => [
@@ -136,7 +119,7 @@ class Codec
                     $s16(substr($b, 2, 2)) / 100.0,
                     $s16(substr($b, 4, 2)) / 100.0,
                 ]];
-            case 0x88: // GPS: 纬度 S32/1e7 + 经度 S32/1e7 + 海拔 S24/100（大端）
+            case 0x88:
 
                 $b = $need(11); if ($b === null) return null;
                 $alt = unpack('N', "\x00" . substr($b, 8, 3))[1];

@@ -3,18 +3,10 @@ namespace holastack\Web;
 
 use holastack\DB\Database;
 
-
-
-
-
-
 class Setting
 {
-    
 
     const KEYS = ['site_name', 'site_logo_url', 'site_icon_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang', 'footer', 'map_provider', 'map_url', 'map_key'];
-
-    
 
     const PUBLIC_KEYS = ['site_name', 'site_logo_url', 'favicon_url', 'login_logo_url', 'login_logo_text', 'login_notice', 'api_base_url', 'ui_lang', 'footer', 'map_provider', 'map_url', 'map_key'];
 
@@ -53,11 +45,6 @@ class Setting
         }
     }
 
-    
-
-
-
-
     public static function renderFooter(string $raw, string $siteName = 'HolaStack'): string
     {
         $year = date('Y');
@@ -78,7 +65,6 @@ class Setting
         if (($out['login_logo_text'] ?? '') === '') {
             $out['login_logo_text'] = $out['site_name'];
         }
-        
 
         $rawFooter = (string)($out['footer'] ?? '');
         if ($rawFooter === '') {

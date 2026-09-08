@@ -1,15 +1,5 @@
 <?php
 
-
-
-
-
-
-
-
-
-
-
 function elw_t(string $s, ?string $lang = null): string
 {
     static $cache = [];
@@ -20,20 +10,11 @@ function elw_t(string $s, ?string $lang = null): string
     return $cache[$lang][$s] ?? $s;
 }
 
-
-
-
-
 function ELW_loadLang(string $lang): array
 {
     $file = __DIR__ . '/../lang/' . preg_replace('/[^A-Za-z0-9_-]/', '', $lang) . '.php';
     return file_exists($file) ? (require $file) : [];
 }
-
-
-
-
-
 
 function ELW_currentLang(): string
 {
@@ -54,12 +35,6 @@ function ELW_currentLang(): string
     }
     return $lang;
 }
-
-
-
-
-
-
 
 function ELW_langOptions(): array
 {

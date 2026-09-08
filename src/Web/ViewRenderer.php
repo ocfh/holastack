@@ -1,12 +1,6 @@
 <?php
 namespace holastack\Web;
 
-
-
-
-
-
-
 class ViewRenderer
 {
     private static function regionOptions(): string
@@ -35,12 +29,6 @@ class ViewRenderer
         return '<option value="1" selected>4/5</option><option value="2">4/6</option>'
             . '<option value="3">4/7</option><option value="4">4/8</option>';
     }
-
-    
-
-    
-
-    
 
     public static function renderLoraCalc(): string
     {
@@ -277,17 +265,10 @@ class ViewRenderer
 HTML;
     }
 
-    
-
-    
-
-    
-
     public static function renderApiDocs(): string
     {
         $t = 'elw_t';
         $groups = self::apiGroups();
-        
 
         $side = '';
         $main = '';
@@ -337,7 +318,6 @@ HTML;
     private static function adDetail(array $a, bool $active): string
     {
         $t = 'elw_t';
-        
 
         $paramsSec = '';
         if (!empty($a['params'])) {
@@ -349,7 +329,6 @@ HTML;
             }
             $paramsSec = '<div class="ad-sec"><h3>' . $t('请求参数') . '</h3><table class="ad-tbl"><thead><tr><th>' . $t('参数') . '</th><th>' . $t('位置') . '</th><th>' . $t('类型') . '</th><th>' . $t('必填') . '</th><th>' . $t('说明') . '</th></tr></thead><tbody>' . $paramsRows . '</tbody></table></div>';
         }
-        
 
         $respRows = '';
         if (!empty($a['respFields'])) {
@@ -359,7 +338,6 @@ HTML;
         } else {
             $respRows = '<tr><td colspan="3" class="ad-note">—</td></tr>';
         }
-        
 
         $errRows = '';
         if (!empty($a['errors'])) {
@@ -369,12 +347,10 @@ HTML;
         } else {
             $errRows = '<tr><td colspan="2" class="ad-note">—</td></tr>';
         }
-        
 
         $curl = self::adCurl($a);
         $body = self::adCode($curl);
         $copyBtn = self::adCopyBtn();
-        
 
         $respJson = json_encode($a['respExample'] ?? new \stdClass(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $respExample = self::adCode($respJson);
@@ -428,8 +404,6 @@ HTML;
         return self::apiPlatformGroups();
     }
 
-
-    /** /api/* 平台 API 文档（会话 token 或应用 API Key） */
     private static function apiPlatformGroups(): array
     {
         $stdErr = static fn() => [
@@ -603,8 +577,6 @@ HTML;
                         '返回 {totalCount, result:[{id, type, level, gatewayId, devId, message, time, rawJson}]}。type 可过滤（如 join/error/tx）。'),
                     $t('cs-api-logs', 'GET', '/api/api-logs?method=&status=&ip=&path_contains=&since=&limit=&offset=', 'API 调用日志 API Logs',
                         '返回 {totalCount, result:[{id, method, path, status, latencyMs, ip, username, role, query, bodySize, time}]}（admin/tenant/operator 均可查，范围按角色过滤）。'),
-                    $t('cs-stream', 'GET', '/api/stream?after=', '实时事件流 SSE',
-                        'Server-Sent Events：连接后持续推送 data: {id, type, level, gateway_id, dev_id, message, created_at}，55 秒超时，客户端带 ?after=<last_id> 重连续传。'),
                     $t('cs-settings', 'GET', '/api/settings', '站点设置 Settings（admin）',
                         'GET 返回 {data:{…}} 全部设置；POST 设置若干键值；POST {clear_logs:"uplinks|downlinks|events|alerts", clear_logs_tenant?} 清理日志（tenant 及以上）。'),
                     $t('cs-stats-regions', 'GET', '/api/stats | /api/regions | /api/me | /api/public-settings | /api/i18n', '基础信息端点',

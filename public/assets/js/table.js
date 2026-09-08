@@ -51,38 +51,36 @@ function paginateRows(rows, state, keys){
   return [rows.slice(offset, offset + limit), total, page, limit, offset];
 }
 function buildSortableTable(cfg){
-  
+
   if (cfg.refresh) {
     window.__tableCfg = window.__tableCfg || {};
     window.__tableCfg[cfg.refresh] = cfg;
   }
   const sort = cfg.state[cfg.stateKey] || cfg.defaultSort;
-  
-  
+
   if (cfg.presorted) {
     return renderTable(cfg, sort);
   }
-  
-  
+
   const filterList = cfg.filterStatusList
     ? cfg.filterStatusList
     : (cfg.filterStatus ? [cfg.filterStatus] : []);
   const fk = cfg.filterStatus ? cfg.filterStatus.col : null;
   const fv = cfg.filterStatus ? cfg.filterStatus.value : '';
-  
+
   let rows = cfg.rows || [];
   for (const f of filterList) {
     if (!f || !f.col || !f.value) continue;
     const fcol = cfg.cols.find(c => c.key === f.col);
     if (fcol && fcol.opts && fcol.opts.getValue) {
       const getV = fcol.opts.getValue;
-      
+
       const opt = fcol.opts.values.find(o => o.value === f.value);
       const matchFn = opt && opt.match ? opt.match : (v => String(v) === f.value);
       rows = rows.filter(r => matchFn(getV(r)));
     }
   }
-  
+
   if (sort && sort.col) {
     const c = cfg.cols.find(x => x.key === sort.col);
     if (c) {
@@ -92,10 +90,7 @@ function buildSortableTable(cfg){
         if (c.type === 'time') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
         else if (c.type === 'num') { va = +cfg.cellValue(a, c.key) || 0; vb = +cfg.cellValue(b, c.key) || 0; }
         else if (c.type === 'status') {
-          
-          
-          
-          
+
           const vals = c.opts && c.opts.values ? c.opts.values : [];
           const getV = c.opts && c.opts.getValue ? c.opts.getValue : (r => r[c.key]);
           const vaRaw = getV(a), vbRaw = getV(b);
@@ -103,7 +98,7 @@ function buildSortableTable(cfg){
           const ib = vals.findIndex(o => String(o.value) === String(vbRaw));
           const idxA = ia >= 0 ? ia : Number.MAX_SAFE_INTEGER;
           const idxB = ib >= 0 ? ib : Number.MAX_SAFE_INTEGER;
-          
+
           if (idxA === idxB) return String(vaRaw ?? '').localeCompare(String(vbRaw ?? '')) * dir;
           va = idxA; vb = idxB;
         }
@@ -114,20 +109,17 @@ function buildSortableTable(cfg){
       });
     }
   }
-  
-  
+
   cfg.rows = rows;
   return renderTable(cfg, sort);
 }
-
-
 
 function renderTable(cfg, sort){
   const rows = cfg.rows || [];
   const filterList = cfg.filterStatusList
     ? cfg.filterStatusList
     : (cfg.filterStatus ? [cfg.filterStatus] : []);
-  
+
   const arrow = (k) => {
     if (!sort || sort.col !== k) return '<span class="sort-arrow" style="opacity:.3;margin-left:4px">↕</span>';
     return sort.dir === 'asc'
@@ -135,8 +127,7 @@ function renderTable(cfg, sort){
       : '<span class="sort-arrow" style="opacity:1;margin-left:4px;color:var(--acc)">↓</span>';
   };
   const header = cfg.cols.map(c => {
-    
-    
+
     const sortable = c.sortable !== false && c.type !== 'raw';
     const cursor = sortable ? 'cursor:pointer' : '';
     const title = sortable ? `点表头排序（${c.label}）` : '';
@@ -144,12 +135,10 @@ function renderTable(cfg, sort){
       ? ` onclick="window['${cfg.stateKey}_sort']('${c.key}')"`
       : '';
     if (c.type === 'status') {
-      
-      
-      
+
       const vals = c.opts.values || [];
       const allOpt = (vals[0] && vals[0].value !== '') ? [{value:'',label:'全部'}, ...vals] : vals;
-      
+
       const curF = filterList.find(f => f.col === c.key);
       const curVal = curF ? curF.value : '';
       const sel = `<select style="font-weight:600;background:transparent;border:0;color:var(--txt);${sortable?'cursor:pointer':'cursor:default'}" onchange="event.stopPropagation();window['${cfg.stateKey}_fstatus']('${c.key}', this.value)">` +
@@ -159,52 +148,37 @@ function renderTable(cfg, sort){
     }
     return `<th style="${cursor}" ${title?`title="${title}"`:''} ${onclick}>${esc(c.label)}${sortable?arrow(c.key):''}</th>`;
   }).join('');
-  
+
   const bodyHtml = rows.length
     ? rows.map(r => cfg.rowHtml(r)).join('')
     : `<tr><td colspan="${cfg.cols.length}" class="muted">${esc(cfg.emptyText||'暂无数据')}</td></tr>`;
   return `<div class="tbl-wrap"><table class="sortable"><thead><tr>${header}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
 }
 
-
-
-
-
-
-
-
 function _tableToggleSort(key, re, col){
   const cur = state[key] || {col:null, dir:'desc'};
   if (cur.col !== col) {
-    
+
     const cfg = (window.__tableCfg && window.__tableCfg[re]) || null;
     const c = cfg && cfg.cols ? cfg.cols.find(x => x.key === col) : null;
     const firstDir = (c && c.firstDir) ? c.firstDir : 'desc';
     state[key] = {col, dir:firstDir};
   }
   else {
-    
+
     const cfg = (window.__tableCfg && window.__tableCfg[re]) || null;
     const c = cfg && cfg.cols ? cfg.cols.find(x => x.key === col) : null;
     const firstDir = (c && c.firstDir) ? c.firstDir : 'desc';
-    if (cur.dir === firstDir) state[key] = {col, dir: firstDir==='desc' ? 'asc' : 'desc'}; 
-    else state[key] = {col:null, dir:'desc'}; 
+    if (cur.dir === firstDir) state[key] = {col, dir: firstDir==='desc' ? 'asc' : 'desc'};
+    else state[key] = {col:null, dir:'desc'};
   }
   window[re]();
 }
-
 
 function _tableSetFStatus(fieldName, re, val){
   state[fieldName] = val;
   window[re]();
 }
-
-
-
-
-
-
-
 
 function buildPager(cfg){
   const total = +cfg.total || 0;
@@ -214,7 +188,7 @@ function buildPager(cfg){
   const pages = Math.max(1, Math.ceil(total / Math.max(1, limit)));
   const from = total === 0 ? 0 : (offset + 1);
   const to = Math.min(offset + limit, total);
-  
+
   const win = [];
   for (let i = Math.max(1, cur - 2); i <= Math.min(pages, cur + 2); i++) win.push(i);
   const chevL = ICON.chevronLeft;
@@ -270,5 +244,3 @@ function _pagerSetLimit(key, re, lim){
   state[key.offsetKey] = 0;
   window[re]();
 }
-
-

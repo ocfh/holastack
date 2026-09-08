@@ -4,18 +4,8 @@ namespace holastack\Storage;
 use holastack\DB\Database;
 use holastack\Region\Region;
 
-
-
-
-
-
-
 class DeviceProfile
 {
-    
-
-
-
 
     public static function list(?int $tenantId = null): array
     {
@@ -35,7 +25,7 @@ class DeviceProfile
 
     public static function getOrDefault(int $id): ?array
     {
-        // 不强制保留/兜底默认模板：只有选择了真实存在的模板才返回，否则 null（创建时由调用方拦截）
+
         if ($id > 0) {
             return self::get($id);
         }
@@ -66,7 +56,6 @@ class DeviceProfile
             }
             $vals[] = '?';
         }
-        
 
         if (array_key_exists('tenant_id', $p)) {
             $set[] = 'tenant_id';
@@ -108,14 +97,11 @@ class DeviceProfile
 
     public static function delete(int $id): array
     {
-        
 
         Database::execute("UPDATE devices SET device_profile_id=0 WHERE device_profile_id=?", [$id]);
         Database::execute("DELETE FROM device_profiles WHERE id=?", [$id]);
         return ['ok' => true];
     }
-
-    
 
     private static function columns(): array
     {

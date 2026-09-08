@@ -3,13 +3,6 @@ namespace holastack\Integration;
 
 use holastack\DB\Database;
 
-
-
-
-
-
-
-
 class Integration
 {
     public const KIND_HTTP = 'HTTP';
@@ -37,11 +30,6 @@ class Integration
             self::KIND_KAFKA,
         ];
     }
-
-    
-
-
-
 
     public static function create(array $p): array
     {
@@ -95,23 +83,12 @@ class Integration
         return ['ok' => true];
     }
 
-    
-
-
-
-
-
-
-
-
-
     public static function dispatch(int $appId, array $device, array $uplinkData, array $telemetry, callable $log, string $eventType = 'up'): void
     {
         $rows = Database::fetchAll("SELECT * FROM integrations WHERE application_id=? AND enabled=1", [$appId]);
         if (empty($rows)) {
             return;
         }
-        
 
         $data = self::buildPayload($device, $uplinkData, $telemetry, $eventType);
         foreach ($rows as $it) {
@@ -176,7 +153,6 @@ class Integration
             }
         }
 
-        // datr 形如 "SF11BW125" / "SF7BW250"，拆成 ChirpStack 风格的 spreading_factor/bandwidth
         $bandwidth = 0;
         $spreadingFactor = 0;
         if (preg_match('/SF(\d+)\s*BW\s*(\d+)/i', (string) ($uplinkData['datr'] ?? ''), $m)) {
@@ -215,9 +191,6 @@ class Integration
             ],
         ];
     }
-
-    
-
 
     private static function handleHttp(array $cfg, array $data, callable $log): void
     {
@@ -308,13 +281,6 @@ class Integration
         self::httpPostRaw($url, json_encode($body, JSON_UNESCAPED_UNICODE), $headers, $log);
     }
 
-    
-
-
-
-
-
-
     private static function httpsRequest(string $url, string $body, array $headers, callable $log, string $method = 'POST'): ?string
     {
         $parts = parse_url($url);
@@ -373,15 +339,6 @@ class Integration
         $log("INTEGRATION HTTP: POST $url (" . strlen($body) . "B)");
     }
 
-    
-
-
-    
-
-
-
-
-
     private static function handleAwsSns(array $cfg, array $data, callable $log): void
     {
         $region = $cfg['aws_region'] ?? '';
@@ -424,13 +381,6 @@ class Integration
         $log("INTEGRATION AWS_SNS: publish " . ($ok ? 'ok' : 'failed') . " -> $topicArn");
     }
 
-    
-
-
-
-
-
-
     private static function handleAzureServiceBus(array $cfg, array $data, callable $log): void
     {
         $conn = $cfg['connection_string'] ?? '';
@@ -446,7 +396,7 @@ class Integration
                 $parts[trim($k)] = trim($v);
             }
         }
-        $endpoint = rtrim($parts['Endpoint'] ?? '', '/'); 
+        $endpoint = rtrim($parts['Endpoint'] ?? '', '/');
 
         $keyName = $parts['SharedAccessKeyName'] ?? '';
         $key = $parts['SharedAccessKey'] ?? '';
@@ -454,9 +404,8 @@ class Integration
             $log("INTEGRATION AZURE_SB: connection_string missing Endpoint/SharedAccessKeyName/SharedAccessKey");
             return;
         }
-        
 
-        $host = parse_url($endpoint, PHP_URL_HOST); 
+        $host = parse_url($endpoint, PHP_URL_HOST);
 
         $resourceUri = "https://$host/$publishName";
         $expiry = time() + 3600;
@@ -473,12 +422,6 @@ class Integration
         $ok = self::httpsRequest($url, $body, $headers, $log) !== null;
         $log("INTEGRATION AZURE_SB: publish " . ($ok ? 'ok' : 'failed') . " -> $publishName");
     }
-
-    
-
-
-
-
 
     private static function handleGcpPubsub(array $cfg, array $data, callable $log): void
     {
@@ -555,13 +498,6 @@ class Integration
         return rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
     }
 
-    
-
-
-
-
-
-
     private static function handleAmqp(array $cfg, array $data, callable $log, string $eventType = 'up'): void
     {
         $url = $cfg['url'] ?? '';
@@ -591,12 +527,6 @@ class Integration
         $client->disconnect();
         $log("INTEGRATION AMQP: published to exchange=$exchange key=$routingKey");
     }
-
-    
-
-
-
-
 
     private static function handleKafka(array $cfg, array $data, callable $log, string $eventType = 'up'): void
     {
@@ -633,7 +563,6 @@ class Integration
         }
     }
 
-    // MODBUS_TCP：把上行数据中的某个值经 Modbus TCP 写入 PLC 寄存器（FC06 单寄存器 / FC16 双寄存器）
     private static function handleModbus(array $cfg, array $data, callable $log): void
     {
         $server = (string) ($cfg['server'] ?? '');
@@ -678,15 +607,15 @@ class Integration
 
         $tid = random_int(1, 60000);
         if (count($regs) === 1) {
-            // FC06 写单寄存器：func(1) addr(2) value(2)
+
             $pdu = chr(6) . pack('n', $address) . $regs[0];
             $fc = 6;
         } else {
-            // FC16 写多寄存器：func(1) addr(2) quantity(2) byteCount(1) data(4)
+
             $pdu = chr(16) . pack('n', $address) . pack('n', 2) . chr(4) . $regs[0] . $regs[1];
             $fc = 16;
         }
-        // MBAP: tid(2) pid(2)=0 len(2)=unit+PDU, unit(1)
+
         $frame = pack('nnn', $tid, 0, strlen($pdu) + 1) . chr($unitId & 0xFF) . $pdu;
         if (@fwrite($fp, $frame) !== strlen($frame)) {
             $log("INTEGRATION MODBUS: write failed $host:$port");
@@ -694,7 +623,6 @@ class Integration
             return;
         }
 
-        // 读响应：7B 头（MBAP6+unit1），再按 length 读 PDU
         $head = '';
         while (strlen($head) < 7) {
             $chunk = fread($fp, 7 - strlen($head));
@@ -728,12 +656,6 @@ class Integration
         $log("INTEGRATION MODBUS: wrote $value ($type/$order) unit=$unitId addr=$address via FC$fc");
     }
 
-    // 按点路径提取值。支持别名前缀：
-    //   decoded.<type>          → Cayenne 解码结果中按 type 匹配的第一个 value（如 decoded.temperature）
-    //   decoded.<channel>.value → 按 channel 匹配（如 decoded.1.value）
-    //   telemetry.<key>         → uplink_message.telemetry（如 telemetry.battery）
-    //   uplink.<key...>         → uplink_message（如 uplink.f_cnt）
-    // 其余按原始点路径深入 $data。
     private static function modbusExtractValue(array $data, string $path)
     {
         $path = trim($path);
@@ -778,8 +700,6 @@ class Integration
         return is_array($cur) || is_object($cur) ? null : $cur;
     }
 
-    // 编码为寄存器数据。16-bit 固定大端（1 寄存器）；32-bit 支持 4 种字序（2 寄存器）。
-    // 返回 [reg1, reg2]（每项 2 字节二进制串），不支持类型返回 null。
     private static function modbusEncodeRegisters($value, string $type, string $order): ?array
     {
         $num = is_numeric($value) ? (float) $value : 0.0;
@@ -798,7 +718,7 @@ class Integration
                 $raw = pack('N', sprintf('%d', $num));
                 break;
             case 'f32':
-                $raw = pack('G', $num); // big-endian float: A B C D
+                $raw = pack('G', $num);
                 break;
             default:
                 return null;

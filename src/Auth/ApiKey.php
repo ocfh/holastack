@@ -3,12 +3,6 @@ namespace holastack\Auth;
 
 use holastack\DB\Database;
 
-
-
-
-
-
-
 class ApiKey
 {
     public static function generateToken(): string

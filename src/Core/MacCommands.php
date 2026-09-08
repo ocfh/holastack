@@ -3,23 +3,8 @@ namespace holastack\Core;
 
 use holastack\Region\Region;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class MacCommands
 {
-    
 
     public const CID_LINK_CHECK_REQ        = 0x02;
     public const CID_LINK_ADR_REQ          = 0x03;
@@ -41,22 +26,19 @@ class MacCommands
     public const CID_BEACON_FREQ_REQ        = 0x13;
     public const CID_DEVICE_MODE_IND        = 0x20;
     public const CID_RESET_IND              = 0x21;
-    public const CID_RELAY_CONF_REQ         = 0x40; 
+    public const CID_RELAY_CONF_REQ         = 0x40;
 
-    public const CID_END_DEVICE_CONF_REQ    = 0x41; 
+    public const CID_END_DEVICE_CONF_REQ    = 0x41;
 
-    public const CID_FILTER_LIST_REQ        = 0x42; 
+    public const CID_FILTER_LIST_REQ        = 0x42;
 
-    public const CID_UPDATE_UPLINK_LIST_REQ = 0x43; 
+    public const CID_UPDATE_UPLINK_LIST_REQ = 0x43;
 
-    public const CID_CTRL_UPLINK_LIST_REQ   = 0x44; 
+    public const CID_CTRL_UPLINK_LIST_REQ   = 0x44;
 
-    public const CID_CONFIGURE_FWD_LIMIT_REQ= 0x45; 
+    public const CID_CONFIGURE_FWD_LIMIT_REQ= 0x45;
 
-    public const CID_NOTIFY_NEW_END_DEVICE_REQ = 0x46; 
-
-
-    
+    public const CID_NOTIFY_NEW_END_DEVICE_REQ = 0x46;
 
     public const CID_LINK_CHECK_ANS        = 0x02;
     public const CID_LINK_ADR_ANS          = 0x03;
@@ -78,12 +60,7 @@ class MacCommands
     public const CID_DEVICE_MODE_CONF      = 0x20;
     public const CID_RESET_CONF            = 0x21;
 
-    
-
     private const GPS_EPOCH_OFFSET = 315964800;
-    
-
-    
 
     private const GPS_LEAP_SECONDS = 18;
 
@@ -95,11 +72,9 @@ class MacCommands
         while ($i < $n) {
             $cid = ord($bytes[$i]);
             $i++;
-            
 
             $len = self::cmdLen($cid);
             if ($len < 0) {
-                
 
                 break;
             }
@@ -151,24 +126,21 @@ class MacCommands
             case self::CID_DEVICE_MODE_CONF:       return 1;
             case self::CID_RESET_IND:              return 1;
             case self::CID_RESET_CONF:             return 1;
-            case self::CID_RELAY_CONF_REQ:         return 1; 
+            case self::CID_RELAY_CONF_REQ:         return 1;
 
-            case self::CID_END_DEVICE_CONF_REQ:    return 1; 
+            case self::CID_END_DEVICE_CONF_REQ:    return 1;
 
-            case self::CID_FILTER_LIST_REQ:        return 1; 
+            case self::CID_FILTER_LIST_REQ:        return 1;
 
-            case self::CID_UPDATE_UPLINK_LIST_REQ: return 1; 
+            case self::CID_UPDATE_UPLINK_LIST_REQ: return 1;
 
-            case self::CID_CTRL_UPLINK_LIST_REQ:   return 1; 
+            case self::CID_CTRL_UPLINK_LIST_REQ:   return 1;
 
-            case self::CID_CONFIGURE_FWD_LIMIT_REQ:return 1; 
+            case self::CID_CONFIGURE_FWD_LIMIT_REQ:return 1;
 
             default:                               return -1;
         }
     }
-
-    
-
 
     public static function buildLinkADRReq(int $dr, int $txPower, int $chMask, int $chMaskCntl, int $nbRep): string
     {
@@ -183,7 +155,7 @@ class MacCommands
     public static function buildRXParamSetupReq(Region $region, int $rx1DrOffset, int $rx2Dr): string
     {
         $dlSettings = (($rx1DrOffset & 0x07) << 4) | ($rx2Dr & 0x0F);
-        $freq = (int) ($region->getRx2Frequency() / 100); 
+        $freq = (int) ($region->getRx2Frequency() / 100);
 
         return chr(self::CID_RX_PARAM_SETUP_REQ)
             . chr($dlSettings)
@@ -231,23 +203,10 @@ class MacCommands
         return chr($freqIn100hz & 0xFF) . chr(($freqIn100hz >> 8) & 0xFF) . chr(($freqIn100hz >> 16) & 0xFF);
     }
 
-    
-
-
-    
-
-
-
-
-
-
-
-
     public static function handleUplink(array &$device, Region $region, array $uplink, array $commands): array
     {
         $responses = [];
         $mustRespond = false;
-        
 
         $order = array_unique(array_column($commands, 'cid'));
         foreach ($order as $cid) {
@@ -293,25 +252,15 @@ class MacCommands
         }
     }
 
-    
-
-
     private static function onLinkCheckReq(array $uplink): array
     {
-        
-
-        
-
-        
-
-        
 
         $dr = (int) ($uplink['dr'] ?? 0);
         $region = $uplink['region'] ?? null;
         $reqSnr = $region instanceof Region ? $region->requiredSnrForDr($dr) : 0.0;
 
         $rxSet = $uplink['rx_set'] ?? null;
-        $maxSnr = (float) ($uplink['snr'] ?? 0); 
+        $maxSnr = (float) ($uplink['snr'] ?? 0);
 
         $gwCnt = 1;
         if (is_array($rxSet) && count($rxSet) > 0) {
@@ -319,7 +268,7 @@ class MacCommands
             $gwCnt = count(array_unique(array_column($rxSet, 'gw')));
         }
 
-        $margin = (int) floor($maxSnr - $reqSnr); 
+        $margin = (int) floor($maxSnr - $reqSnr);
 
         if ($margin < 0) {
             $margin = 0;
@@ -338,30 +287,16 @@ class MacCommands
 
     private static function onDeviceTimeReq(array &$device): array
     {
-        
-
-        
 
         $unix = time();
         $gpsSeconds = ($unix - self::GPS_EPOCH_OFFSET + self::GPS_LEAP_SECONDS) & 0xFFFFFFFF;
         $secs = pack('V', $gpsSeconds);
         $frac = chr((int) (fmod(microtime(true), 1.0) * 256) & 0xFF);
-        
-
-        
 
         $device['device_time_valid'] = 1;
         $device['device_time'] = $gpsSeconds;
         return ['bytes' => chr(self::CID_DEVICE_TIME_ANS) . $secs . $frac, 'mustRespond' => false];
     }
-
-    
-
-
-
-
-
-
 
     private static function onBeaconTimingReq(array &$device): array
     {
@@ -369,29 +304,23 @@ class MacCommands
         if ($gpsNow <= 0) {
             $gpsNow = self::gpsSecondsNow();
         }
-        $period = 128; 
-
-        
-
-        
+        $period = 128;
 
         $ref = (int) ($device['beacon_epoch'] ?? 0);
         if ($ref <= 0 || ($ref % $period) !== 0) {
             $ref = intdiv($gpsNow, $period) * $period;
         }
-        
 
         $nextBeacon = (int) ceil(($gpsNow - $ref) / $period) * $period + $ref;
         $delaySec = $nextBeacon - $gpsNow;
         if ($delaySec < 0) {
             $delaySec = 0;
         }
-        $timingDelay = (int) round($delaySec * 1000 / 30); 
+        $timingDelay = (int) round($delaySec * 1000 / 30);
 
         if ($timingDelay > 0xFFFF) {
             $timingDelay = 0xFFFF;
         }
-        
 
         $device['beacon_epoch'] = $ref;
         $channel = 0;
@@ -400,8 +329,6 @@ class MacCommands
             . chr($channel);
         return ['bytes' => $bytes, 'mustRespond' => false];
     }
-
-    
 
     public static function gpsSecondsNow(): int
     {
@@ -412,7 +339,6 @@ class MacCommands
     {
         $pl = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
         $minor = ord($pl[0] ?? "\x00");
-        
 
         return ['bytes' => chr(self::CID_RESET_CONF) . chr($minor), 'mustRespond' => false];
     }
@@ -430,15 +356,11 @@ class MacCommands
         $class = $pl[0] ?? 'A';
         $map = ['A' => 'A', 'B' => 'B', 'C' => 'C'];
         $newClass = $map[$class] ?? 'A';
-        
-
-        
 
         if ($newClass === 'B' && empty($device['device_time_valid'])) {
             return ['bytes' => chr(self::CID_DEVICE_MODE_CONF) . ($device['class'] ?? 'A'), 'mustRespond' => false];
         }
         $device['class'] = $newClass;
-        
 
         return ['bytes' => chr(self::CID_DEVICE_MODE_CONF) . $newClass, 'mustRespond' => false];
     }
@@ -452,7 +374,6 @@ class MacCommands
 
     private static function onRxTimingSetupAns(): array
     {
-        
 
         return ['bytes' => null, 'mustRespond' => true];
     }
@@ -465,7 +386,6 @@ class MacCommands
         if ($pending === null) {
             return ['bytes' => null, 'mustRespond' => true];
         }
-        
 
         $dlSettings = ord($pending[1]);
         $rx2Dr = $dlSettings & 0x0F;
@@ -512,10 +432,10 @@ class MacCommands
         $pl = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
         $status = ord($pl[0] ?? "\x00");
         if (($status & 0x03) === 0x03) {
-            // 设备已接受 PingSlotChannelReq：记下实际 ping slot 信道，NS 后续下行必须走这里
+
             $pending = self::getPending($device, self::CID_PING_SLOT_CHANNEL_REQ);
             if ($pending !== null && strlen($pending) >= 5) {
-                // payload = CID(1) + Frequency(3, 单位 100Hz) + DR(1)
+
                 $freqHz = self::unpackFreq(substr($pending, 1, 3)) * 100;
                 $dr = ord($pending[4]) & 0x0F;
                 $device['class_b_ping_slot_freq'] = $freqHz;
@@ -551,22 +471,19 @@ class MacCommands
             $m -= 64;
         }
         $device['margin'] = $m;
-        
 
         if ($battery === 0) {
-            $device['battery'] = 0;       
+            $device['battery'] = 0;
 
         } elseif ($battery >= 1 && $battery <= 254) {
-            $device['battery'] = $battery; 
+            $device['battery'] = $battery;
 
         } else {
-            $device['battery'] = -1;       
+            $device['battery'] = -1;
 
         }
-        
 
         self::clearPending($device, self::CID_DEV_STATUS_REQ);
-        
 
         $device['mac_telemetry'] = [
             'battery' => ($battery === 255) ? null : $battery,
@@ -575,20 +492,11 @@ class MacCommands
         return ['bytes' => null, 'mustRespond' => false];
     }
 
-    
-
-
-
-
     private static function onRelayConfAns(array &$device, array $blocks): array
     {
         $payload = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
         return Relay::handleRelayConfAns($device, $payload);
     }
-
-    
-
-
 
     private static function onEndDeviceConfAns(array &$device, array $blocks): array
     {
@@ -596,22 +504,11 @@ class MacCommands
         return Relay::handleEndDeviceConfAns($device, $payload);
     }
 
-    
-
-
-
     private static function onFilterListAns(array &$device, array $blocks): array
     {
         $payload = $blocks[array_key_first($blocks)]['payload'] ?? "\x00";
         return Relay::handleFilterListAns($device, $payload);
     }
-
-    
-
-
-
-
-
 
     private static function onLinkADRAns(array &$device, Region $region, array $blocks): array
     {
@@ -625,7 +522,6 @@ class MacCommands
         if ($pending === null) {
             return ['bytes' => null, 'mustRespond' => false];
         }
-        
 
         $reqDr = (ord($pending[1]) >> 4) & 0x0F;
         $reqTxPower = ord($pending[1]) & 0x0F;
@@ -655,7 +551,6 @@ class MacCommands
             }
         } else {
             self::bumpError($device, self::CID_LINK_ADR_REQ);
-            
 
             if (!$txPowerAck && $reqTxPower == 0) {
                 $device['tx_power_index'] = 1;
@@ -680,15 +575,9 @@ class MacCommands
             }
             return $out;
         }
-        
-
-        
 
         return $cur;
     }
-
-    
-
 
     public static function getPending(array &$device, int $cid): ?string
     {

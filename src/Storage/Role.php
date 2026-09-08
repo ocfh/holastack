@@ -4,13 +4,9 @@ namespace holastack\Storage;
 use holastack\DB\Database;
 use holastack\Auth\Auth;
 
-/**
- * 角色（RBAC）。系统内置角色(admin/tenant/operator)由 migrate 种子写入，
- * 也可按租户创建自定义角色并勾选权限。角色用于给用户授权并参与前端菜单过滤。
- */
 class Role
 {
-    /** 配额字段白名单（随角色持久化，0=不限/未配置）。 */
+
     public const QUOTA_FIELDS = ['devices_limit', 'gateways_limit', 'gateways_unlimited'];
 
     public static function list(?int $tenantId = null): array
@@ -110,7 +106,6 @@ class Role
         ];
     }
 
-    /** 从请求参数提取配额三项（缺省沿用旧值语义：0/0/0）。 */
     private static function quotaValues(array $p): array
     {
         $unlimited = !empty($p['gateways_unlimited']) ? 1 : 0;

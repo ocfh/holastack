@@ -3,15 +3,10 @@ namespace holastack\Storage;
 
 use holastack\DB\Database;
 
-/**
- * 告警管理：规则、告警记录、通知组，以及上行解码后的告警评估引擎。
- */
 class Alert
 {
     public const OPERATORS = ['gt', 'ge', 'lt', 'le', 'eq', 'neq', 'in'];
     public const SEVERITIES = ['info', 'warn', 'critical'];
-
-    // ---------------- 规则 ----------------
 
     public static function listRules(int $appId, ?int $tenantId = null): array
     {
@@ -102,8 +97,6 @@ class Alert
         ];
     }
 
-    // ---------------- 通知组 ----------------
-
     public static function listGroups(?int $tenantId = null): array
     {
         if ($tenantId !== null) {
@@ -151,8 +144,6 @@ class Alert
         Database::execute("UPDATE alert_rules SET notify_group_id=0 WHERE notify_group_id=?", [$id]);
         return ['id' => $id];
     }
-
-    // ---------------- 告警记录 ----------------
 
     public static function listAlerts(?int $tenantId, int $limit, int $offset, ?int $deviceId = null, string $status = ''): array
     {
@@ -202,13 +193,6 @@ class Alert
         return ['id' => $alertId];
     }
 
-    // ---------------- 评估引擎 ----------------
-
-    /**
-     * 上行解码后根据设备所属应用下的启用规则评估告警。
-     * @param array $device  设备行（含 id, name, tenant_id, app_id）
-     * @param array $decoded 解码结果 [field_key => ['value'=>?, 'text'=>string]]
-     */
     public static function evaluate(array $device, array $decoded): void
     {
         if ($decoded === []) {
@@ -247,7 +231,7 @@ class Alert
 
         if ($match) {
             if ($open) {
-                return; // 已触发，避免刷屏
+                return;
             }
             $opLabel = self::opLabel((string) ($rule['operator'] ?? 'gt'));
             $msg = sprintf('%s 字段「%s」值 %s %s %s，触发告警', $devName, $key, $text, $opLabel, (string) ($rule['threshold'] ?? ''));
@@ -335,9 +319,6 @@ class Alert
         self::postWebhook($url, $payload);
     }
 
-    /**
-     * 联动模型：向通知组 Webhook 推送动作通知。
-     */
     public static function notifyForAutomation(int $groupId, string $event, string $message, array $extra = []): void
     {
         if ($groupId <= 0) {

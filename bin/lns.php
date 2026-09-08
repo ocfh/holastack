@@ -1,27 +1,5 @@
 <?php
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 require __DIR__ . '/../bootstrap.php';
 
 use holastack\Core\NetworkServer;
@@ -42,11 +20,9 @@ echo "HolaStack LNS (Basic Station backend, pure PHP WebSocket)\n";
 echo "DB: " . ELW_DB_DSN . "\n";
 
 Database::migrate();
-$ns = new NetworkServer(0); 
+$ns = new NetworkServer(0);
 
 echo "NS instance ready (station-only mode)\n";
-
-
 
 $srvOpts = [];
 if ($cert) {
@@ -64,20 +40,14 @@ if ($srv === false) {
 stream_set_blocking($srv, false);
 echo "LNS listening on $proto://0.0.0.0:$port/router/{gateway_id}?token=...\n";
 
-
-
 $conns = [];
 $nextId = 1;
-
-
-
-
 
 function tryHandshake(array &$c, NetworkServer $ns): bool
 {
     $headEnd = strpos($c['buf'], "\r\n\r\n");
     if ($headEnd === false) {
-        return false; 
+        return false;
 
     }
     $head = substr($c['buf'], 0, $headEnd + 4);
@@ -124,8 +94,6 @@ function tryHandshake(array &$c, NetworkServer $ns): bool
     $c['station'] = $station;
     echo "[LNS] station connected: $gwEui (region=" . ($station['region'] ?: ELW_DEFAULT_REGION) . ")\n";
 
-    
-
     $ns->registerStationGateway($gwEui, function (array $dn) use (&$c) {
         $frame = Station::wsFrame(json_encode($dn));
         if (@fwrite($c['sock'], $frame) === false) {
@@ -134,10 +102,6 @@ function tryHandshake(array &$c, NetworkServer $ns): bool
     }, 'station://' . $gwEui, $station['region'] ?: ELW_DEFAULT_REGION);
     return true;
 }
-
-
-
-
 
 function processFrames(array &$c, NetworkServer $ns): bool
 {
@@ -175,8 +139,6 @@ function processFrames(array &$c, NetworkServer $ns): bool
     return true;
 }
 
-
-
 while (true) {
     $read = [$srv];
     foreach ($conns as $c) {
@@ -212,7 +174,6 @@ while (true) {
             }
             $c['buf'] .= $data;
             if ($c['gwEui'] === '') {
-                
 
                 if (!tryHandshake($c, $ns) && $c['gwEui'] === '') {
                     @fclose($stream);
@@ -231,7 +192,6 @@ while (true) {
         }
         unset($c);
     }
-    
 
     $ns->runScheduled();
 }

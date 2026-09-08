@@ -4,27 +4,8 @@ namespace holastack\Core;
 use holastack\DB\Database;
 use holastack\Region\Region;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Station
 {
-    
 
     public const MSG_VERSION = 'version';
     public const MSG_ROUTER_CONFIG = 'router_config';
@@ -34,8 +15,6 @@ class Station
     public const MSG_TIMESYNC = 'timesync';
     public const MSG_RMTSH = 'rmtsh';
 
-    
-
     public const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
     public const OP_CONT = 0x0;
     public const OP_TEXT = 0x1;
@@ -44,24 +23,15 @@ class Station
     public const OP_PING = 0x9;
     public const OP_PONG = 0xA;
 
-    
-
-
-
-
     public static function wsAcceptKey(string $key): string
     {
         return base64_encode(sha1(trim($key) . self::WS_GUID, true));
     }
 
-    
-
-
-
     public static function wsFrame(string $payload, int $opcode = self::OP_TEXT): string
     {
         $len = strlen($payload);
-        $head = chr(0x80 | ($opcode & 0x0F)); 
+        $head = chr(0x80 | ($opcode & 0x0F));
 
         if ($len < 126) {
             $head .= chr($len);
@@ -72,13 +42,6 @@ class Station
         }
         return $head . $payload;
     }
-
-    
-
-
-
-
-
 
     public static function wsDecode(string $buf): ?array
     {
@@ -138,11 +101,6 @@ class Station
         ];
     }
 
-    
-
-
-
-
     public static function wsDecodeFragmented(string $buf): ?array
     {
         $frame = self::wsDecode($buf);
@@ -152,7 +110,6 @@ class Station
         if ($frame['fin']) {
             return $frame;
         }
-        
 
         $total = $frame['payload'];
         $consumed = $frame['consumed'];
@@ -164,7 +121,7 @@ class Station
                 return null;
             }
             if ($frame['opcode'] !== self::OP_CONT) {
-                break; 
+                break;
 
             }
             $total .= $frame['payload'];
@@ -179,21 +136,11 @@ class Station
         ];
     }
 
-    
-
-
-
-
-
-
-
-
     public static function handleMessage(array $msg, ?array $station = null): array
     {
         $type = $msg['msgtype'] ?? '';
         switch ($type) {
             case self::MSG_VERSION:
-                
 
                 return self::routerConfig([
                     'region' => ($station['region'] ?? '') ?: ($msg['region'] ?? ELW_DEFAULT_REGION),
@@ -201,7 +148,6 @@ class Station
 
             case self::MSG_JREQ:
             case self::MSG_UPDF:
-                
 
                 $raw = $msg[$type] ?? '';
                 $pdu = base64_decode($raw, true);
@@ -213,13 +159,12 @@ class Station
                     '_forward' => true,
                     'msgtype'  => $type,
                     'phy'      => $pdu,
-                    'upinfo'   => $upinfo,   
+                    'upinfo'   => $upinfo,
 
                     'gwEui'    => $station['gateway_id'] ?? '',
                 ];
 
             case self::MSG_TIMESYNC:
-                
 
                 return [
                     'msgtype' => self::MSG_TIMESYNC,
@@ -237,19 +182,6 @@ class Station
                 return ['_noop' => true];
         }
     }
-
-    
-
-
-
-
-
-
-
-
-
-
-
 
     public static function buildDnMsg(array $dl, int $xtime = 0, int $rctx = 0, string $dC = 'C'): array
     {
@@ -270,9 +202,6 @@ class Station
             'rctx'    => $rctx,
         ];
     }
-
-    
-
 
     public static function list(): array
     {
@@ -332,17 +261,12 @@ class Station
         Database::execute("DELETE FROM stations WHERE id=?", [$id]);
     }
 
-    
-
-
-
-
     public static function routerConfig(array $station): array
     {
         return [
             'msgtype'   => self::MSG_ROUTER_CONFIG,
             'NetID'     => [0],
-            'JoinEui'   => [],            
+            'JoinEui'   => [],
 
             'region'    => $station['region'] ?? ELW_DEFAULT_REGION,
             'hwspec'    => (object) [],
@@ -352,18 +276,6 @@ class Station
             'nodwell'   => 0,
         ];
     }
-
-    
-
-
-
-
-
-
-
-
-
-
 
     public static function serve(int $stationId): void
     {
@@ -377,7 +289,6 @@ class Station
                 'See bin/lns.php for the integration skeleton.'
             );
         }
-        
 
         throw new \RuntimeException('LNS serve() must be driven by bin/lns.php (Ratchet App).');
     }

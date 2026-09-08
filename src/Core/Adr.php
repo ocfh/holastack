@@ -3,33 +3,12 @@ namespace holastack\Core;
 
 use holastack\Region\Region;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Adr
 {
-    
 
     public const DEFAULT_INSTALLATION_MARGIN = 5.0;
-    
 
     public const REQUIRED_HISTORY = 20;
-
-    
-
-
-
 
     public static function compute(array $req): array
     {
@@ -39,13 +18,9 @@ class Adr
             'nb_trans'      => (int) ($req['nb_trans'] ?? 1),
         ];
 
-        
-
         if (empty($req['adr'])) {
             return $resp;
         }
-
-        
 
         $region = $req['region'] ?? null;
         $maxDr = (int) ($req['max_dr'] ?? 0);
@@ -54,13 +29,9 @@ class Adr
             $maxDr = $maxLoraDr;
         }
 
-        
-
         if ($resp['dr'] > $maxDr) {
             $resp['dr'] = $maxDr;
         }
-
-        
 
         $resp['nb_trans'] = self::getNbTrans($req['nb_trans'], self::packetLossPct($req));
 
@@ -69,8 +40,6 @@ class Adr
         $margin = (float) ($req['installation_margin'] ?? self::DEFAULT_INSTALLATION_MARGIN);
         $snrMargin = $snrMax - $requiredSnr - $margin;
         $nStep = (int) floor($snrMargin / 3.0);
-
-        
 
         if ($nStep < 0 && self::historyCountForTxPower($req) !== self::REQUIRED_HISTORY) {
             return $resp;
@@ -88,9 +57,6 @@ class Adr
         return $resp;
     }
 
-    
-
-
     private static function idealTxPowerAndDr(int $nbStep, int $txPowerIndex, int $dr, int $maxTxPowerIndex, int $maxDr): array
     {
         if ($nbStep === 0) {
@@ -99,15 +65,14 @@ class Adr
 
         if ($nbStep > 0) {
             if ($dr < $maxDr) {
-                $dr += 1;               
+                $dr += 1;
 
             } elseif ($txPowerIndex < $maxTxPowerIndex) {
-                $txPowerIndex += 1;     
+                $txPowerIndex += 1;
 
             }
             $nbStep -= 1;
         } else {
-            
 
             $txPowerIndex = max(0, $txPowerIndex - 1);
             $nbStep += 1;
@@ -115,9 +80,6 @@ class Adr
 
         return self::idealTxPowerAndDr($nbStep, $txPowerIndex, $dr, $maxTxPowerIndex, $maxDr);
     }
-
-    
-
 
     private static function requiredHistoryCount(): int
     {

@@ -1,22 +1,10 @@
 <?php
 namespace holastack\Core;
 
-
-
-
-
-
-
-
-
-
-
 class GpsTime
 {
-    
 
     public const GPS_EPOCH_UNIX = 315964800;
-    
 
     public const LEAP_SECONDS = 18;
 

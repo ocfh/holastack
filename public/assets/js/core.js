@@ -4,7 +4,7 @@ function toggleTheme(){
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('elw_theme', next);
   updateThemeIcon(next);
-  
+
   rerenderForTheme();
 }
 async function rerenderForTheme(){
@@ -29,7 +29,6 @@ function applyMobileH2(){
   }
 }
 
-
 const ICON_MOON = ICON.moon;
 const ICON_SUN  = ICON.sun;
 function updateThemeIcon(t){
@@ -41,13 +40,10 @@ function updateThemeIcon(t){
 
 updateThemeIcon(getTheme());
 
-
-
 function t(s){
   if (typeof s !== 'string' || s === '') return s;
   return (window.I18N && window.I18N[s] !== undefined) ? window.I18N[s] : s;
 }
-
 
 function applyI18n(root){
   root = root || document;
@@ -72,12 +68,10 @@ function applyI18n(root){
   }
 }
 
-
 const _i18nObserver = new MutationObserver(muts => {
   muts.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) applyI18n(n); }));
 });
 function startI18nObserver(){ _i18nObserver.observe(document.body, { childList: true, subtree: true }); }
-
 
 async function loadDict(lang){
   try {
@@ -90,15 +84,12 @@ async function loadDict(lang){
 }
 function langAttr(lang){ return (lang === 'en') ? 'en' : (lang === 'zh' ? 'zh-CN' : lang); }
 async function applyLanguage(lang){
-  
-  
+
   try {
     await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
   } catch(e){}
   location.reload();
 }
-
-
 
 const _origAlert = window.alert;
 const _toastType = (m) => {
@@ -109,7 +100,7 @@ const _toastType = (m) => {
   return 'info';
 };
 window.alert = (m) => {
-  
+
   if (typeof toast === 'function') return toast(t(m), _toastType(m));
   return _origAlert.call(window, t(m));
 };
@@ -126,12 +117,11 @@ async function boot(){
     if (r.ok) { const j = await r.json(); state.user = j.user; }
   } catch(e){}
   try { const rr = await fetch('/api/regions'); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
-  
+
   if (!window.LANGS) { try { await loadDict(window.UI_LANG || 'zh'); } catch(e){} }
-  
-  
+
   applyI18n(document);
-  
+
   applyPublicSettings();
   renderShell();
 }
@@ -154,11 +144,11 @@ function renderShell(){
   const av = document.getElementById('avatar');
   if (av) av.src = state.user.avatar_url || 'https://gravatar.webp.se/avatar/00000000000000000000000000000000?s=40&d=mp';
   renderNav();
-  
+
   applyPublicSettings();
-  
+
   nav((location.hash||'').slice(1)||'dashboard');
-  
+
   applyI18n(document);
   startI18nObserver();
   enhanceSelects(document);
@@ -173,7 +163,6 @@ const isDemo = () => state.user && state.user.role === 'operator';
 const canWrite = () => state.user && ['admin','tenant'].includes(state.user.role);
 
 const adminBtn = (html) => html;
-
 
 const NAV_GROUPS = [
   { label:'运行监控', icon:'chartBar', items:[
@@ -290,8 +279,8 @@ const api = async (m,p,body) => {
   const text = await r.text();
   if (r.status === 401) { state.token = null; state.user = null; localStorage.removeItem('elw_token'); renderShell(); throw new Error('unauthorized'); }
   if (r.status === 403) {
-    
-    try { const ej = JSON.parse(text); if (ej.error && String(ej.error).indexOf('forbidden') !== -1) toast(t('演示模式：当前为只读账号，不能进行实际操作。如需体验完整功能，请联系管理员获取写权限账号。'), 'warn'); } catch(e) {}
+
+    try { const ej = JSON.parse(text); if (ej.error && String(ej.error).indexOf('forbidden') !== -1) toast(t('演示模式：只读账号，无写权限。'), 'warn'); } catch(e) {}
   }
   if (r.status < 200 || r.status >= 300) {
     throw new Error('HTTP ' + r.status + '：' + text.slice(0, 300));
@@ -301,19 +290,10 @@ const api = async (m,p,body) => {
   }
   let j;
   try { j = JSON.parse(text); } catch (e) { throw new Error('JSON 解析失败：' + text.slice(0, 300)); }
-  
+
   return csAdapt(j, p);
 };
 
-/* =====================================================
- * ChirpStack 风格响应适配层
- * 后端 /api/* 已统一为 ChirpStack v4 REST 形状：
- *   - 列表 {totalCount, result:[...]}（camelCase 字段）
- *   - 错误 {error, code, message, details}
- * 本层把 camelCase → snake_case，使既有 140+ 处
- * r.data||[] 与 d.dev_eui 等消费代码无需逐处修改；
- * 同时兼容 login/stats 等未改形状的端点（原样透传）。
- * ===================================================== */
 const _SNAKE_CACHE = {};
 const _camel2snake = k => {
   let s = _SNAKE_CACHE[k];
@@ -335,61 +315,60 @@ function _csDeep(v) {
   }
   return v;
 }
-/** 行级规范化：ISO 时间→unix 秒、UUID 外键→整数、枚举小写化 */
+
 function _csNormalizeRow(r) {
   if (!r || typeof r !== 'object') return r;
   const out = _csDeep(r);
   for (const k of Object.keys(out)) {
     const v = out[k];
     if (typeof v === 'string' && _ISO_RE.test(v)) {
-      out[k] = _csTs(v);  // RFC3339 → unix 秒（前端 new Date(x*1000) 消费）
+      out[k] = _csTs(v);
     } else if (typeof v === 'string' && _UUID_RE.test(v) && /_id$/.test(k)) {
-      out[k] = _csUuidInt(v);  // 外键 UUID → 整数（与行数字 id 对齐）
+      out[k] = _csUuidInt(v);
     }
   }
   if (out.last_seen === undefined && out.last_seen_at !== undefined) { out.last_seen = out.last_seen_at; }
-  // 主键：优先 numericId（后端同时接受数字/UUID 定位资源）
+
   if (out.numeric_id !== undefined && out.numeric_id !== null) {
     out.id = out.numeric_id;
   } else if (typeof out.id === 'string' && _UUID_RE.test(out.id)) {
     out.id = _csUuidInt(out.id);
   } else if (typeof out.id === 'string' && /^\d+$/.test(out.id)) {
-    out.id = parseInt(out.id, 10);  // 日志类行（uplinks/downlinks/events）数字字符串 id → 数值，兼容既有 x.id===id 比较
+    out.id = parseInt(out.id, 10);
   }
   if (typeof out.online === 'string') out.online = out.online.toLowerCase();
-  // hex 字段统一小写（前端展示/比对按小写约定）
+
   for (const hk of ['payload_hex', 'decrypted_hex', 'phy_payload', 'dev_eui', 'dev_addr', 'dev_addr', 'mc_addr', 'mc_nwk_s_key', 'mc_app_s_key', 'app_eui', 'join_eui', 'nwk_s_key', 'app_s_key', 'nwk_key', 'app_key', 'gateway_id', 'gw_id']) {
     if (typeof out[hk] === 'string' && out[hk] && /^[0-9a-fA-F]+$/.test(out[hk])) out[hk] = out[hk].toLowerCase();
   }
-  // ---- 资源级别名（ChirpStack 字段 → 前端既有 snake_case 消费字段）----
-  // Base64 data → hex
+
   const b6h = b => { try { const s = atob(b || ''); let h = ''; for (let i = 0; i < s.length; i++) h += ('0' + s.charCodeAt(i).toString(16)).slice(-2); return h; } catch (e) { return ''; } };
   if (typeof out.f_cnt_up === 'number')   out.fcnt = out.f_cnt_up;
   if (typeof out.f_cnt_down === 'number') out.fcnt = out.f_cnt_down;
   if (typeof out.f_port === 'number')     out.port = out.f_port;
   if (typeof out.time === 'number' && out.received_at === undefined) out.received_at = out.time;
-  if (typeof out.time === 'number' && out.created_at === undefined && out.state !== undefined) out.created_at = out.time;  // downlinks
+  if (typeof out.time === 'number' && out.created_at === undefined && out.state !== undefined) out.created_at = out.time;
   if (typeof out.decrypted_hex !== 'string' || out.decrypted_hex === '') {
-    if (typeof out.decrypted_hex === 'undefined' && typeof out.payload_hex === 'string' && out.payload_hex !== '') { /* hex 扩展字段已有 */ }
+    if (typeof out.decrypted_hex === 'undefined' && typeof out.payload_hex === 'string' && out.payload_hex !== '') {  }
     else if (typeof out.decrypted === 'string' && out.decrypted !== '') out.decrypted_hex = b6h(out.decrypted);
     else if (typeof out.data === 'string' && out.data !== '') { const h = b6h(out.data); if (out.decrypted_hex === undefined || out.decrypted_hex === '') out.decrypted_hex = h; }
   }
   if ((typeof out.phy_payload === 'undefined' || out.phy_payload === '') && typeof out.payload_hex === 'string' && out.payload_hex !== '') out.phy_payload = out.payload_hex;
   if ((typeof out.payload_hex === 'undefined' || out.payload_hex === '') && typeof out.data === 'string' && out.data !== '') out.payload_hex = b6h(out.data);
   if (typeof out.gateway_id === 'string' && out.gw_id === undefined) out.gw_id = out.gateway_id;
-  // applicationId/appId 别名
+
   if (out.app_id === undefined && typeof out.application_id === 'number') out.app_id = out.application_id;
-  // device 行：classEnabled → class；status 由 is_disabled 推导；last_seen_fmt
+
   if (typeof out.class_enabled === 'string' && out.class === undefined) out.class = out.class_enabled.replace('CLASS_', '');
   if (out.status === undefined && out.is_disabled !== undefined) out.status = out.is_disabled ? 'disabled' : 'active';
   if (typeof out.activation === 'string' && out.activation === '') out.activation = 'OTAA';
   if (out.online === 'offline' && typeof out.last_seen === 'number' && out.last_seen > 0) {
-    // 后端用 ChirpStack 语义（从未上行=OFFLINE），前端把有 last_seen 的都显示原逻辑即可
+
   }
   if (typeof out.last_seen === 'number' && out.last_seen_fmt === undefined) out.last_seen_fmt = out.last_seen > 0 ? new Date(out.last_seen * 1000).toLocaleString('sv-SE').replace('T', ' ') : '-';
-  // gateways：state → status；lastSeenFmt
+
   if (typeof out.state === 'string' && out.status === undefined && out.gateway_id !== undefined) out.status = out.state === 'ONLINE' ? 'online' : 'offline';
-  // device-profiles：ChirpStack 枚举 → 前端展示文本
+
   if (typeof out.mac_version === 'string' && /^LORAWAN_/.test(out.mac_version)) out.mac_version = out.mac_version.replace('LORAWAN_', '').replaceAll('_', '.');
   if (typeof out.reg_params_revision === 'string' && /^RP002_/.test(out.reg_params_revision)) out.reg_params_revision = out.reg_params_revision.replace(/^RP002_/, '').replaceAll('_', '.');
   if (out.adr_algorithm === undefined) out.adr_algorithm = 'default';
@@ -397,16 +376,15 @@ function _csNormalizeRow(r) {
   if (typeof out.supports_otaa === 'boolean') out.supports_otaa = out.supports_otaa ? 1 : 0;
   if (typeof out.supports_class_b === 'boolean') out.supports_class_b = out.supports_class_b ? 1 : 0;
   if (typeof out.supports_class_c === 'boolean') out.supports_class_c = out.supports_class_c ? 1 : 0;
-  // api-keys：token_preview（后端已给 tokenPreview）+ application_id
+
   if (out.application_id === undefined && typeof out.app_id === 'number') out.application_id = out.app_id;
   if (out.app_id === undefined && typeof out.application_id === 'number') out.app_id = out.application_id;
   return out;
 }
 function csAdapt(j, path) {
   if (!j || typeof j !== 'object') return j;
-  if (j.error !== undefined && j.error !== null) return j;  // 错误（含 gRPC 形状）原样透传
-  // 列表：{totalCount, result} → 补 data/total 别名（snake_case 化 + 行规范化的 result），
-  // 使既有 r.data||[] 与 r.total 消费代码无需逐处修改
+  if (j.error !== undefined && j.error !== null) return j;
+
   if (typeof j.totalCount === 'number' && Array.isArray(j.result)) {
     const norm = j.result.map(_csNormalizeRow);
     const out = { totalCount: j.totalCount, result: norm, data: norm, total: j.totalCount };
@@ -415,11 +393,11 @@ function csAdapt(j, path) {
     }
     return out;
   }
-  // 非列表业务对象：若对象所有键都是 snake_case（如 stats/settings/regions），原样透传
+
   if (typeof path === 'string' && path.indexOf('/api/') === 0 && j.data === undefined && !j.ok) {
     const hasCamel = Object.keys(j).some(k => /[A-Z]/.test(k));
     if (!hasCamel) return j;
-    // 设备单体等嵌套包装（device/deviceProfile/...）：转换后取出展平，便于 d.xxx 消费
+
     const nested = ['device', 'device_profile', 'gateway', 'application', 'tenant', 'multicast_group', 'thing_model', 'uplink', 'downlink'];
     const conv = _csDeep(j);
     for (const nk of nested) {
@@ -432,14 +410,9 @@ function csAdapt(j, path) {
   return j;
 }
 const hex = s => s || '-';
-// DevAddr 显示按 4 字节倒序（与 AT 模块输出一致，仅展示用，不改变存储值）
+
 const revAddr = s => (/^[0-9a-fA-F]{8}$/.test(s||'') ? s.slice(6,8)+s.slice(4,6)+s.slice(2,4)+s.slice(0,2) : (s||'-'));
 const esc = s => (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-
-
-
-
-
 
 function toast(msg, type){
   const host = document.getElementById('toastHost') || (() => {
@@ -451,9 +424,9 @@ function toast(msg, type){
   })();
   const item = document.createElement('div');
   item.className = 'toast ' + (type || 'info');
-  
+
   item.style.cssText = 'pointer-events:auto;min-width:180px;max-width:380px;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.45;opacity:0;transform:translateX(20px);transition:opacity .2s, transform .2s';
-  
+
   const text = document.createElement('div');
   text.style.cssText = 'flex:1;word-break:break-word';
   text.textContent = msg;
@@ -463,10 +436,10 @@ function toast(msg, type){
   close.onclick = () => removeToast(item);
   item.appendChild(text);
   item.appendChild(close);
-  
+
   while (host.children.length >= 3) host.removeChild(host.firstChild);
   host.appendChild(item);
-  
+
   requestAnimationFrame(() => { item.style.opacity = '1'; item.style.transform = 'translateX(0)'; });
   setTimeout(() => removeToast(item), 2500);
 }
@@ -477,21 +450,17 @@ function removeToast(item){
   setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 220);
 }
 
-
-
-
-
 const hexToText = (s) => {
   if (!s) return '-';
   const clean = String(s).replace(/\s+/g, '');
   if (!clean) return '-';
-  if (!/^[0-9a-fA-F]+$/.test(clean) || (clean.length & 1)) return s; 
+  if (!/^[0-9a-fA-F]+$/.test(clean) || (clean.length & 1)) return s;
   const bytes = new Uint8Array(clean.length / 2);
   for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.substr(i*2, 2), 16);
   try {
-    
+
     const txt = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-    
+
     return txt.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '·');
   } catch (_) {
     return s;
@@ -503,46 +472,11 @@ function hideLoader(){ const l=document.getElementById('loader'); if(l) l.classL
 
 async function busy(label, fn){ showLoader(label); try { return await fn(); } finally { hideLoader(); } }
 
-
-
-
-
-
-
-
-
-
 function resetFilters(clearPageState, viewFn){
   state.tenantFilter='';
   if (clearPageState) { try { clearPageState(); } catch (e) {} }
   busy('重置中…', () => viewFn());
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 async function nav(v, silent=false){
   state.view = v;
@@ -570,7 +504,7 @@ async function nav(v, silent=false){
   }
   const savedScroll = silent ? captureScrollState() : null;
   if(!silent){
-    
+
     if((location.hash||'').slice(1)!==v) history.replaceState(null,'','#'+v);
     showLoader();
   }
@@ -603,7 +537,7 @@ async function nav(v, silent=false){
     else if (v==='roles') await viewRoles();
     else if (v==='settings') await viewSettings();
     else document.getElementById('view').innerHTML = '<div class="muted">未知页面</div>';
-    
+
     applyMobileH2();
     if (isDemo()) disableDemoWriteButtons();
   } catch(e){
@@ -636,24 +570,19 @@ function restoreScrollState(s){
 function toggleNav(){ document.getElementById('mobilePanel').classList.toggle('open'); }
 function closeNav(){ document.getElementById('mobilePanel').classList.remove('open'); }
 
-
 window.addEventListener('hashchange', ()=>{
   const v = (location.hash||'').slice(1) || 'dashboard';
   if (v !== state.view) nav(v);
 });
 
-
-// 日志类页面（uplinks/downlinks/events）的自动刷新改由右下角悬浮下拉（views.js 的
-// logRefreshTimer / setLogRefresh）单独控制，避免和本全局 5s 定时器叠加导致下拉失效。
-// 这里只保留无下拉控件的概览/列表页。
 const AUTO_REFRESH_VIEWS = ['dashboard','devices','gateways'];
 function isSelMenuOpen(){
   const list = window.__selMenus || [];
   return list.some(m => m.wrap && m.wrap.classList.contains('open'));
 }
 setInterval(()=>{
-  if (document.getElementById('modal').classList.contains('show')) return; 
-  if (isSelMenuOpen()) return; 
+  if (document.getElementById('modal').classList.contains('show')) return;
+  if (isSelMenuOpen()) return;
   if (AUTO_REFRESH_VIEWS.includes(state.view)) nav(state.view, true);
 }, 5000);
 
@@ -668,7 +597,7 @@ function renderModal(html){
   let foot = '';
   while (children.length) {
     const last = children[children.length - 1];
-    // 只有「仅含按钮」的尾部 div 才算 footer；带 pre/textarea/input/select/table 的内容块不能被吞进 foot
+
     const hasBtn = last.tagName === 'DIV' && last.querySelector('button');
     const hasContent = last.tagName === 'DIV' && last.querySelector('pre, textarea, input, select, table, ul, ol');
     if (hasBtn && !hasContent) {
@@ -685,7 +614,7 @@ function openModal(html, opts){
   renderModal(html);
   document.getElementById('modalBox').classList.toggle('wide', !!(opts && opts.wide));
   document.getElementById('modal').classList.add('show');
-  
+
   if (isDemo()) {
     document.querySelectorAll('#modalBox button').forEach(btn => {
       const txt = (btn.textContent || '').trim();
@@ -697,7 +626,6 @@ function openModal(html, opts){
     });
   }
 }
-
 
 function disableDemoWriteButtons(){
   document.querySelectorAll('#view button').forEach(btn => {
@@ -863,7 +791,7 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('.selwrap')) closeAllSelMenus();
 });
 window.addEventListener('scroll', (e) => {
-  if (!e.isTrusted) return; // 程序化滚动（刷新后恢复滚动位置）不关闭下拉菜单
+  if (!e.isTrusted) return;
   if (e.target && e.target.closest && e.target.closest('.sel-menu')) return;
   closeAllSelMenus();
 }, true);
@@ -879,4 +807,3 @@ const _selObserver = new MutationObserver(muts => {
   });
 });
 function startSelObserver(){ _selObserver.observe(document.body, {childList:true, subtree:true}); }
-

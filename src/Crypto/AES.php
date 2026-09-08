@@ -1,15 +1,9 @@
 <?php
 
-
-
-
-
-
 namespace holastack\Crypto;
 
 class AES
 {
-    
 
     public static function ecbEncrypt(string $key, string $data): string
     {
@@ -44,11 +38,6 @@ class AES
         return $out;
     }
 
-    
-
-
-
-
     public static function cmac(string $key, string $msg): string
     {
         $bs = 16;
@@ -71,7 +60,6 @@ class AES
         if (strlen($lastBlock) === $bs) {
             $m = self::xorBytes($lastBlock, $K1);
         } else {
-            
 
             $padded = $lastBlock . "\x80" . str_repeat("\x00", $bs - strlen($lastBlock) - 1);
             $m = self::xorBytes($padded, $K2);
@@ -86,12 +74,6 @@ class AES
         return $x;
     }
 
-    
-
-
-
-
-
     public static function ctrXcrypt(string $key, string $aBlock, string $payload): string
     {
         $len = strlen($payload);
@@ -102,7 +84,7 @@ class AES
         $out = '';
         for ($i = 0; $i < $blocks; $i++) {
             $a = $aBlock;
-            $a[15] = chr($i + 1); 
+            $a[15] = chr($i + 1);
 
             $ks = self::ecbEncrypt($key, $a);
             $chunk = substr($payload, $i * 16, 16);

@@ -1,12 +1,6 @@
 <?php
 namespace holastack\Core;
 
-
-
-
-
-
-
 class Multicast
 {
     public static function buildDownlink(array $group, int $fPort, string $payloadHex): string

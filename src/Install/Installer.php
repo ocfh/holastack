@@ -1,15 +1,6 @@
 <?php
 namespace holastack\Install;
 
-
-
-
-
-
-
-
-
-
 class Installer
 {
     private static function lang(): string
@@ -29,8 +20,6 @@ class Installer
         $method = $_SERVER['REQUEST_METHOD'];
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?: '';
 
-        
-
         if (($path === '/install' || $path === '/install/') && ($_GET['step'] ?? '') === 'test-db') {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(self::testDb($_GET), JSON_UNESCAPED_UNICODE);
@@ -41,7 +30,6 @@ class Installer
             self::process();
             return;
         }
-        
 
         $cur = (string) ($_GET['step'] ?? '');
         if ($cur === 'db') {
@@ -69,7 +57,6 @@ class Installer
             $abs = self::resolveSqlitePath($file);
             $dsn = 'sqlite:' . $abs;
             $connDsn = $dsn;
-            
 
             $dir = dirname($abs);
             if (!is_dir($dir) && !@mkdir($dir, 0777, true)) {
@@ -96,7 +83,6 @@ class Installer
                     $pdo->exec("CREATE DATABASE IF NOT EXISTS `$dbname` DEFAULT CHARACTER SET utf8mb4");
                     $pdo = new \PDO($dsn, $user, $pass, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
                 }
-                
 
                 $_SESSION['install_db'] = ['db_type' => $dbType, 'dsn' => $dsn, 'user' => $user, 'pass' => $pass];
                 $_SESSION['install_step'] = 'db';
@@ -110,17 +96,14 @@ class Installer
 
     private static function resolveSqlitePath(string $file): string
     {
-        
 
         $file = trim(preg_replace('/^sqlite:/', '', $file));
-        
 
         if ($file === '' || strpos($file, '/') === 0 || strpos($file, '\\') === 0 || preg_match('/^[A-Za-z]:[\\\\\/]/', $file)) {
             $p = $file === '' ? ELW_ROOT . '/runtime/server.db' : $file;
         } else {
             $p = ELW_ROOT . '/' . $file;
         }
-        
 
         return str_replace('\\', '/', $p);
     }
@@ -129,12 +112,6 @@ class Installer
     {
         $p = $_POST;
         $action = (string) ($p['action'] ?? '');
-
-        
-
-        
-
-        
 
         if ($action === 'set-lang') {
             $l = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($p['lang'] ?? 'zh'));
@@ -148,16 +125,12 @@ class Installer
             exit;
         }
 
-        
-
         $errors = [];
         $db = $_SESSION['install_db'] ?? null;
         $dbType = $db['db_type'] ?? 'sqlite';
         $dsn = $db['dsn'] ?? ('sqlite:' . ELW_ROOT . '/runtime/server.db');
         $user = $db['user'] ?? '';
         $pass = $db['pass'] ?? '';
-
-        
 
         $adminUser = trim($p['admin_user'] ?? '');
         $adminEmail = trim($p['admin_email'] ?? '');
@@ -176,8 +149,6 @@ class Installer
             $errors[] = self::msg('两次输入的密码不一致', 'Passwords do not match');
         }
 
-        
-
         $pdo = null;
         if (empty($errors)) {
             try {
@@ -191,8 +162,6 @@ class Installer
             echo self::renderStep3($errors, $p);
             return;
         }
-
-        
 
         try {
             self::importSchema($pdo, $dbType);
@@ -210,14 +179,11 @@ class Installer
                 ->execute([$adminUser, $hash, 'admin', $adminEmail, time()]);
         }
 
-        
-
         try {
             $lang = self::lang();
             $ins = $pdo->prepare('INSERT INTO settings (skey, svalue, updated_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue), updated_at=VALUES(updated_at)');
             $ins->execute(['ui_lang', $lang, time()]);
         } catch (\Throwable $e) {
-            
 
             try {
                 $ex = $pdo->prepare('SELECT skey FROM settings WHERE skey=?');
@@ -226,7 +192,6 @@ class Installer
                     $pdo->prepare('INSERT INTO settings (skey, svalue, updated_at) VALUES (?,?,?)')->execute(['ui_lang', $lang, time()]);
                 }
             } catch (\Throwable $ignored) {
-                
 
             }
         }
@@ -236,14 +201,10 @@ class Installer
         exit;
     }
 
-    
-
     private static function msg(string $zh, string $en): string
     {
         return self::tl($zh);
     }
-
-    
 
     private static function labels(): array
     {
@@ -297,7 +258,6 @@ class Installer
                     try {
                         $pdo->exec($stmt);
                     } catch (\Throwable $e) {
-                        
 
                         if (stripos($e->getMessage(), 'already exists') === false) {
                             throw $e;
@@ -323,9 +283,6 @@ class Installer
             . 'return ' . var_export($cfg, true) . ';' . PHP_EOL;
         file_put_contents(ELW_ROOT . '/config/local.php', $export, LOCK_EX);
     }
-
-    
-
 
     private static function renderStep1(array $errors): string
     {

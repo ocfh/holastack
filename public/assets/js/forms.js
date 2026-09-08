@@ -48,12 +48,10 @@ async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class
   const r = await api('PUT',`/api/devices/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewDevices(); }
 async function delDevice(id){ confirmDlg('确认删除该设备及其上下行记录？', async ()=>{ const r = await api('DELETE',`/api/devices/${id}`); if(r.error){alert(t(r.error));return;} viewDevices(); }); }
 
-// ---- 网关射频信道配置（仿 ChirpStack Gateway 配置）----
 const RF_BAND_DEF = {
   'EU868': { r0:868.1, r1:868.5, base:868.1 },
   'US915': { r0:903.9, r1:904.5, base:902.3 },
-  // CN470 居民抄表：可用信道 0~5、39~44、78~95；6~38 与 45~77 由国家电网保留
-  // 8 通道网关示例：Radio 0 监听 0~5，Radio 1 再补两个高段代表信道
+
   'CN470': { r0:470.9, r1:484.9, base:470.3 },
   'AS923': { r0:923.2, r1:923.8, base:923.2 },
   'AU915': { r0:916.8, r1:917.4, base:915.2 },
@@ -67,7 +65,7 @@ function rfDefault(band){
   const b = band || 'CN470';
   const d = RF_BAND_DEF[b] || RF_BAND_DEF['EU868'];
   const r0 = +d.r0, r1 = +d.r1, base = +d.base;
-  // CN470 居民抄表：默认启用低段 0~5 与高段 78~79 作为代表
+
   const cn470Ch = b === 'CN470' ? [0,1,2,3,4,5,78,79] : null;
   const freqFor = ch => Math.round((470.3 + ch * 0.2) * 10) / 10;
   return {
@@ -200,7 +198,7 @@ function macToggle(){
   port.value = mac ? '0' : '10';
   port.style.opacity = mac ? '0.45' : '';
 }
-async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked, mac:document.getElementById('m_mac').checked}); if(r.error){alert(t(r.error));return;} closeModal(); alert('已加入下行队列（Class C 立即下发；Class A 于下次上行 RX1/RX2；Class B 于 ping 时隙下发）。'); }
+async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId}/downlink`,{port:+v('m_port'),payload:v('m_payload'),confirmed:document.getElementById('m_confirmed').checked, mac:document.getElementById('m_mac').checked}); if(r.error){alert(t(r.error));return;} closeModal(); alert('已加入下行队列。'); }
 
 async function newUser(){
   let tenants = '';
@@ -229,7 +227,7 @@ async function newUser(){
         <div><label>${t('自定义角色（覆盖菜单权限）')}</label><select id="m_role_custom"><option value="0">— ${t('默认')} —</option>${roles}</select></div>
       </div>
       <label class="rl-switch" style="margin-top:10px"><input type="checkbox" id="m_create_role" onchange="sameRoleToggle()"><span>${t('创建同名角色')}</span></label>
-      <div class="muted" style="font-size:11px;margin-top:4px" id="m_create_role_hint">${t('勾选后保存时自动以用户名创建同名自定义角色（已存在则复用），默认只读权限集，可稍后在角色管理中调整。')}</div>
+      <div class="muted" style="font-size:11px;margin-top:4px" id="m_create_role_hint">${t('保存时以用户名创建同名角色（已存在则复用）。')}</div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`, {wide:true});
   roleTenantToggle();
@@ -304,14 +302,12 @@ async function saveUserEdit(id){
   const r = await api('PUT',`/api/users/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
 
-
 async function dpOptions(sel){
   if(!state.dps.length){ const r=await api('GET','/api/device-profiles'); state.dps=r.data||[]; }
   const list=(state.dps||[]);
   if(!list.length){ return `<option value="" selected disabled>暂无设备模板，请先创建</option>`; }
   return list.map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
 }
-
 
 function tenantForm(d){
   d = d || {};
@@ -337,7 +333,7 @@ function tenantLimitToggle(){
   if (div) div.style.display = cb.checked ? 'none' : '';
 }
 function newTenant(){
-  
+
   openModal(`<h3>${t('新建用户配置')}</h3>${tenantForm({ private_gateways_unlimited: 0, private_gateways_limit: 0 })}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(0))">${t('保存')}</button></div>`);
 }
@@ -430,7 +426,6 @@ async function editDeviceProfile(id){
 }
 async function delDeviceProfile(id){ confirmDlg('确认删除该模板？引用该模板的设备将变为未选择模板。', async ()=>{ const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }); }
 
-
 function newApiKey(){
   if(!state.appSel){alert('请先选择应用');return;}
   openModal(`<h3>${t('新建 API 密钥')} (${t('应用')} #${state.appSel})</h3><label>名称</label><input id="m_name">
@@ -445,7 +440,6 @@ async function saveApiKey(){
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button onclick="(navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('m_tok').value));closeModal();viewApiKeys()">我已复制，关闭</button></div>`);
 }
 async function delApiKey(id){ confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
-
 
 function newIntegration(it){
   if(!state.intAppSel && !it){alert('请先选择应用');return;}
@@ -517,7 +511,6 @@ function prefillInt(it){
   else if(it.kind==='MODBUS_TCP'){ set('m_mb_server',cfg.server); set('m_mb_unit',cfg.unit_id); set('m_mb_addr',cfg.address); set('m_mb_path',cfg.value_path); set('m_mb_type',cfg.type); set('m_mb_order',cfg.byte_order); }
 }
 
-
 function multicastForm(m){
   m=m||{}; const regions=regionOptions(m.region||"");
   const type=(s)=>['A','B','C'].map(cls=>`<option value="${cls}" ${cls===s?'selected':''}>${cls}</option>`).join('');
@@ -555,4 +548,3 @@ async function addMcDev(id){ const e=v('m_mcdev'); if(!e){alert('请输入 DevEU
 async function rmMcDev(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/devices`,{dev_eui:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
 async function addMcGw(id){ const e=v('m_mcgw'); if(!e){alert('请输入 Gateway ID');return;} const r=await api('POST',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
 async function rmMcGw(id,e){ const r=await api('DELETE',`/api/multicast-groups/${id}/gateways`,{gw_id:e}); if(r.error){alert(t(r.error));return;} mcDetail(id); }
-
