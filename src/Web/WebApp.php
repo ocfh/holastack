@@ -5,6 +5,7 @@ use holastack\DB\Database;
 use holastack\Region\Region;
 use holastack\Auth\Auth;
 use holastack\Storage\DeviceProfile;
+use holastack\Storage\ApiLog;
 use holastack\Storage\Tenant;
 use holastack\Storage\ThingModel;
 use holastack\Storage\Alert;
@@ -35,6 +36,11 @@ class WebApp
             'can_write' => in_array($role, [Auth::ROLE_ADMIN, Auth::ROLE_TENANT], true),
             'demo' => $role === Auth::ROLE_OPERATOR,
         ];
+    }
+
+    public static function scopePublic(): array
+    {
+        return self::scope();
     }
 
     private static function effectiveTenant(?int $explicit = null): ?int
@@ -135,7 +141,7 @@ class WebApp
         return null;
     }
 
-    private static function appInScope(int $appId): bool
+    public static function appInScope(int $appId): bool
     {
         $appIds = self::visibleAppIds();
         return $appIds === null || in_array($appId, $appIds, true);
@@ -162,7 +168,7 @@ class WebApp
             ['id' => 2, 'name' => '电表-A1', 'dev_eui' => '70b3d57e00000002', 'dev_addr' => '02b3c4d5',
              'app_id' => 2, 'application_id' => 2, 'activation' => 'ABP', 'class' => 'C', 'status' => 'active',
              'created_at' => $now - 86400 * 20, 'last_seen' => $now - 300, 'battery' => 100, 'margin' => 14,
-             'latitude' => 0, 'longitude' => 0, 'online' => 'online', 'last_seen_fmt' => date('Y-m-d H:i:s', $now - 300)],
+             'latitude' => 23.1402, 'longitude' => 113.2758, 'online' => 'online', 'last_seen_fmt' => date('Y-m-d H:i:s', $now - 300)],
             ['id' => 3, 'name' => '烟感-07', 'dev_eui' => '70b3d57e00000003', 'dev_addr' => '03c4d5e6',
              'app_id' => 1, 'application_id' => 1, 'activation' => 'OTAA', 'class' => 'A', 'status' => 'active',
              'created_at' => $now - 86400 * 10, 'last_seen' => $now - 1800, 'battery' => 55, 'margin' => 5,
@@ -170,7 +176,7 @@ class WebApp
             ['id' => 4, 'name' => '门磁-B2', 'dev_eui' => '70b3d57e00000004', 'dev_addr' => '04d5e6f7',
              'app_id' => 2, 'application_id' => 2, 'activation' => 'ABP', 'class' => 'A', 'status' => 'active',
              'created_at' => $now - 86400 * 5, 'last_seen' => $now - 86400 * 2, 'battery' => 0, 'margin' => '',
-             'latitude' => 0, 'longitude' => 0, 'online' => 'offline', 'last_seen_fmt' => date('Y-m-d H:i:s', $now - 86400 * 2)],
+             'latitude' => 23.1225, 'longitude' => 113.2688, 'online' => 'offline', 'last_seen_fmt' => date('Y-m-d H:i:s', $now - 86400 * 2)],
         ];
         if ($appId !== null && $appId > 0) {
             $rows = array_values(array_filter($rows, static fn($d) => (int) $d['app_id'] === (int) $appId));
@@ -196,11 +202,14 @@ class WebApp
         $now = time();
         return [
             ['gw_id' => '0080000000000001', 'name' => '楼栋A-网关', 'region' => 'EU868',
-             'status' => 'online', 'uplinks' => mt_rand(800, 2000), 'last_seen' => $now - 30, 'ip' => '192.168.1.11'],
+             'status' => 'online', 'uplinks' => mt_rand(800, 2000), 'last_seen' => $now - 30, 'ip' => '192.168.1.11',
+             'latitude' => 23.1291, 'longitude' => 113.2644],
             ['gw_id' => '0080000000000002', 'name' => '园区B-网关', 'region' => 'EU868',
-             'status' => 'online', 'uplinks' => mt_rand(600, 1500), 'last_seen' => $now - 120, 'ip' => '192.168.1.12'],
+             'status' => 'online', 'uplinks' => mt_rand(600, 1500), 'last_seen' => $now - 120, 'ip' => '192.168.1.12',
+             'latitude' => 23.1350, 'longitude' => 113.2700],
             ['gw_id' => '0080000000000003', 'name' => '仓库C-网关', 'region' => 'EU868',
-             'status' => 'offline', 'uplinks' => mt_rand(100, 400), 'last_seen' => $now - 86400 * 2, 'ip' => '192.168.1.13'],
+             'status' => 'offline', 'uplinks' => mt_rand(100, 400), 'last_seen' => $now - 86400 * 2, 'ip' => '192.168.1.13',
+             'latitude' => 23.1180, 'longitude' => 113.2590],
         ];
     }
 
@@ -556,6 +565,65 @@ class WebApp
             ];
         }
         return $out;
+    }
+
+    private static function demoApiLogs(int $limit, int $offset, array $filters): array
+    {
+        $devs = self::demoDevices();
+        $seed = 20260909;
+        mt_srand($seed);
+        $methods = ['GET', 'GET', 'GET', 'POST', 'PUT', 'DELETE'];
+        $paths = [
+            ['/api/devices', 200], ['/api/devices', 200], ['/api/applications', 200],
+            ['/api/uplinks', 200], ['/api/downlinks', 200], ['/api/events', 200],
+            ['/api/alerts', 200], ['/api/alert-rules', 200], ['/api/notification-groups', 200],
+            ['/api/thing-models', 200], ['/api/scheduled-tasks', 200], ['/api/automations', 200],
+            ['/api/login', 200], ['/api/gateways', 200], ['/api/device-profiles', 200],
+            ['/api/devices/999', 404], ['/api/settings', 403], ['/api/multicast-groups', 200],
+        ];
+        $users = [['demo', 'operator'], ['demo', 'operator'], ['admin', 'admin']];
+        $total = 120;
+        $all = [];
+        for ($i = 0; $i < $total; $i++) {
+            [$path, $status] = $paths[$i % count($paths)];
+            [$uname, $role] = $users[$i % count($users)];
+            $d = $devs[$i % count($devs)];
+            $t = time() - $i * mt_rand(20, 300);
+            $all[] = [
+                'id' => $total - $i, 'created_at' => $t,
+                'method' => $methods[$i % count($methods)],
+                'path' => $path, 'status' => $status,
+                'latency_ms' => mt_rand(3, 180),
+                'ip' => '192.168.1.' . (10 + ($i % 5)),
+                'username' => $uname, 'role' => $role, 'tenant_id' => 0,
+                'application_id' => $d['app_id'],
+                'query' => '', 'body_size' => mt_rand(0, 900),
+            ];
+        }
+        mt_srand();
+        if (!empty($filters['method'])) {
+            $all = array_values(array_filter($all, static fn($r) => $r['method'] === strtoupper((string) $filters['method'])));
+        }
+        if (!empty($filters['path_contains'])) {
+            $kw = strtolower((string) $filters['path_contains']);
+            $all = array_values(array_filter($all, static fn($r) => str_contains(strtolower($r['path']), $kw)));
+        }
+        if (isset($filters['status']) && $filters['status'] !== '' && $filters['status'] !== null) {
+            $all = array_values(array_filter($all, static fn($r) => $r['status'] === (int) $filters['status']));
+        }
+        if (!empty($filters['ip'])) {
+            $all = array_values(array_filter($all, static fn($r) => $r['ip'] === (string) $filters['ip']));
+        }
+        $rows = array_slice($all, $offset, $limit);
+        return ['rows' => $rows, 'total' => count($all)];
+    }
+
+    public static function listApiLogs(int $limit, int $offset, array $filters): array
+    {
+        if (self::scope()['demo']) {
+            return self::demoApiLogs($limit, $offset, $filters);
+        }
+        return ApiLog::list(Auth::currentUser(), $filters, $limit, $offset);
     }
 
     public static function listApplications(?int $tenantId = null): array
@@ -1511,7 +1579,11 @@ class WebApp
     }
     public static function getDeviceProfile(int $id): ?array
     {
-        return DeviceProfile::get($id);
+        $dp = DeviceProfile::get($id);
+        if ($dp && !self::canAccess($dp)) {
+            return null;
+        }
+        return $dp;
     }
     public static function createDeviceProfile(array $p): array
     {
@@ -1546,6 +1618,9 @@ class WebApp
     public static function getThingModel(int $id): ?array
     {
         $m = ThingModel::get($id);
+        if ($m && !self::canAccess($m)) {
+            return null;
+        }
         if ($m) {
             $m['fields'] = ThingModel::fields($m);
             $m['fields_json'] = '';
@@ -1589,6 +1664,35 @@ class WebApp
 
     public static function deviceFields(int $devId): array
     {
+        if (self::scope()['demo']) {
+            $d = null;
+            foreach (self::demoDevices() as $row) {
+                if ((int) $row['id'] === (int) $devId) {
+                    $d = $row;
+                    break;
+                }
+            }
+            if (!$d) {
+                return ['fields' => [], 'model' => null];
+            }
+            $models = self::demoThingModels((int) $d['app_id']);
+            if (!$models) {
+                return ['fields' => [], 'model' => null];
+            }
+            $m = $models[0];
+            $fields = json_decode($m['fields_json'], true) ?: [];
+            $latest = [];
+            mt_srand((int) $devId * 7919);
+            foreach ($fields as $f) {
+                if (($f['key'] ?? '') === '') {
+                    continue;
+                }
+                $base = ($f['key'] === 'battery') ? mt_rand(10, 100) : mt_rand(180, 350);
+                $latest[$f['key']] = ($f['scale'] ?? 0) > 0 ? round($base * (float) $f['scale'], 1) : $base;
+            }
+            mt_srand();
+            return ['fields' => $latest, 'model' => array_merge(['fields' => $fields], $m)];
+        }
         $d = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]);
         if (!$d || !self::canAccess($d)) {
             return ['fields' => [], 'model' => null];
@@ -1602,6 +1706,26 @@ class WebApp
 
     public static function queryDeviceReadings(int $devId, string $fieldKey, int $from, int $to): array
     {
+        if (self::scope()['demo']) {
+            $n = 40;
+            $step = max(60, (int) (($to - $from) / $n));
+            mt_srand(crc32($devId . '|' . $fieldKey));
+            $lower = ($fieldKey === 'battery') ? 10 : ($fieldKey === 'humidity' ? 40 : ($fieldKey === 'voltage' ? 200 : 15));
+            $base = $lower + mt_rand(0, 20);
+            $amp = $base * 0.08;
+            $data = [];
+            for ($i = 0; $i < $n; $i++) {
+                $ts = $from + $i * $step;
+                if ($ts > $to) {
+                    break;
+                }
+                $v = $base + sin($i / 5) * $amp + mt_rand(-2, 2);
+                $v = round($v, 1);
+                $data[] = ['v' => $v, 't' => (string) $v, 'fcnt' => 1000 + $i, 'ts' => $ts];
+            }
+            mt_srand();
+            return ['data' => $data];
+        }
         $d = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]);
         if (!$d || !self::canAccess($d)) {
             return ['error' => 'forbidden'];

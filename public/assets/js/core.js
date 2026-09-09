@@ -180,7 +180,7 @@ const NAV_GROUPS = [
     {v:'device-profiles', perm:'device-profiles', text:'设备模板', icon:'rectangleStack'},
     {v:'multicast-groups', perm:'multicast-groups', text:'组播组', icon:'userGroup'},
   ]},
-  { label:'数据管理', icon:'chartBar', items:[
+  { label:'数据管理', icon:'bellAlert', items:[
     {v:'thing-models', perm:'thing-models', text:'物模型', icon:'codeBracket'},
     {v:'dashboard-data', perm:'dashboard-data', text:'数据看板', icon:'chartBar'},
     {v:'alerts', perm:'alerts', text:'告警管理', icon:'bellAlert'},

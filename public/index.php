@@ -401,9 +401,12 @@ function handleApi(string $method, string $path): array|\stdClass
     $isDownlink = ($resource === 'devices' && in_array($segs[2] ?? '', ['downlink', 'queue'], true));
     $isPwChange = ($resource === 'users' && in_array($segs[1] ?? '', ['password'], true) || ($resource === 'users' && ($segs[2] ?? '') === 'password'));
     $isMulticastEnqueue = ($resource === 'multicast-groups' && in_array($segs[2] ?? '', ['enqueue', 'queue'], true));
+    $isDemoClearLogs = ($resource === 'settings' && !empty($body['clear_logs']) && (WebApp::scopePublic())['demo']);
     $adminOnlyResource = in_array($resource, ['users', 'tenants', 'settings'], true);
 
-    if ($isWrite && $adminOnlyResource && !$isPwChange) {
+    if ($isDemoClearLogs) {
+        return [];
+    } elseif ($isWrite && $adminOnlyResource && !$isPwChange) {
         Auth::guardApi(Auth::ROLE_ADMIN);
     } elseif ($isWrite && !$isDownlink && !$isPwChange && !$isMulticastEnqueue) {
         Auth::guardWrite();
@@ -468,6 +471,8 @@ function handleApi(string $method, string $path): array|\stdClass
             $row['region'] = $d['region'] ?? '';
             $row['isDisabled'] = ($d['status'] ?? '') === 'disabled';
             $row['online'] = ($d['online'] ?? '') === 'online' ? 'ONLINE' : 'OFFLINE';
+            $row['latitude'] = (float) ($d['latitude'] ?? 0);
+            $row['longitude'] = (float) ($d['longitude'] ?? 0);
             return $row;
         }
         $cls = strtoupper($d['class'] ?? 'A');
@@ -491,6 +496,8 @@ function handleApi(string $method, string $path): array|\stdClass
             'activation'      => $d['activation'] ?? '',
             'region'          => $d['region'] ?? '',
             'online'          => ($d['online'] ?? '') === 'online' ? 'ONLINE' : 'OFFLINE',
+            'latitude'        => (float) ($d['latitude'] ?? 0),
+            'longitude'       => (float) ($d['longitude'] ?? 0),
             'codec'           => $d['codec'] ?? '',
             'nwkSKey'         => $d['nwk_s_key'] ?? '',
             'appSKey'         => $d['app_s_key'] ?? '',
@@ -512,9 +519,13 @@ function handleApi(string $method, string $path): array|\stdClass
             'tenantId'    => cs_intToUuid((int) ($g['tenant_id'] ?? 0)),
             'state'       => $gatewayStateOf($lastSeen),
             'lastSeenAt'  => cs_ts($lastSeen),
-            'location'    => cs_obj(),
+            'location'    => ((float) ($g['latitude'] ?? 0) !== 0.0 || (float) ($g['longitude'] ?? 0) !== 0.0)
+                ? (object) ['latitude' => (float) ($g['latitude'] ?? 0), 'longitude' => (float) ($g['longitude'] ?? 0)]
+                : cs_obj(),
             'properties'  => cs_obj(),
             'tags'        => cs_obj(),
+            'latitude'    => (float) ($g['latitude'] ?? 0),
+            'longitude'   => (float) ($g['longitude'] ?? 0),
         ];
         if ($listItem) {
             $base['createdAt'] = cs_ts($g['created_at'] ?? 0);
@@ -561,7 +572,9 @@ function handleApi(string $method, string $path): array|\stdClass
                 $appId2 = cs_uuidToInt((string) $segs[1]);
                 $sub2 = (string) $segs[2];
                 if ($sub2 === 'device-tags' && $method === 'GET') {
-
+                    if (!WebApp::appInScope($appId2)) {
+                        return cs_notFound('application not found');
+                    }
                     $tagRows = Database::fetchAll(
                         "SELECT latest_fields FROM devices WHERE app_id=? AND latest_fields<>''",
                         [$appId2]
@@ -668,6 +681,10 @@ function handleApi(string $method, string $path): array|\stdClass
                 $res = cs_resolveDeviceSeg((string) $segs[1]);
                 $devId = (int) $res['id'];
                 $sub = (string) $segs[2];
+
+                if ($devId <= 0 || !WebApp::getDevice($devId)) {
+                    return cs_notFound('device not found');
+                }
 
                 if ($sub === 'downlink' && $method === 'POST') {
 
@@ -1033,6 +1050,9 @@ function handleApi(string $method, string $path): array|\stdClass
                 $subGw = (string) $segs[2];
                 if ($subGw === 'metrics' && $method === 'GET') {
 
+                    if (!WebApp::getGateway($gwSeg)) {
+                        return cs_notFound('gateway not found');
+                    }
                     $rows = Database::fetchAll(
                         "SELECT received_at FROM uplinks WHERE gateway_id=? AND received_at>=? ORDER BY received_at ASC",
                         [$gwSeg, time() - 86400]
@@ -1068,7 +1088,10 @@ function handleApi(string $method, string $path): array|\stdClass
             if (isset($segs[1]) && $segs[1] === 'relay-gateways') {
 
                 if ($method === 'GET' && !isset($segs[2])) {
-                    $rgRows = Database::fetchAll("SELECT * FROM relay_gateways ORDER BY id DESC");
+                    $sc = WebApp::scopePublic();
+                    $rgRows = Database::fetchAll(
+                        "SELECT * FROM relay_gateways" . ($sc['is_admin'] || $sc['demo'] ? '' : ' WHERE tenant_id=' . (int) $sc['tenant_id']) . " ORDER BY id DESC"
+                    );
                     $result = array_map(static function ($rg) {
                         return [
                             'relayId'       => substr(md5((string) $rg['relay_dev_eui']), 0, 8),
@@ -1091,6 +1114,11 @@ function handleApi(string $method, string $path): array|\stdClass
                 }
                 if (isset($segs[2]) && $method === 'DELETE') {
                     $relayId = strtolower((string) $segs[2]);
+                    $sc = WebApp::scopePublic();
+                    $rg = Database::fetch("SELECT * FROM relay_gateways WHERE substr(md5(relay_dev_eui),1,8)=? OR relay_dev_eui=?", [$relayId, $relayId]);
+                    if (!$rg || !($sc['is_admin'] || $sc['demo'] || (int) ($rg['tenant_id'] ?? 0) === (int) $sc['tenant_id'])) {
+                        return cs_notFound('relay gateway not found');
+                    }
                     Database::execute("DELETE FROM relay_gateways WHERE substr(md5(relay_dev_eui),1,8)=? OR relay_dev_eui=?", [$relayId, $relayId]);
                     return [];
                 }
@@ -2081,8 +2109,15 @@ function handleApi(string $method, string $path): array|\stdClass
             return cs_invalid('method not allowed');
         case 'relays':
 
+            $sc = WebApp::scopePublic();
+            $relayTid = (int) $sc['tenant_id'];
+            $relayAll = $sc['is_admin'] || $sc['demo'];
             if (isset($segs[1]) && ($segs[2] ?? '') === 'devices') {
                 $relayEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1]));
+                $relayGw = Database::fetch("SELECT * FROM relay_gateways WHERE relay_dev_eui=?", [$relayEui]);
+                if (!$relayGw || (!$relayAll && (int) ($relayGw['tenant_id'] ?? 0) !== $relayTid)) {
+                    return cs_notFound('relay gateway not found');
+                }
                 if ($method === 'GET') {
                     $rdRows = Database::fetchAll(
                         "SELECT rd.*, d.name AS dev_name FROM relay_devices rd LEFT JOIN devices d ON d.dev_eui=rd.dev_eui WHERE rd.relay_gateway_id IN (SELECT id FROM relay_gateways WHERE relay_dev_eui=?) ORDER BY rd.id",
@@ -2100,16 +2135,12 @@ function handleApi(string $method, string $path): array|\stdClass
                 if ($method === 'POST') {
                     $in = $body['deviceDevEui'] ?? $body['devEui'] ?? '';
                     $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $in));
-                    $gw = Database::fetch("SELECT id FROM relay_gateways WHERE relay_dev_eui=?", [$relayEui]);
-                    if (!$gw) {
-                        return cs_notFound('relay gateway not found');
-                    }
                     if (strlen($devEui) !== 16) {
                         return cs_invalid('deviceDevEui must be a 16-hex EUI64');
                     }
                     $exists = Database::fetch(
                         "SELECT id FROM relay_devices WHERE relay_gateway_id=? AND dev_eui=?",
-                        [(int) $gw['id'], $devEui]
+                        [(int) $relayGw['id'], $devEui]
                     );
                     if ($exists) {
                         http_response_code(409);
@@ -2117,7 +2148,7 @@ function handleApi(string $method, string $path): array|\stdClass
                     }
                     Database::execute(
                         "INSERT INTO relay_devices (relay_gateway_id, dev_eui, created_at) VALUES (?,?,?)",
-                        [(int) $gw['id'], $devEui, time()]
+                        [(int) $relayGw['id'], $devEui, time()]
                     );
                     return [];
                 }
@@ -2125,7 +2156,7 @@ function handleApi(string $method, string $path): array|\stdClass
             if ($method === 'GET') {
 
                 $relRows = Database::fetchAll(
-                    "SELECT d.dev_eui, d.name FROM devices d WHERE d.relay_state='relay' OR d.dev_eui IN (SELECT relay_dev_eui FROM relay_gateways) ORDER BY d.id DESC"
+                    "SELECT d.dev_eui, d.name FROM devices d WHERE (d.relay_state='relay' OR d.dev_eui IN (SELECT relay_dev_eui FROM relay_gateways))" . ($relayAll ? '' : ' AND d.tenant_id=' . $relayTid) . " ORDER BY d.id DESC"
                 );
                 $relList = array_map(static fn($r) => ['devEui' => $r['dev_eui'] ?? '', 'name' => $r['name'] ?? ''], $relRows);
                 $offR2 = $offsetOf('offset');
@@ -2152,7 +2183,7 @@ function handleApi(string $method, string $path): array|\stdClass
             ];
             $limit = $limitOf('limit');
             $offset = $offsetOf('offset');
-            $out = ApiLog::list($u, $filters, $limit, $offset);
+            $out = WebApp::listApiLogs($limit, $offset, $filters);
             $logRows = array_map(static function ($l) {
                 return [
                     'id'        => (string) ($l['id'] ?? ''),
