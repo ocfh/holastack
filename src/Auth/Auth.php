@@ -50,7 +50,7 @@ class Auth
         if (!password_verify($password, $user['password_hash'])) {
             return null;
         }
-        return $user;
+        return self::withDerivedRole($user);
     }
 
     public static function issueToken(array $user): string
@@ -69,10 +69,11 @@ class Auth
         if (!$token) {
             return null;
         }
-        return Database::fetch(
+        $u = Database::fetch(
             "SELECT u.* FROM auth_tokens t JOIN users u ON u.id=t.user_id WHERE t.token=?",
             [$token]
         );
+        return $u ? self::withDerivedRole($u) : null;
     }
 
     public static function currentUser(): ?array
@@ -259,7 +260,7 @@ class Auth
         return self::OPERATOR_PERMS;
     }
 
-    public static function roleFromRoleId(int $roleId, string $fallback = self::ROLE_OPERATOR): string
+    public static function roleFromRoleId(int $roleId, string $fallback = self::ROLE_TENANT): string
     {
         if ($roleId <= 0) {
             return $fallback;
@@ -272,6 +273,15 @@ class Auth
             return $r['name'];
         }
         return $fallback;
+    }
+
+    public static function withDerivedRole(array $u): array
+    {
+        $roleId = (int) ($u['role_id'] ?? 0);
+        if ($roleId > 0) {
+            $u['role'] = self::roleFromRoleId($roleId);
+        }
+        return $u;
     }
 
     public static function can(string $perm): bool

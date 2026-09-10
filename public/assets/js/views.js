@@ -3587,7 +3587,9 @@ async function roleSave(id){
 async function roleDel(id){
   const ok = await new Promise(res=>confirmDlg(t('确定删除该角色？'), res));
   if(!ok) return;
-  const r = await api('DELETE','/api/roles/'+id);
+  let r;
+  try { r = await api('DELETE','/api/roles/'+id); }
+  catch(e){ toast(String(e.message||e).replace(/^HTTP \d+：/,'').replace(/[{}\[\]"]/g,'').slice(0,120),'err'); return; }
   if(r && r.error){ toast(String(r.error),'err'); return; }
   toast(t('已删除'),'ok'); viewRoles();
 }

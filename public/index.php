@@ -1731,7 +1731,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 }
                 $roleId = (int) ($body['role_id'] ?? 0);
                 try {
-                    $role = $roleId > 0 ? Auth::roleFromRoleId($roleId, Auth::ROLE_OPERATOR) : Auth::ROLE_OPERATOR;
+                    $role = $roleId > 0 ? Auth::roleFromRoleId($roleId) : Auth::ROLE_OPERATOR;
                     $id = Auth::createUser(
                         $body['username'],
                         $body['password'],
@@ -2584,8 +2584,8 @@ function renderPage(): string
 <script src="/assets/js/icons.js"></script>
 <script src="/assets/js/core.js"></script>
 <script src="/assets/js/table.js"></script>
-<script src="/assets/js/views.js"></script>
-<script src="/assets/js/forms.js"></script>
+<script src="/assets/js/views.js?v=<?= filemtime(__DIR__ . '/assets/js/views.js') ?>"></script>
+<script src="/assets/js/forms.js?v=<?= filemtime(__DIR__ . '/assets/js/forms.js') ?>"></script>
 <script src="/assets/js/app.js"></script>
 <script src="/assets/loracalc.js"></script>
 <script src="/assets/apidocs.js"></script>

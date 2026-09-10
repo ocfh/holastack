@@ -1466,7 +1466,7 @@ class WebApp
         if ((int)$cur['id'] === $id && $roleId !== (int)$u['role_id'] && $roleId !== 0) {
             return ['error' => 'cannot change own role'];
         }
-        $role = $roleId > 0 ? Auth::roleFromRoleId($roleId, Auth::ROLE_OPERATOR) : $u['role'];
+        $role = $roleId > 0 ? Auth::roleFromRoleId($roleId) : $u['role'];
         $tid = (int) ($u['tenant_id'] ?? 0);
         Database::execute("UPDATE users SET role=?, tenant_id=?, email=?, role_id=? WHERE id=?", [$role, $tid, $email, $roleId, $id]);
         return ['ok' => true];

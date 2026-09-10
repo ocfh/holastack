@@ -50,7 +50,7 @@ class Role
             return ['error' => 'not_found'];
         }
         if (!empty($m['is_system'])) {
-            return ['error' => 'system_role_readonly'];
+            return ['error' => '系统内置角色不可修改'];
         }
         $merged = array_merge($m, array_intersect_key($p, array_flip(['name', 'description', 'permissions', 'tenant_id'])));
         $norm = self::normalize($merged, true);
@@ -72,11 +72,11 @@ class Role
             return ['error' => 'not_found'];
         }
         if (!empty($m['is_system'])) {
-            return ['error' => 'system_role_readonly'];
+            return ['error' => '系统内置角色不可删除'];
         }
-        $users = Database::fetchOne("SELECT COUNT(*) FROM users WHERE role_id=?", [$id]);
-        if ((int) $users > 0) {
-            return ['error' => 'role_in_use'];
+        $users = (int) Database::fetchOne("SELECT COUNT(*) FROM users WHERE role_id=?", [$id]);
+        if ($users > 0) {
+            return ['error' => "该角色仍有 {$users} 个用户使用，请先在用户管理中调整这些用户的角色"];
         }
         Database::execute("DELETE FROM roles WHERE id=?", [$id]);
         return ['id' => $id];
