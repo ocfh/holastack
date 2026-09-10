@@ -437,16 +437,20 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
             if ($method === 'GET') {
                 $isAdminReq = !empty($get['isAdmin']);
                 $tenantId = isset($get['tenantId']) && $get['tenantId'] !== '' ? ApiKey::uuidToId((string) $get['tenantId']) : null;
+                $allReq = !empty($get['all']);
                 if ($isAdminReq && $tenantId) {
                     return cs_invalid('tenantId can not be set with isAdmin set to true');
                 }
-                if (!$isAdminReq && !$tenantId) {
+                if (!$isAdminReq && !$tenantId && !$allReq) {
                     return cs_invalid('either isAdmin or tenantId must be set');
                 }
-                if ($u && $u['role'] !== Auth::ROLE_ADMIN && $tenantId !== (int) $sc['tenant_id']) {
+                if (!$allReq && $u && $u['role'] !== Auth::ROLE_ADMIN && $tenantId !== (int) $sc['tenant_id']) {
                     return cs_forbidden('permission denied');
                 }
-                $rows = ApiKey::list($tenantId, $isAdminReq);
+                if ($allReq && $u && $u['role'] !== Auth::ROLE_ADMIN) {
+                    return cs_forbidden('only admin can list all API keys');
+                }
+                $rows = ApiKey::list($tenantId, $isAdminReq, $allReq);
                 $off = max(0, (int) ($get['offset'] ?? 0));
                 $lim = (int) ($get['limit'] ?? 50);
                 $result = array_map(static fn($k) => [

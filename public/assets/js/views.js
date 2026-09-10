@@ -1420,18 +1420,25 @@ async function viewTenants(){
 }
 async function viewApiKeys(){
   const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
-  state.apps = ra.data||[];
-  const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
+  const tf = await tenantFilterHtml();
   let ks=[];
-  if(state.appSel){
-    const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); ks=r.data||[];
+  if(isAdmin()){
+    const r=await api('GET','/api/internal/api-keys?all=1&limit=500'); ks=(r.result||[]).map(k=>({...k, kind:'cs', id:k.id, token_preview:'', created_at:null}));
+  } else {
+    const ra=await api('GET','/api/applications'+(tq?'?'+tq:'')); state.apps=ra.data||[];
+    if(state.appSel){ const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); ks=r.data||[]; }
   }
+  const isCs = ks.length && ks[0].kind==='cs';
   const akCfg = {
     state, stateKey:'apiKeysSort',
-    defaultSort:{col:'time',dir:'desc'},
-    cellValue: (k, ck) => ({id:k.id, name:k.name, token:k.token_preview||'', time:k.created_at}[ck]),
-    cols:[
+    defaultSort:{col:'name',dir:'asc'},
+    cellValue: (k, ck) => ({id:k.id, name:k.name, scope: k.is_admin?'全局':(k.tenant_id&&k.tenant_id!=='00000000-0000-0000-0000-000000000000'?'租户':'—'), ro: k.is_read_only?'只读':'', token:k.token_preview||'', time:k.created_at}[ck]),
+    cols: isCs ? [
+      {key:'id',    label:'ID(UUID)',   type:'str', firstDir:'asc', sortable:false},
+      {key:'name',  label:'名称',        type:'str', firstDir:'asc'},
+      {key:'scope', label:'作用域',      type:'str', firstDir:'asc', sortable:false},
+      {key:'ro',    label:'权限',        type:'str', firstDir:'asc', sortable:false},
+    ] : [
       {key:'id',    label:'ID',          type:'num', firstDir:'asc', sortable:false},
       {key:'name',  label:'名称',         type:'str', firstDir:'asc', sortable:false},
       {key:'token', label:'Token(预览)', type:'str', firstDir:'asc', sortable:false},
@@ -1439,9 +1446,11 @@ async function viewApiKeys(){
       {key:'_raw',  label:'',            type:'raw'},
     ],
     rows: ks,
-    rowHtml: k => `<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
-      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">${ICON.trash}删除</button>`)}</td></tr>`,
-    emptyText: state.appSel ? '该应用暂无 API 密钥' : '请先在上方选择应用',
+    rowHtml: isCs ? (k => `<tr><td class="muted"><code>${esc(k.id)}</code></td><td>${esc(k.name)}</td><td>${k.is_admin?'<span class="badge">全局</span>':'租户'}</td><td>${k.is_read_only?'只读':'读写'}</td>
+      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey('${esc(k.id)}'))">${ICON.trash}删除</button>`)}</td></tr>`)
+      : (k => `<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
+      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">${ICON.trash}删除</button>`)}</td></tr>`),
+    emptyText: isCs ? '暂无 API 密钥' : '请先在上方选择应用',
   };
   const [filteredKeys, keysTotal] = filterAndSortRows(akCfg);
   akCfg.rows = paginateRows(filteredKeys, state, {pageKey:'apiKeysPage', limitKey:'apiKeysLimit', offsetKey:'apiKeysOffset'})[0];
@@ -1451,8 +1460,9 @@ async function viewApiKeys(){
   window.apiKeysSort_sort = col => _tableToggleSort('apiKeysSort','viewApiKeys',col);
   window.viewApiKeys__page = p => _pagerGo({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',p);
   window.viewApiKeys__limit = l => _pagerSetLimit({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',l);
-  document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['api-keys']]||''}API 密钥</h2></div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';state.apiKeysPage=1;state.apiKeysOffset=0;state.apiKeysLimit=50;state.apiKeysSort={col:'time',dir:'desc'};}, viewApiKeys)">${ICON.arrowPath}重置</button>${state.appSel?adminBtn('<button onclick="newApiKey()">'+ICON.plus+'新建 API 密钥</button>'):''}</div>
+  const appPicker = isCs ? '' : `<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${(state.apps||[]).map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('')}</select></div>`;
+  document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['api-keys']]||''}API 密钥</h2>${isAdmin()?adminBtn('<button onclick="newApiKey()">'+ICON.plus+'新建 API 密钥</button>'):''}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}${appPicker}${!isCs&&state.appSel?adminBtn('<button onclick="newApiKey()">'+ICON.plus+'新建应用密钥</button>'):''}</div>
    ${table}
    ${pager}`;
 }

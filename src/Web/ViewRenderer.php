@@ -431,7 +431,7 @@ HTML;
                         'title' => 'API 约定（必读）',
                         'desc' => 'holastack 的 /api/* 全量采用统一 REST 形状，可从任意标准客户端直接调用。约定：①认证头 Grpc-Metadata-Authorization: Bearer <token>（登录 token 或 API Key）；②列表一律 {totalCount, result}，支持 limit/offset/search（limit=0 仅返回 totalCount）；③id 为 UUID 形态 00000000-0000-0000-0000-<12hex>（设备路径同时接受 16 hex DevEUI）；④时间 RFC3339 UTC（零值 1970-01-01T00:00:00Z）；⑤错误 {error, code, message, details}（错误码：3=INVALID_ARGUMENT, 5=NOT_FOUND, 6=ALREADY_EXISTS, 7=PERMISSION_DENIED, 12=UNIMPLEMENTED, 13=INTERNAL）；⑥POST create 返回 200 + {id}（devices/gateways 返回 {}）；⑦字段统一 camelCase。holastack 扩展字段（numericId/region/online/appEui/callbackUrl 等）与标准字段并存，不影响标准客户端。',
                         'params' => [
-                            ['name' => 'Grpc-Metadata-Authorization', 'in' => 'header', 'type' => 'string', 'required' => true, 'desc' => 'Bearer <token>（/api/login 获取的会话 token，或 API Key）'],
+                            ['name' => 'Grpc-Metadata-Authorization', 'in' => 'header', 'type' => 'string', 'required' => true, 'desc' => 'Bearer <token>（/api/internal/login 的用户 JWT、/api/internal/api-keys 的 API Key，或旧 /api/login 会话 token）'],
                             ['name' => 'limit / offset / search', 'in' => 'query', 'type' => 'int/string', 'required' => false, 'desc' => '通用分页与搜索参数（列表端点均支持）'],
                         ],
                         'respFields' => [
@@ -458,6 +458,42 @@ HTML;
                         ],
                         'respExample' => ['ok' => true, 'token' => '6e34…', 'user' => ['id' => 2, 'username' => 'admin', 'role' => 'admin', 'permissions' => ['dashboard', 'devices']]],
                         'errors' => [['code' => '401 invalid credentials', 'desc' => '用户名或密码错误']],
+                    ],
+                    [
+                        'id' => 'cs-internal-login', 'method' => 'POST', 'path' => '/api/internal/login',
+                        'title' => '登录换 JWT（ChirpStack InternalService）',
+                        'desc' => 'ChirpStack v4 标准登录端点，返回 {jwt}（HS256 用户 JWT，typ=user）。与 /api/login 并存：新客户端用本端点，token 有效期长且无"重复登录互踢"限制。body 支持 email 或 username 字段（等价）。',
+                        'params' => [
+                            ['name' => 'email', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '用户名或 email（ChirpStack 标准字段名为 email，holastack 两者均接受）'],
+                            ['name' => 'password', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '密码'],
+                        ],
+                        'sample' => ['email' => 'admin', 'password' => '******'],
+                        'respFields' => [['name' => 'jwt', 'type' => 'string', 'desc' => '用户 JWT（用于 Grpc-Metadata-Authorization: Bearer）']],
+                        'respExample' => ['jwt' => 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.…'],
+                        'errors' => [['code' => '401 (code 16) unauthenticated', 'desc' => '凭据错误']],
+                    ],
+                    [
+                        'id' => 'cs-internal-apikeys', 'method' => 'POST', 'path' => '/api/internal/api-keys',
+                        'title' => 'API Key 管理（全局/租户级）',
+                        'desc' => 'ChirpStack v4 形状：POST 创建（body {apiKey:{name, isAdmin, tenantId, isReadOnly}}，isAdmin 与 tenantId 二选一必填），返回 {id, token}——token 仅此一次返回（JWT 形态，typ=apikey）。GET 列表 {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}；DELETE /{id} 删除。授权分档：isReadOnly 只读（写操作 403）；tenantId 密钥限本租户资源；isAdmin 全权。',
+                        'params' => [
+                            ['name' => 'apiKey.name', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '密钥名称'],
+                            ['name' => 'apiKey.isAdmin', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '全局管理密钥（与 tenantId 互斥）'],
+                            ['name' => 'apiKey.tenantId', 'in' => 'body', 'type' => 'string(UUID)', 'required' => false, 'desc' => '租户级密钥（与 isAdmin 互斥）'],
+                            ['name' => 'apiKey.isReadOnly', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '只读密钥'],
+                        ],
+                        'sample' => ['apiKey' => ['name' => 'dht11-board', 'isAdmin' => true]],
+                        'respFields' => [
+                            ['name' => 'id', 'type' => 'string(UUID)', 'desc' => 'API Key UUID'],
+                            ['name' => 'token', 'type' => 'string', 'desc' => 'API Key JWT（仅创建时返回一次）'],
+                        ],
+                        'respExample' => ['id' => '6b2f…', 'token' => 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.…'],
+                        'errors' => [['code' => '400 (code 3)', 'desc' => 'isAdmin 与 tenantId 均未设或同时设置']],
+                    ],
+                    [
+                        'id' => 'cs-internal-misc', 'method' => 'GET', 'path' => '/api/internal/profile | version | settings | global-search',
+                        'title' => 'InternalService 其他端点',
+                        'desc' => 'GET /api/internal/profile（当前用户/密钥身份，ChirpStack UserTenantLink 形状）；GET /api/internal/version（返回 4.19.1-holastack）；GET /api/internal/settings；GET /api/internal/global-search?search=；GET /api/internal/regions；GET /api/internal/devices-summary；GET /api/internal/gateways-summary。',
                     ],
                 ],
             ],

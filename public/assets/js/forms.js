@@ -375,19 +375,23 @@ async function editDeviceProfile(id){
 async function delDeviceProfile(id){ confirmDlg('确认删除该模板？引用该模板的设备将变为未选择模板。', async ()=>{ const r=await api('DELETE',`/api/device-profiles/${id}`); if(r.error){alert(t(r.error));return;} viewDeviceProfiles(); }); }
 
 function newApiKey(){
-  if(!state.appSel){alert('请先选择应用');return;}
-  openModal(`<h3>${t('新建 API 密钥')} (${t('应用')} #${state.appSel})</h3><label>名称</label><input id="m_name">
+  openModal(`<h3>${t('新建 API 密钥')}</h3>
+   <label>名称</label><input id="m_name" placeholder="如 dht11-board">
+   ${isAdmin()?`<label>作用域</label><select id="m_scope"><option value="admin">全局（所有租户）</option><option value="tenant">租户（限本租户资源）</option></select>`:''}
+   <label style="margin-top:10px"><input type="checkbox" id="m_ro" style="width:auto"> 只读密钥（拒绝所有写操作）</label>
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveApiKey)">保存</button></div>`);
 }
 async function saveApiKey(){
-  const r=await api('POST','/api/api-keys',{application_id:+state.appSel,name:v('m_name')});
+  const scope = isAdmin() ? (document.getElementById('m_scope')?.value||'admin') : 'tenant';
+  const body = {apiKey:{name:v('m_name'), isAdmin: scope==='admin', isReadOnly: !!document.getElementById('m_ro')?.checked}};
+  if(scope==='tenant' && state.tenantFilter) body.apiKey.tenantId = state.tenantFilter;
+  const r=await api('POST','/api/internal/api-keys',body);
   if(r.error){alert(t(r.error));return;}
-  const token=r.token||'';
   openModal(`<h3>API 密钥已创建</h3><p class="muted">请立即复制保存，关闭后将无法再查看明文：</p>
-   <label>Token</label><input id="m_tok" value="${esc(token)}" readonly onclick="this.select()">
+   <label>Token</label><input id="m_tok" value="${esc(r.token||'')}" readonly onclick="this.select()">
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button onclick="(navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('m_tok').value));closeModal();viewApiKeys()">我已复制，关闭</button></div>`);
 }
-async function delApiKey(id){ confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
+async function delApiKey(id){ confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/internal/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
 
 function newIntegration(it){
   if(!state.intAppSel && !it){alert('请先选择应用');return;}

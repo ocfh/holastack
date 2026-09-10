@@ -201,16 +201,20 @@ class ApiKey
         return null;
     }
 
-    public static function list(?int $tenantId = null, bool $isAdminOnly = false): array
+    public static function list(?int $tenantId = null, bool $isAdminOnly = false, bool $all = false): array
     {
         $sql = "SELECT id, uuid, tenant_id, name, is_admin, is_read_only, substr(api_key,1,12) AS token_preview, created_at FROM api_keys";
         $w = [];
         $p = [];
-        if ($isAdminOnly) {
-            $w[] = "is_admin=1";
-        } elseif ($tenantId !== null && $tenantId > 0) {
-            $w[] = "tenant_id=?";
-            $p[] = $tenantId;
+        if (!$all) {
+            if ($isAdminOnly) {
+                $w[] = "is_admin=1";
+            } elseif ($tenantId !== null && $tenantId > 0) {
+                $w[] = "tenant_id=?";
+                $p[] = $tenantId;
+            } else {
+                $w[] = "application_id=0";
+            }
         }
         if ($w) {
             $sql .= " WHERE " . implode(' AND ', $w);

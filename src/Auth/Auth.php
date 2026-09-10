@@ -40,9 +40,10 @@ class Auth
 
     public static function authenticate(string $username, string $password): ?array
     {
+        $u = trim($username);
         $user = Database::fetch(
-            "SELECT * FROM users WHERE LOWER(username)=?",
-            [strtolower(trim($username))]
+            "SELECT * FROM users WHERE LOWER(username)=? OR LOWER(email)=?",
+            [strtolower($u), strtolower($u)]
         );
         if (!$user) {
             return null;
