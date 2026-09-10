@@ -391,7 +391,7 @@ async function saveApiKey(){
    <label>Token</label><input id="m_tok" value="${esc(r.token||'')}" readonly onclick="this.select()">
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button onclick="(navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('m_tok').value));closeModal();viewApiKeys()">我已复制，关闭</button></div>`);
 }
-async function delApiKey(id){ confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/internal/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
+async function delApiKey(id){ if(!id){ alert('该密钥记录缺少 UUID，请刷新页面后重试；若仍失败请在数据库中清理。'); return; } confirmDlg('确认删除该 API 密钥？', async ()=>{ const r=await api('DELETE',`/api/internal/api-keys/${id}`); if(r.error){alert(t(r.error));return;} viewApiKeys(); }); }
 
 function newIntegration(it){
   if(!state.intAppSel && !it){alert('请先选择应用');return;}

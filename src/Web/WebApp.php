@@ -52,7 +52,7 @@ class WebApp
         if ($s['demo']) {
             return null;
         }
-        return $s['tenant_id'];
+        return $s['tenant_id'] > 0 ? $s['tenant_id'] : -1;
     }
 
     private static function canAccess(array $row, string $tenantCol = 'tenant_id'): bool
@@ -61,7 +61,7 @@ class WebApp
         if ($s['is_admin'] || $s['demo']) {
             return true;
         }
-        return (int) ($row[$tenantCol] ?? 0) === $s['tenant_id'];
+        return (int) ($row[$tenantCol] ?? 0) === ($s['tenant_id'] > 0 ? $s['tenant_id'] : -1);
     }
 
     private static function createTenantId(array $p = []): int
@@ -1535,7 +1535,9 @@ class WebApp
         $dps = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM device_profiles WHERE tenant_id=?", [$tid])['c']
             : Database::fetch("SELECT COUNT(*) c FROM device_profiles")['c'];
-        $mcs = $appFilter("SELECT COUNT(*) c FROM multicast_groups")['c'];
+        $mcs = $tid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM multicast_groups WHERE tenant_id=?", [$tid])['c']
+            : Database::fetch("SELECT COUNT(*) c FROM multicast_groups")['c'];
         $gwsOnline = $tid !== null
             ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE tenant_id=? AND last_seen >= ?", [$tid, time() - self::GW_OFFLINE_TIMEOUT])['c']
             : Database::fetch("SELECT COUNT(*) c FROM gateways WHERE last_seen >= ?", [time() - self::GW_OFFLINE_TIMEOUT])['c'];
@@ -2073,55 +2075,6 @@ class WebApp
             return ['error' => 'forbidden'];
         }
         return Role::delete($id);
-    }
-
-    public static function listApiKeys(int $applicationId, ?int $tenantId = null): array
-    {
-
-        if (self::scope()['demo']) {
-            $now = time();
-            return [
-                ['id' => 9001, 'name' => '示例应用 Key', 'application_id' => $applicationId,
-                 'token_preview' => '3f9a1c2b7d4e', 'created_at' => $now - 86400 * 7],
-                ['id' => 9002, 'name' => '只读监控 Key', 'application_id' => $applicationId,
-                 'token_preview' => '8e6d5c4b3a29', 'created_at' => $now - 86400 * 3],
-            ];
-        }
-        if ($applicationId > 0) {
-            $appIds = self::visibleAppIds($tenantId);
-            if ($appIds !== null && !in_array($applicationId, $appIds, true)) {
-                return [];
-            }
-            return ApiKey::legacyList($applicationId);
-        }
-
-        $appIds = self::visibleAppIds($tenantId);
-        if ($appIds === null || !$appIds) {
-            return [];
-        }
-        $in = implode(',', $appIds);
-        return Database::fetchAll(
-            "SELECT id, name, application_id, substr(api_key,1,12) AS token_preview, created_at
-             FROM api_keys WHERE application_id IN ($in) ORDER BY id DESC"
-        );
-    }
-    public static function createApiKey(int $applicationId, array $p): array
-    {
-        if (!self::appInScope($applicationId)) {
-            return ['error' => 'forbidden: application not in your tenant'];
-        }
-        return ApiKey::legacyCreate($applicationId, $p['name'] ?? '');
-    }
-    public static function deleteApiKey(int $id): array
-    {
-        $row = Database::fetch("SELECT application_id FROM api_keys WHERE id=?", [$id]);
-        if (!$row) {
-            return ['error' => 'api key not found'];
-        }
-        if (!self::appInScope((int) $row['application_id'])) {
-            return ['error' => 'forbidden: api key not in your tenant'];
-        }
-        return ApiKey::delete($id);
     }
 
     public static function listIntegrations(int $applicationId, ?int $tenantId = null): array

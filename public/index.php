@@ -22,7 +22,13 @@ if (PHP_SAPI === 'cli-server') {
     }
 }
 
-$logApi = ($path === '/v1' || strpos($path, '/v1/') === 0);
+$logApi = ($path === '/api' || strpos($path, '/api/') === 0) && strpos($path, '/api/view/') !== 0;
+if ($logApi) {
+    $spaHeaders = $_SERVER['HTTP_X_HOLASTACK_SPA'] ?? '';
+    if ($spaHeaders !== '') {
+        $logApi = false;
+    }
+}
 if ($logApi) {
     $__apiLogStart = microtime(true);
     $__apiLogCtx = [
@@ -81,12 +87,8 @@ const CS_ZERO_TS = '1970-01-01T00:00:00Z';
 
 if ($path === '/v1' || strpos($path, '/v1/') === 0) {
     header('Content-Type: application/json; charset=utf-8');
-    try {
-        echo json_encode(handleAppApi($method, $path), JSON_UNESCAPED_UNICODE);
-    } catch (\Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'server_error: ' . $e->getMessage()]);
-    }
+    http_response_code(410);
+    echo json_encode(['error' => 'gone', 'message' => 'v1 API has been removed, use /api']);
     exit;
 }
 
@@ -436,15 +438,22 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
             }
             if ($method === 'GET') {
                 $isAdminReq = !empty($get['isAdmin']);
-                $tenantId = isset($get['tenantId']) && $get['tenantId'] !== '' ? ApiKey::uuidToId((string) $get['tenantId']) : null;
+                $tenantId = isset($get['tenantId']) && $get['tenantId'] !== ''
+                    ? (ctype_digit((string) $get['tenantId']) && strlen((string) $get['tenantId']) < 12 ? (int) $get['tenantId'] : ApiKey::uuidToId((string) $get['tenantId']))
+                    : null;
                 $allReq = !empty($get['all']);
                 if ($isAdminReq && $tenantId) {
                     return cs_invalid('tenantId can not be set with isAdmin set to true');
                 }
                 if (!$isAdminReq && !$tenantId && !$allReq) {
-                    return cs_invalid('either isAdmin or tenantId must be set');
+                    if ($u && $u['role'] !== Auth::ROLE_ADMIN) {
+                        $tenantId = (int) $sc['tenant_id'];
+                    } else {
+                        return cs_invalid('either isAdmin or tenantId must be set');
+                    }
                 }
-                if (!$allReq && $u && $u['role'] !== Auth::ROLE_ADMIN && $tenantId !== (int) $sc['tenant_id']) {
+                if (!$allReq && $u && $u['role'] !== Auth::ROLE_ADMIN
+                    && $tenantId !== (int) $sc['tenant_id'] && !($isAdminReq && empty($get['isAdmin']))) {
                     return cs_forbidden('permission denied');
                 }
                 if ($allReq && $u && $u['role'] !== Auth::ROLE_ADMIN) {
@@ -455,6 +464,7 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
                 $lim = (int) ($get['limit'] ?? 50);
                 $result = array_map(static fn($k) => [
                     'id'         => (string) ($k['uuid'] ?? ApiKey::idToUuid((int) $k['id'])),
+                    'uuid'       => (string) ($k['uuid'] ?? ''),
                     'name'       => $k['name'] ?? '',
                     'isAdmin'    => (bool) $k['is_admin'],
                     'tenantId'   => ApiKey::idToUuid((int) ($k['tenant_id'] ?? 0)),
@@ -1801,36 +1811,7 @@ function handleApi(string $method, string $path): array|\stdClass
             return cs_list([], 0);
 
         case 'api-keys':
-            $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
-            $tenantId = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            if (isset($segs[1]) && $segs[1] !== '') {
-                if ($method === 'DELETE') {
-                    $r = WebApp::deleteApiKey(cs_uuidToInt((string) $segs[1]));
-                    if ($e = cs_wrapError($r)) { return $e; }
-                    return [];
-                }
-                return cs_err(12, 'unimplemented', 'method not allowed');
-            }
-            if ($method === 'POST') {
-                if (isset($body['applicationId']) && !isset($body['application_id'])) {
-                    $body['application_id'] = is_numeric($body['applicationId']) ? (int) $body['applicationId'] : cs_uuidToInt((string) $body['applicationId']);
-                }
-                $r = WebApp::createApiKey((int) ($body['application_id'] ?? $appId), $body);
-                if ($e = cs_wrapError($r)) { return $e; }
-                return ['id' => cs_intToUuid((int) $r['id']), 'token' => $r['token'] ?? ''];
-            }
-            $keys = WebApp::listApiKeys($appId, $tenantId);
-            $keyRows = array_map(fn($k) => array_merge(cs_rowBase($k), [
-                'name'            => $k['name'] ?? '',
-                'applicationId'   => cs_intToUuid((int) ($k['application_id'] ?? 0)),
-                'tokenPreview'    => $k['token_preview'] ?? '',
-                'isActive'        => true,
-                'tenantId'        => cs_intToUuid(0),
-                'displayName'     => $k['name'] ?? '',
-
-                'numericId'       => (int) $k['id'],
-            ]), $keys);
-            return cs_list($keyRows, count($keyRows));
+            return cs_err(12, 'unimplemented', 'legacy per-app api-keys removed; use /api/internal/api-keys');
 
         case 'uplinks':
             $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
@@ -1987,7 +1968,7 @@ function handleApi(string $method, string $path): array|\stdClass
                         $body['password'],
                         $role,
                         0,
-                        null,
+                        $role === Auth::ROLE_TENANT ? (string) $body['username'] : null,
                         $body['email'] ?? null,
                         $roleId
                     );
@@ -2018,15 +1999,7 @@ function handleApi(string $method, string $path): array|\stdClass
             }
             return cs_list(array_slice($userRows, $offsetOf('offset'), $limitOf('limit')), $totalU);
         case 'api-keys':
-            if (isset($segs[1]) && $method === 'DELETE') {
-                return WebApp::deleteApiKey((int) $segs[1]);
-            }
-            if ($method === 'POST') {
-                return WebApp::createApiKey((int) ($body['application_id'] ?? 0), $body);
-            }
-            $appId = isset($get['app_id']) ? (int) $get['app_id'] : 0;
-            $tid = isset($get['tenant_id']) ? (int) $get['tenant_id'] : null;
-            return ['data' => WebApp::listApiKeys($appId, $tid)];
+            return cs_err(12, 'unimplemented', 'legacy per-app api-keys removed; use /api/internal/api-keys');
         case 'integrations':
             if (isset($segs[1]) && $method === 'PUT') {
                 $r = WebApp::updateIntegration(cs_uuidToInt((string) $segs[1]), $body);
@@ -2455,291 +2428,6 @@ function handleApi(string $method, string $path): array|\stdClass
         default:
             http_response_code(501);
             return cs_unimplemented('unknown endpoint: /api/' . $resource);
-    }
-}
-
-function handleAppApi(string $method, string $path): array
-{
-    $segs = explode('/', trim($path, '/'));
-    array_shift($segs);
-
-    $sub = $segs[0] ?? '';
-    $body = in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true) ? getJsonBody() : [];
-    $get = $_GET;
-
-    $token = ApiKey::tokenFromRequest();
-    $appId = $token ? ApiKey::validateApplicationToken($token) : 0;
-    if (!$appId) {
-        http_response_code(401);
-        return ['error' => 'invalid_api_key', 'message' => '请在请求头携带 Authorization: Bearer <API_KEY> 或使用 ?api_key=<API_KEY>'];
-    }
-
-    if (isset($GLOBALS['__apiLogCtx']) && is_array($GLOBALS['__apiLogCtx'])) {
-        $GLOBALS['__apiLogCtx']['application_id'] = (int) $appId;
-    }
-    $app = WebApp::getApplication($appId);
-    if (!$app) {
-        http_response_code(401);
-        return ['error' => 'application_not_found'];
-    }
-
-    $deviceView = static function (array $d): array {
-        $lastSeen = max((int) ($d['last_seen'] ?? 0), (int) ($d['created_at'] ?? 0));
-        $online = ($d['status'] === 'active' && $lastSeen >= time() - WebApp::DEV_OFFLINE_TIMEOUT) ? 'online' : 'offline';
-        return [
-            'id' => (int) $d['id'],
-            'name' => $d['name'],
-            'dev_eui' => $d['dev_eui'] ?? '',
-            'dev_addr' => $d['dev_addr'] ?? '',
-            'activation' => $d['activation'] ?? '',
-            'class' => $d['class'] ?? 'A',
-            'region' => $d['region'] ?? '',
-            'status' => $d['status'] ?? '',
-            'codec' => $d['codec'] ?? '',
-            'online' => $online,
-            'last_seen' => $lastSeen ? date('Y-m-d H:i:s', $lastSeen) : '-',
-            'created_at' => (int) ($d['created_at'] ?? 0),
-        ];
-    };
-    $resolveDevice = static function (string $devEui) use ($appId): ?array {
-        $devEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $devEui));
-        if ($devEui === '') {
-            return null;
-        }
-        return Database::fetch("SELECT * FROM devices WHERE dev_eui=? AND app_id=?", [$devEui, $appId]);
-    };
-
-    $resolveGateway = static function (string $gwId): ?array {
-        $gwId = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $gwId));
-        if ($gwId === '') {
-            return null;
-        }
-        return WebApp::getGateway($gwId);
-    };
-
-    $limitOf  = static function (string $key) use ($get): int {
-        $n = (int) ($get[$key] ?? 50);
-        return max(1, min($n, 500));
-    };
-    $offsetOf = static function (string $key) use ($get): int {
-        $n = (int) ($get[$key] ?? 0);
-        return max(0, $n);
-    };
-
-    $gatewayView = static function (array $g): array {
-        $timeout = time() - WebApp::GW_OFFLINE_TIMEOUT;
-        return [
-            'gw_id'     => $g['gw_id'] ?? '',
-            'name'      => $g['name'] ?? '',
-            'region'    => $g['region'] ?? '',
-            'status'    => ((int) ($g['last_seen'] ?? 0) >= $timeout) ? 'online' : 'offline',
-            'last_seen' => ($g['last_seen'] ?? 0) ? date('Y-m-d H:i:s', (int) $g['last_seen']) : '-',
-            'rf_config' => (isset($g['rf_config']) && $g['rf_config'] !== '') ? json_decode($g['rf_config'], true) : null,
-        ];
-    };
-
-    switch ($sub) {
-        case '':
-            return [
-                'service' => 'HolaStack application API',
-                'version' => 'v1',
-                'auth' => 'Authorization: Bearer <API_KEY> 或 ?api_key=<API_KEY>',
-                'endpoints' => [
-                    'GET    /v1/info',
-                    'GET    /v1/devices',
-                    'POST   /v1/devices',
-                    'GET    /v1/devices/{dev_eui}',
-                    'PUT    /v1/devices/{dev_eui}',
-                    'DELETE /v1/devices/{dev_eui}',
-                    'GET    /v1/devices/{dev_eui}/uplinks',
-                    'GET    /v1/gateways',
-                    'POST   /v1/gateways',
-                    'GET    /v1/gateways/{gw_id}',
-                    'PUT    /v1/gateways/{gw_id}',
-                    'DELETE /v1/gateways/{gw_id}',
-                    'GET    /v1/uplinks',
-                    'GET    /v1/downlinks',
-                    'POST   /v1/devices/{dev_eui}/downlink',
-                    'GET    /v1/devices/{dev_eui}/downlinks',
-                    'GET    /v1/devices/{dev_eui}/metrics',
-                    'GET    /v1/device-profiles',
-                    'POST   /v1/device-profiles',
-                    'GET    /v1/device-profiles/{id}',
-                    'PUT    /v1/device-profiles/{id}',
-                    'DELETE /v1/device-profiles/{id}',
-                    'GET    /v1/api-keys',
-                    'POST   /v1/api-keys',
-                    'DELETE /v1/api-keys/{id}',
-                    'DELETE /v1/downlinks/{id}',
-                ],
-            ];
-
-        case 'info':
-            $devCount = Database::fetch("SELECT COUNT(*) c FROM devices WHERE app_id=?", [$appId])['c'];
-            $upCount = Database::fetch("SELECT COUNT(*) c FROM uplinks WHERE app_id=?", [$appId])['c'];
-            $dlCount = Database::fetch("SELECT COUNT(*) c FROM downlinks WHERE app_id=?", [$appId])['c'];
-            return [
-                'application' => [
-                    'id' => (int) $app['id'],
-                    'name' => $app['name'],
-                    'app_eui' => $app['app_eui'] ?? '',
-                    'description' => $app['description'] ?? '',
-                ],
-                'counts' => [
-                    'devices' => (int) $devCount,
-                    'uplinks' => (int) $upCount,
-                    'downlinks' => (int) $dlCount,
-                ],
-            ];
-
-        case 'devices':
-
-            if (isset($segs[1]) && $segs[1] !== '') {
-                $dev = $resolveDevice($segs[1]);
-                if (!$dev) {
-                    http_response_code(404);
-                    return ['error' => 'device_not_found'];
-                }
-                $sub2 = $segs[2] ?? '';
-                if ($sub2 === 'uplinks' && $method === 'GET') {
-                    return ['data' => WebApp::listUplinks($dev['id'], null, $limitOf('limit'))];
-                }
-                if ($sub2 === 'downlink' && $method === 'POST') {
-                    $port = (int) ($body['port'] ?? 0);
-                    $payload = (string) ($body['payload'] ?? '');
-                    $confirmed = !empty($body['confirmed']);
-                    $mac = !empty($body['mac']);
-                    $r = WebApp::enqueueDownlink($dev['id'], $port, $payload, $confirmed, $mac);
-                    if (isset($r['error'])) {
-                        http_response_code(400);
-                        return $r;
-                    }
-                    http_response_code(201);
-                    return $r;
-                }
-                if ($sub2 === 'downlinks' && $method === 'GET') {
-                    $status = $get['status'] ?? '';
-                    $sql = "SELECT id, dev_id, port, payload_hex, confirmed, mac, fcnt, status, created_at, sent_at FROM downlinks WHERE dev_id=?";
-                    $params = [$dev['id']];
-                    if ($status !== '') {
-                        $sql .= " AND status=?";
-                        $params[] = $status;
-                    }
-                    $sql .= " ORDER BY id DESC LIMIT 200";
-                    return ['data' => Database::fetchAll($sql, $params)];
-                }
-                if ($sub2 === 'metrics' && $method === 'GET') {
-                    $hours = (int) ($get['range'] ?? 24);
-                    if ($hours <= 0 || $hours > 720) { $hours = 24; }
-                    $since = time() - $hours * 3600;
-                    $rows = Database::fetchAll(
-                        "SELECT received_at, rssi, snr, fcnt, port FROM uplinks WHERE dev_id=? AND received_at>=? ORDER BY received_at ASC LIMIT 1000",
-                        [$dev['id'], $since]
-                    );
-                    $points = array_map(static function ($r) {
-                        return [
-                            't' => (int) $r['received_at'],
-                            'rssi' => (int) ($r['rssi'] ?? 0),
-                            'snr' => (float) ($r['snr'] ?? 0),
-                            'fcnt' => (int) ($r['fcnt'] ?? 0),
-                            'port' => (int) ($r['port'] ?? 0),
-                        ];
-                    }, $rows);
-                    return ['range_hours' => $hours, 'points' => $points, 'count' => count($points)];
-                }
-                if ($method === 'PUT' || $method === 'PATCH') {
-                    $r = WebApp::updateDevice($dev['id'], $body);
-                    if (isset($r['error'])) {
-                        http_response_code(400);
-                        return $r;
-                    }
-                    return ['id' => $dev['id'], 'updated' => true];
-                }
-                if ($method === 'DELETE') {
-                    $r = WebApp::deleteDevice($dev['id']);
-                    if (isset($r['error'])) {
-                        http_response_code(400);
-                        return $r;
-                    }
-                    return ['id' => $dev['id'], 'deleted' => true];
-                }
-
-                $up = Database::fetch("SELECT COUNT(*) c FROM uplinks WHERE dev_id=?", [$dev['id']])['c'];
-                $dl = Database::fetch("SELECT COUNT(*) c FROM downlinks WHERE dev_id=?", [$dev['id']])['c'];
-                return ['device' => $deviceView($dev), 'counts' => ['uplinks' => (int) $up, 'downlinks' => (int) $dl]];
-            }
-            if ($method === 'POST') {
-                $body['app_id'] = $appId;
-                $r = WebApp::createDevice($body);
-                if (isset($r['error'])) {
-                    http_response_code(400);
-                    return $r;
-                }
-                http_response_code(201);
-                return $r;
-            }
-            return ['data' => array_map($deviceView, WebApp::listDevices($appId))];
-
-        case 'gateways':
-            if (isset($segs[1]) && $segs[1] !== '') {
-                $gwId = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $segs[1]));
-                $gw = $resolveGateway($gwId);
-                if (!$gw) {
-                    http_response_code(404);
-                    return ['error' => 'gateway not found or forbidden'];
-                }
-                if ($method === 'PUT' || $method === 'PATCH') {
-                    $r = WebApp::updateGateway($gwId, $body);
-                    if (isset($r['error'])) {
-                        http_response_code(400);
-                        return $r;
-                    }
-                    return ['gw_id' => $gwId, 'updated' => true];
-                }
-                if ($method === 'DELETE') {
-                    $r = WebApp::deleteGateway($gwId);
-                    if (isset($r['error'])) {
-                        http_response_code(400);
-                        return $r;
-                    }
-                    return ['gw_id' => $gwId, 'deleted' => true];
-                }
-                return ['gateway' => $gatewayView($gw)];
-            }
-            if ($method === 'POST') {
-                $r = WebApp::createGateway($body);
-                if (isset($r['error'])) {
-                    http_response_code(400);
-                    return $r;
-                }
-                http_response_code(201);
-                return $r;
-            }
-            return ['data' => array_map($gatewayView, WebApp::listGateways())];
-
-        case 'uplinks':
-            $devId = 0;
-            if (!empty($get['dev_eui'])) {
-                $d = $resolveDevice((string) $get['dev_eui']);
-                if ($d) {
-                    $devId = $d['id'];
-                }
-            }
-            return ['data' => WebApp::listUplinks($devId ?: null, $appId, $limitOf('limit'))];
-
-        case 'downlinks':
-            $devId = 0;
-            if (!empty($get['dev_eui'])) {
-                $d = $resolveDevice((string) $get['dev_eui']);
-                if ($d) {
-                    $devId = $d['id'];
-                }
-            }
-            return ['data' => WebApp::listDownlinks($devId ?: null, $appId, $limitOf('limit'))];
-
-        default:
-            http_response_code(404);
-            return ['error' => 'not_found', 'message' => "未知端点：/$sub"];
     }
 }
 

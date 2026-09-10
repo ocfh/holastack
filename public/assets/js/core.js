@@ -75,7 +75,7 @@ function startI18nObserver(){ _i18nObserver.observe(document.body, { childList: 
 
 async function loadDict(lang){
   try {
-    const r = await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
+    const r = await fetch('/api/i18n?lang=' + encodeURIComponent(lang), {headers:{'X-Holastack-Spa':'1'}});
     const j = await r.json();
     window.UI_LANG = (j.lang || lang);
     window.I18N = (j.dict && typeof j.dict === 'object') ? j.dict : {};
@@ -86,7 +86,7 @@ function langAttr(lang){ return (lang === 'en') ? 'en' : (lang === 'zh' ? 'zh-CN
 async function applyLanguage(lang){
 
   try {
-    await fetch('/api/i18n?lang=' + encodeURIComponent(lang));
+    await fetch('/api/i18n?lang=' + encodeURIComponent(lang), {headers:{'X-Holastack-Spa':'1'}});
   } catch(e){}
   location.reload();
 }
@@ -112,11 +112,11 @@ let state = {user:null, token:null, view:'dashboard', live:false, stats:null, ap
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
   try {
-    const opt = {headers: state.token ? {'X-Elw-Token': state.token} : {}};
+    const opt = {headers: state.token ? {'X-Elw-Token': state.token, 'X-Holastack-Spa':'1'} : {'X-Holastack-Spa':'1'}};
     const r = await fetch('/api/me', opt);
     if (r.ok) { const j = await r.json(); state.user = j.user; }
   } catch(e){}
-  try { const rr = await fetch('/api/regions'); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
+  try { const rr = await fetch('/api/regions', {headers:{'X-Holastack-Spa':'1'}}); if (rr.ok) { const j = await rr.json(); if (j.regions && j.regions.length) state.regions = j.regions; } } catch(e){}
 
   if (!window.LANGS) { try { await loadDict(window.UI_LANG || 'zh'); } catch(e){} }
 
@@ -256,7 +256,7 @@ async function doLogin(){
   const err = document.getElementById('l_err');
   err.textContent = '';
   try {
-    const r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Holastack-Spa':'1'},body:JSON.stringify({username:u,password:p})});
     let j;
     try { j = await r.json(); }
     catch(e){ err.textContent = '服务器返回异常（HTTP '+r.status+'），请查看服务器错误日志'; return; }
@@ -265,13 +265,13 @@ async function doLogin(){
   } catch(e){ err.textContent = e.message || '网络错误，登录失败'; }
 }
 async function logout(){
-  const opt = {method:'POST', headers: state.token ? {'X-Elw-Token': state.token} : {}};
+  const opt = {method:'POST', headers: state.token ? {'X-Elw-Token': state.token, 'X-Holastack-Spa':'1'} : {'X-Holastack-Spa':'1'}};
   await fetch('/api/logout', opt);
   state.token = null; state.user = null; localStorage.removeItem('elw_token'); renderShell();
 }
 
 const api = async (m,p,body) => {
-  const opt = {method:m, headers:{'Content-Type':'application/json'}};
+  const opt = {method:m, headers:{'Content-Type':'application/json', 'X-Holastack-Spa':'1'}};
   if (state.token) opt.headers['Grpc-Metadata-Authorization'] = 'Bearer ' + state.token;
   if (body) opt.body = JSON.stringify(body);
   const r = await fetch(p, opt);
@@ -662,7 +662,7 @@ function confirmDlg(msg, onOk){
   const box = document.getElementById('modalBox');
   renderModal(`<h3>${t('确认')}</h3><p style="margin:8px 0 16px;color:var(--txt);word-break:break-word">${esc(String(msg))}</p><div style="display:flex;gap:10px;justify-content:flex-end"><button class="ghost" data-act="cancel">${t('取消')}</button><button class="danger" data-act="ok">${t('删除')}</button></div>`);
   document.getElementById('modal').classList.add('show');
-  box.querySelector('[data-act="cancel"]').onclick = () => { closeModal(); onOk(false); };
+  box.querySelector('[data-act="cancel"]').onclick = () => { closeModal(); if (onOk.length >= 1) onOk(false); };
   box.querySelector('[data-act="ok"]').onclick = () => { closeModal(); onOk(true); };
   if (isDemo()) {
     const ok = box.querySelector('[data-act="ok"]');

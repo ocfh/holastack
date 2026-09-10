@@ -164,7 +164,7 @@ async function viewApplications(){
   window.viewApplications__page = p => _pagerGo({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',p);
   window.viewApplications__limit = l => _pagerSetLimit({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['applications']]||''}应用</h2>${adminBtn('<button onclick="newApplication()">'+ICON.plus+'新建应用</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">${ICON.arrowPath}重置</button></div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">'+ICON.arrowPath+'重置</button>':''}</div>
     ${table}
     ${pager}`;
 }
@@ -497,8 +497,7 @@ async function viewGateways(){
   window.viewGateways__page = p => _pagerGo({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',p);
   window.viewGateways__limit = l => _pagerSetLimit({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['gateways']]||''}网关</h2>${adminBtn('<button onclick="newGateway()">'+ICON.plus+'新建网关</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
-      <button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline='';state.gwsSort={col:'time',dir:'desc'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">${ICON.arrowPath}重置</button></div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline=\'\';state.gwsSort={col:\'time\',dir:\'desc\'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">'+ICON.arrowPath+'重置</button>':''}</div>
     ${table}
     ${pager}`;
 }
@@ -959,7 +958,7 @@ async function viewApiLogs(){
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['api-logs']]||''}${t('API 调用日志')}</h2><div style="display:flex;align-items:center;gap:12px"><div class="muted" style="font-size:12px">${t('共')} ${state.apiLogTotal} ${t('条')}${t('（仅保留最近 10000 条）')}</div><button class="btn danger" onclick="clearPageLogs('api')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
    <div class="card" style="margin-bottom:12px">
      <div class="row" style="align-items:flex-end">
-       <div><label>${t('路径包含')}</label><input id="${filterId('path')}" value="${esc(state.apiLogFilter.path||'')}" placeholder="/v1/devices"></div>
+       <div><label>${t('路径包含')}</label><input id="${filterId('path')}" value="${esc(state.apiLogFilter.path||'')}" placeholder="/api/devices"></div>
        <div><label>${t('IP')}</label><input id="${filterId('ip')}" value="${esc(state.apiLogFilter.ip||'')}" placeholder="192.168.1.1"></div>
        <div><label>${t('方法')}</label><select id="${filterId('method')}">
          <option value="">${t('全部')}</option>
@@ -1261,7 +1260,7 @@ async function saveSettings(){
 
 async function applyPublicSettings(){
   try {
-    const r = await fetch('/api/public-settings');
+    const r = await fetch('/api/public-settings',{headers:{'X-Holastack-Spa':'1'}});
     const d = (await r.json()).data || {};
     const brand = document.getElementById('brand');
     if (brand) {
@@ -1401,8 +1400,7 @@ async function viewDeviceProfiles(){
   window.viewDeviceProfiles__page = p => _pagerGo({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',p);
   window.viewDeviceProfiles__limit = l => _pagerSetLimit({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['device-profiles']]||''}设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">'+ICON.plus+'新建模板</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}
-      <button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion='';state.dpsFCls='';state.dpsSort={col:null,dir:'desc'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">${ICON.arrowPath}重置</button></div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion=\'\';state.dpsFCls=\'\';state.dpsSort={col:null,dir:\'desc\'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">'+ICON.arrowPath+'重置</button>':''}</div>
     ${table}
     ${pager}`;
 }
@@ -1419,38 +1417,28 @@ async function viewTenants(){
     <table><thead><tr><th>ID</th><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('私有网关上限')}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function viewApiKeys(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const tf = await tenantFilterHtml();
   let ks=[];
+  const keyUuid = k => k.uuid || k.id || '';
   if(isAdmin()){
-    const r=await api('GET','/api/internal/api-keys?all=1&limit=500'); ks=(r.result||[]).map(k=>({...k, kind:'cs', id:k.id, token_preview:'', created_at:null}));
+    const r=await api('GET','/api/internal/api-keys?all=1&limit=500'); ks=(r.result||[]).map(k=>({...k, kind:'cs', uuid:keyUuid(k), token_preview:'', created_at:null}));
   } else {
-    const ra=await api('GET','/api/applications'+(tq?'?'+tq:'')); state.apps=ra.data||[];
-    if(state.appSel){ const r=await api('GET','/api/api-keys?app_id='+state.appSel+(tq?'&'+tq:'')); ks=r.data||[]; }
+    const r=await api('GET','/api/internal/api-keys?limit=500'); ks=(r.result||[]).map(k=>({...k, kind:'cs', uuid:keyUuid(k), token_preview:'', created_at:null}));
   }
-  const isCs = ks.length && ks[0].kind==='cs';
+  const isCs = true;
   const akCfg = {
     state, stateKey:'apiKeysSort',
     defaultSort:{col:'name',dir:'asc'},
-    cellValue: (k, ck) => ({id:k.id, name:k.name, scope: k.is_admin?'全局':(k.tenant_id&&k.tenant_id!=='00000000-0000-0000-0000-000000000000'?'租户':'—'), ro: k.is_read_only?'只读':'', token:k.token_preview||'', time:k.created_at}[ck]),
-    cols: isCs ? [
+    cellValue: (k, ck) => ({id:k.uuid, name:k.name, scope: k.is_admin?'全局':(k.tenantId&&k.tenantId!=='00000000-0000-0000-0000-000000000000'?'租户':'—'), ro: k.is_read_only?'只读':'', token:'', time:k.created_at}[ck]),
+    cols: [
       {key:'id',    label:'ID(UUID)',   type:'str', firstDir:'asc', sortable:false},
       {key:'name',  label:'名称',        type:'str', firstDir:'asc'},
       {key:'scope', label:'作用域',      type:'str', firstDir:'asc', sortable:false},
       {key:'ro',    label:'权限',        type:'str', firstDir:'asc', sortable:false},
-    ] : [
-      {key:'id',    label:'ID',          type:'num', firstDir:'asc', sortable:false},
-      {key:'name',  label:'名称',         type:'str', firstDir:'asc', sortable:false},
-      {key:'token', label:'Token(预览)', type:'str', firstDir:'asc', sortable:false},
-      {key:'time',  label:'创建时间',     type:'time', firstDir:'desc'},
-      {key:'_raw',  label:'',            type:'raw'},
     ],
     rows: ks,
-    rowHtml: isCs ? (k => `<tr><td class="muted"><code>${esc(k.id)}</code></td><td>${esc(k.name)}</td><td>${k.is_admin?'<span class="badge">全局</span>':'租户'}</td><td>${k.is_read_only?'只读':'读写'}</td>
-      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey('${esc(k.id)}'))">${ICON.trash}删除</button>`)}</td></tr>`)
-      : (k => `<tr><td>${k.id}</td><td>${esc(k.name)}</td><td class="muted"><code>${esc(k.token_preview)}…</code></td><td class="muted">${new Date(k.created_at*1000).toLocaleString()}</td>
-      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey(${k.id}))">${ICON.trash}删除</button>`)}</td></tr>`),
-    emptyText: isCs ? '暂无 API 密钥' : '请先在上方选择应用',
+    rowHtml: (k => `<tr><td class="muted"><code>${esc(k.uuid)}</code></td><td>${esc(k.name)}</td><td>${k.is_admin?'<span class="badge">全局</span>':'租户'}</td><td>${k.is_read_only?'只读':'读写'}</td>
+      <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey('${esc(k.uuid)}'))">${ICON.trash}删除</button>`)}</td></tr>`),
+    emptyText: '暂无 API 密钥',
   };
   const [filteredKeys, keysTotal] = filterAndSortRows(akCfg);
   akCfg.rows = paginateRows(filteredKeys, state, {pageKey:'apiKeysPage', limitKey:'apiKeysLimit', offsetKey:'apiKeysOffset'})[0];
@@ -1460,9 +1448,7 @@ async function viewApiKeys(){
   window.apiKeysSort_sort = col => _tableToggleSort('apiKeysSort','viewApiKeys',col);
   window.viewApiKeys__page = p => _pagerGo({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',p);
   window.viewApiKeys__limit = l => _pagerSetLimit({pageKey:'apiKeysPage',limitKey:'apiKeysLimit',offsetKey:'apiKeysOffset',totalKey:'apiKeysTotal'},'viewApiKeys',l);
-  const appPicker = isCs ? '' : `<div style="flex:0 0 360px"><label>应用</label><select id="ak_app" onchange="state.appSel=this.value;state.apiKeysPage=1;state.apiKeysOffset=0;nav('api-keys')">${(state.apps||[]).map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('')}</select></div>`;
   document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['api-keys']]||''}API 密钥</h2>${isAdmin()?adminBtn('<button onclick="newApiKey()">'+ICON.plus+'新建 API 密钥</button>'):''}</div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}${appPicker}${!isCs&&state.appSel?adminBtn('<button onclick="newApiKey()">'+ICON.plus+'新建应用密钥</button>'):''}</div>
    ${table}
    ${pager}`;
 }
@@ -1867,7 +1853,7 @@ window.MAP_PROVIDERS = [
   { id:'mapbox',   name:'Mapbox（需 Key）', needKey:1, maxZ:20, url:'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=KEY' },
   { id:'maptiler', name:'MapTiler（需 Key）', needKey:1, maxZ:20, url:'https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=KEY' },
 ];
-function getMapSettings(){ return fetch('/api/public-settings').then(r=>r.json()).then(j=>j.data||{}).catch(()=>({})); }
+function getMapSettings(){ return fetch('/api/public-settings',{headers:{'X-Holastack-Spa':'1'}}).then(r=>r.json()).then(j=>j.data||{}).catch(()=>({})); }
 function injectLeaflet(){
   return new Promise((res)=>{
     if (window.L && L.map && L.tileLayer){ res(); return; }

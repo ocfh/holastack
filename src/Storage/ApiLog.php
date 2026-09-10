@@ -101,6 +101,10 @@ class ApiLog
                 $where[] = "(path = '/api' OR path LIKE '/api/%')";
             } elseif ($kind === 'v1') {
                 $where[] = "(path = '/v1' OR path LIKE '/v1/%')";
+            } elseif ($kind === 'external') {
+                $where[] = "(path = '/api' OR path LIKE '/api/%')";
+            } elseif ($kind === 'all') {
+                // no path filter
             }
         }
         if (!empty($filters['since'])) {

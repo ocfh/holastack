@@ -1426,23 +1426,23 @@ return [
 '{totalCount, result:[apiGatewayListItem]}；search 按 name/gatewayId。POST {gateway:{gatewayId, name, …}} 返回 {}；GET 单体 {gateway:{…}}；PUT/DELETE 同标准路径。' => '{totalCount, result:[apiGatewayListItem]}; search by name/gatewayId. POST {gateway:{gatewayId, name, ...}} returns {}; GET single item {gateway:{...}}; PUT/DELETE as standard.',
 '{totalCount, result:[apiTenant]}（admin only）。GET 单体；GET /{id}/users 列租户成员；POST /{id}/users 添加成员；/by-devaddr-prefix-overlap 返回空列表（标准形状）。' => '{totalCount, result:[apiTenant]} (admin only). GET single item; GET /{id}/users lists tenant members; POST /{id}/users adds a member; /by-devaddr-prefix-overlap returns an empty list (standard shape).',
 
-// InternalService / ChirpStack auth (round 4)
+// InternalService auth (round 4)
 'Bearer <token>（/api/internal/login 的用户 JWT、/api/internal/api-keys 的 API Key，或旧 /api/login 会话 token）' => 'Bearer <token> (user JWT from /api/internal/login, an API Key from /api/internal/api-keys, or a legacy /api/login session token)',
-'登录换 JWT（ChirpStack InternalService）' => 'Login to get a JWT (ChirpStack InternalService)',
-'ChirpStack v4 标准登录端点，返回 {jwt}（HS256 用户 JWT，typ=user）。与 /api/login 并存：新客户端用本端点，token 有效期长且无"重复登录互踢"限制。body 支持 email 或 username 字段（等价）。' => 'ChirpStack v4 standard login endpoint, returns {jwt} (HS256 user JWT, typ=user). Coexists with /api/login: new clients should use this one — the token lives longer and re-login does not invalidate it. Body accepts either email or username (equivalent).',
-'用户名或 email（ChirpStack 标准字段名为 email，holastack 两者均接受）' => 'Username or email (ChirpStack standard field name is email; holastack accepts both)',
+'登录换 JWT（InternalService）' => 'Login to get a JWT (InternalService)',
+'标准登录端点，返回 {jwt}（HS256 用户 JWT，typ=user）。与 /api/login 并存：新客户端用本端点，token 有效期长且无"重复登录互踢"限制。body 支持 email 或 username 字段（等价）。' => 'Standard login endpoint, returns {jwt} (HS256 user JWT, typ=user). Coexists with /api/login: new clients should use this one — the token lives longer and re-login does not invalidate it. Body accepts either email or username (equivalent).',
+'用户名或 email（字段名为 email，同时接受 username）' => 'Username or email (field name is email; username also accepted)',
 'API Key 管理（全局/租户级）' => 'API Key management (global / tenant-scoped)',
-'ChirpStack v4 形状：POST 创建（body {apiKey:{name, isAdmin, tenantId, isReadOnly}}，isAdmin 与 tenantId 二选一必填），返回 {id, token}——token 仅此一次返回（JWT 形态，typ=apikey）。GET 列表 {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}；DELETE /{id} 删除。授权分档：isReadOnly 只读（写操作 403）；tenantId 密钥限本租户资源；isAdmin 全权。' => 'ChirpStack v4 shape: POST to create (body {apiKey:{name, isAdmin, tenantId, isReadOnly}}; exactly one of isAdmin/tenantId is required), returns {id, token} — the token (JWT, typ=apikey) is shown only once. GET list {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}; DELETE /{id}. Authorization tiers: isReadOnly denies writes (403); a tenantId key is limited to its tenant; isAdmin has full access.',
+'POST 创建（body {apiKey:{name, isAdmin, tenantId, isReadOnly}}，isAdmin 与 tenantId 二选一必填），返回 {id, token}——token 仅此一次返回（JWT 形态，typ=apikey）。GET 列表 {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}；DELETE /{id} 删除。授权分档：isReadOnly 只读（写操作 403）；tenantId 密钥限本租户资源；isAdmin 全权。' => 'POST to create (body {apiKey:{name, isAdmin, tenantId, isReadOnly}}; exactly one of isAdmin/tenantId is required), returns {id, token} — the token (JWT, typ=apikey) is shown only once. GET list {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}; DELETE /{id}. Authorization tiers: isReadOnly denies writes (403); a tenantId key is limited to its tenant; isAdmin has full access.',
 '全局管理密钥（与 tenantId 互斥）' => 'Global admin key (mutually exclusive with tenantId)',
 '租户级密钥（与 isAdmin 互斥）' => 'Tenant-scoped key (mutually exclusive with isAdmin)',
 '只读密钥' => 'Read-only key',
 'API Key JWT（仅创建时返回一次）' => 'API Key JWT (shown only once at creation)',
 'isAdmin 与 tenantId 均未设或同时设置' => 'isAdmin and tenantId are both unset or both set',
 'InternalService 其他端点' => 'Other InternalService endpoints',
-'GET /api/internal/profile（当前用户/密钥身份，ChirpStack UserTenantLink 形状）；GET /api/internal/version（返回 4.19.1-holastack）；GET /api/internal/settings；GET /api/internal/global-search?search=；GET /api/internal/regions；GET /api/internal/devices-summary；GET /api/internal/gateways-summary。' => 'GET /api/internal/profile (current user/key identity, ChirpStack UserTenantLink shape); GET /api/internal/version (returns 4.19.1-holastack); GET /api/internal/settings; GET /api/internal/global-search?search=; GET /api/internal/regions; GET /api/internal/devices-summary; GET /api/internal/gateways-summary.',
+'GET /api/internal/profile（当前用户/密钥身份，UserTenantLink 形状）；GET /api/internal/version（返回 4.19.1-holastack）；GET /api/internal/settings；GET /api/internal/global-search?search=；GET /api/internal/regions；GET /api/internal/devices-summary；GET /api/internal/gateways-summary。' => 'GET /api/internal/profile (current user/key identity, UserTenantLink shape); GET /api/internal/version (returns 4.19.1-holastack); GET /api/internal/settings; GET /api/internal/global-search?search=; GET /api/internal/regions; GET /api/internal/devices-summary; GET /api/internal/gateways-summary.',
 'API Key UUID' => 'API Key UUID',
 
-// API Keys view round 5 (new ChirpStack-shape UI)
+// API Keys view round 5
 '作用域' => 'Scope',
 '全局（所有租户）' => 'Global (all tenants)',
 '租户（限本租户资源）' => 'Tenant (scoped to own tenant)',

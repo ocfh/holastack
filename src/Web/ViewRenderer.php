@@ -290,9 +290,9 @@ HTML;
         $intro = '<p class="ad-note" style="margin-top:2px">'
             . $t('所有 API 统一以 /api 为前缀。认证方式（二选一）：')
             . '<code>Grpc-Metadata-Authorization: Bearer &lt;token&gt;</code>'
-            . $t('（会话 token 经 /api/login 获取，或应用 API Key，或请求头')
+            . $t('（会话 token 经 /api/login 获取，或 API Key（/api/internal/api-keys 创建），或请求头')
             . ' <code>Authorization: Bearer &lt;token&gt;</code>'
-            . $t('）。API Key 在「应用 → API Key」中创建，') . '<b>' . $t('明文仅显示一次') . '</b>' . $t('，请妥善保存。')
+            . $t('）。API Key 明文仅在创建时显示一次') . '</b>' . $t('，请妥善保存。')
             . '</p>';
         return $pageTitle . $intro . <<<HTML
 <div class="apidocs">
@@ -461,10 +461,10 @@ HTML;
                     ],
                     [
                         'id' => 'cs-internal-login', 'method' => 'POST', 'path' => '/api/internal/login',
-                        'title' => '登录换 JWT（ChirpStack InternalService）',
-                        'desc' => 'ChirpStack v4 标准登录端点，返回 {jwt}（HS256 用户 JWT，typ=user）。与 /api/login 并存：新客户端用本端点，token 有效期长且无"重复登录互踢"限制。body 支持 email 或 username 字段（等价）。',
+                        'title' => '登录换 JWT（InternalService）',
+                        'desc' => '标准登录端点，返回 {jwt}（HS256 用户 JWT，typ=user）。与 /api/login 并存：新客户端用本端点，token 有效期长且无"重复登录互踢"限制。body 支持 email 或 username 字段（等价）。',
                         'params' => [
-                            ['name' => 'email', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '用户名或 email（ChirpStack 标准字段名为 email，holastack 两者均接受）'],
+                            ['name' => 'email', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '用户名或 email（字段名为 email，同时接受 username）'],
                             ['name' => 'password', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '密码'],
                         ],
                         'sample' => ['email' => 'admin', 'password' => '******'],
@@ -475,7 +475,7 @@ HTML;
                     [
                         'id' => 'cs-internal-apikeys', 'method' => 'POST', 'path' => '/api/internal/api-keys',
                         'title' => 'API Key 管理（全局/租户级）',
-                        'desc' => 'ChirpStack v4 形状：POST 创建（body {apiKey:{name, isAdmin, tenantId, isReadOnly}}，isAdmin 与 tenantId 二选一必填），返回 {id, token}——token 仅此一次返回（JWT 形态，typ=apikey）。GET 列表 {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}；DELETE /{id} 删除。授权分档：isReadOnly 只读（写操作 403）；tenantId 密钥限本租户资源；isAdmin 全权。',
+                        'desc' => 'POST 创建（body {apiKey:{name, isAdmin, tenantId, isReadOnly}}，isAdmin 与 tenantId 二选一必填），返回 {id, token}——token 仅此一次返回（JWT 形态，typ=apikey）。GET 列表 {totalCount, result:[{id, name, isAdmin, tenantId, isReadOnly, createdAt}]}；DELETE /{id} 删除。授权分档：isReadOnly 只读（写操作 403）；tenantId 密钥限本租户资源；isAdmin 全权。',
                         'params' => [
                             ['name' => 'apiKey.name', 'in' => 'body', 'type' => 'string', 'required' => true, 'desc' => '密钥名称'],
                             ['name' => 'apiKey.isAdmin', 'in' => 'body', 'type' => 'bool', 'required' => false, 'desc' => '全局管理密钥（与 tenantId 互斥）'],
@@ -493,7 +493,7 @@ HTML;
                     [
                         'id' => 'cs-internal-misc', 'method' => 'GET', 'path' => '/api/internal/profile | version | settings | global-search',
                         'title' => 'InternalService 其他端点',
-                        'desc' => 'GET /api/internal/profile（当前用户/密钥身份，ChirpStack UserTenantLink 形状）；GET /api/internal/version（返回 4.19.1-holastack）；GET /api/internal/settings；GET /api/internal/global-search?search=；GET /api/internal/regions；GET /api/internal/devices-summary；GET /api/internal/gateways-summary。',
+                        'desc' => 'GET /api/internal/profile（当前用户/密钥身份，UserTenantLink 形状）；GET /api/internal/version（返回 4.19.1-holastack）；GET /api/internal/settings；GET /api/internal/global-search?search=；GET /api/internal/regions；GET /api/internal/devices-summary；GET /api/internal/gateways-summary。',
                     ],
                 ],
             ],
@@ -586,8 +586,8 @@ HTML;
                         '{totalCount, result:[apiUser]}（admin only）。POST/PUT/DELETE 同标准路径；POST /api/users/{userId}/password 修改密码（body {password}）。'),
                     $t('cs-relays', 'GET', '/api/relays', 'Relay 列表',
                         '映射 relay_gateways/relay_devices 表。GET /api/relays 列 relay 网关设备；GET /api/relays/{devEui}/devices 列 relay 下挂设备；POST 同路径添加下挂设备（body {deviceDevEui}）；DELETE /api/relays/{id} 删除。'),
-                    $t('cs-misc', 'GET', '/api/api-keys | /api/uplinks | /api/downlinks | /api/me', '附加资源',
-                        'api-keys/roles/uplinks/downlinks/stats/regions 等沿用 {totalCount, result} 形状（api-keys 列表为 {data} 兼容形状），可在同一路由体系内直接使用。'),
+                    $t('cs-misc', 'GET', '/api/uplinks | /api/downlinks | /api/me', '附加资源',
+                        'uplinks/downlinks/stats/regions 等沿用 {totalCount, result} 形状。API 密钥统一走 /api/internal/api-keys（admin 可 ?all=1 列全部）。'),
                 ],
             ],
             [

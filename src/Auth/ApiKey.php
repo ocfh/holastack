@@ -118,24 +118,6 @@ class ApiKey
         return ['id' => $id, 'token' => $token, 'name' => $name, 'created_at' => $now];
     }
 
-    public static function legacyCreate(int $applicationId, string $name): array
-    {
-        if ($applicationId <= 0) {
-            return ['error' => 'application_id required'];
-        }
-        if (empty($name)) {
-            return ['error' => 'name required'];
-        }
-        $token = 'holask-' . bin2hex(random_bytes(20));
-        $hash = password_hash($token, PASSWORD_DEFAULT);
-        $now = time();
-        Database::execute(
-            "INSERT INTO api_keys (uuid, tenant_id, name, api_key, application_id, is_admin, is_read_only, created_at) VALUES ('',0,?,?,?,0,0,?)",
-            [$name, $hash, $applicationId, $now]
-        );
-        return ['id' => Database::lastInsertId(), 'token' => $token, 'name' => $name, 'created_at' => $now];
-    }
-
     public static function validate(string $token): array
     {
         if ($token === '' || $token === null) {
@@ -162,29 +144,39 @@ class ApiKey
         $rows = Database::fetchAll("SELECT id, uuid, name, api_key, application_id, tenant_id, is_admin, is_read_only FROM api_keys");
         foreach ($rows as $r) {
             if (password_verify($token, $r['api_key'])) {
-                if ((string) $r['uuid'] !== '') {
-                    return [
-                        'kind' => 'api_key',
-                        'id' => (string) $r['uuid'],
-                        'name' => (string) $r['name'],
-                        'is_admin' => (bool) $r['is_admin'],
-                        'tenant_id' => (int) $r['tenant_id'],
-                        'is_read_only' => (bool) ($r['is_read_only'] ?? 0),
-                    ];
+                if ((string) $r['uuid'] === '') {
+                    $r = self::migrateLegacyRow($r);
                 }
-                return ['kind' => 'legacy_app', 'id' => (string) $r['id'], 'name' => (string) $r['name'], 'is_admin' => false, 'tenant_id' => (int) $r['tenant_id'], 'is_read_only' => false, 'application_id' => (int) $r['application_id']];
+                return [
+                    'kind' => 'api_key',
+                    'id' => (string) $r['uuid'],
+                    'name' => (string) $r['name'],
+                    'is_admin' => (bool) $r['is_admin'],
+                    'tenant_id' => (int) $r['tenant_id'],
+                    'is_read_only' => (bool) ($r['is_read_only'] ?? 0),
+                ];
             }
         }
         return [];
     }
 
-    public static function validateApplicationToken(string $token): int
+    private static function migrateLegacyRow(array $r): array
     {
-        $info = self::validate($token);
-        if (($info['kind'] ?? '') === 'legacy_app') {
-            return (int) ($info['application_id'] ?? 0);
+        $uuid = self::newUuid();
+        $tenantId = (int) $r['tenant_id'];
+        if ($tenantId <= 0) {
+            $t = Database::fetch("SELECT tenant_id FROM applications WHERE id=? AND tenant_id>0 LIMIT 1", [(int) $r['application_id']]);
+            $tenantId = $t ? (int) $t['tenant_id'] : 0;
         }
-        return 0;
+        if ($tenantId > 0) {
+            Database::execute("UPDATE api_keys SET uuid=?, tenant_id=?, application_id=0 WHERE id=?", [$uuid, $tenantId, (int) $r['id']]);
+        } else {
+            Database::execute("UPDATE api_keys SET uuid=?, is_admin=1, application_id=0 WHERE id=?", [$uuid, (int) $r['id']]);
+        }
+        $r['uuid'] = $uuid;
+        $r['tenant_id'] = $tenantId;
+        $r['application_id'] = 0;
+        return $r;
     }
 
     public static function tokenFromRequest(): ?string
@@ -203,7 +195,7 @@ class ApiKey
 
     public static function list(?int $tenantId = null, bool $isAdminOnly = false, bool $all = false): array
     {
-        $sql = "SELECT id, uuid, tenant_id, name, is_admin, is_read_only, substr(api_key,1,12) AS token_preview, created_at FROM api_keys";
+        $sql = "SELECT id, uuid, tenant_id, name, is_admin, is_read_only, application_id, substr(api_key,1,12) AS token_preview, created_at FROM api_keys";
         $w = [];
         $p = [];
         if (!$all) {
@@ -213,22 +205,20 @@ class ApiKey
                 $w[] = "tenant_id=?";
                 $p[] = $tenantId;
             } else {
-                $w[] = "application_id=0";
+                $w[] = "is_admin=0";
             }
         }
         if ($w) {
             $sql .= " WHERE " . implode(' AND ', $w);
         }
         $sql .= " ORDER BY id DESC";
-        return Database::fetchAll($sql, $p);
-    }
-
-    public static function legacyList(int $applicationId): array
-    {
-        return Database::fetchAll(
-            "SELECT id, name, application_id, substr(api_key,1,12) AS token_preview, created_at FROM api_keys WHERE application_id=? ORDER BY id DESC",
-            [$applicationId]
-        );
+        $rows = Database::fetchAll($sql, $p);
+        foreach ($rows as $i => $r) {
+            if ((string) ($r['uuid'] ?? '') === '') {
+                $rows[$i] = self::migrateLegacyRow($r);
+            }
+        }
+        return $rows;
     }
 
     public static function delete(string $idOrUuid): array
