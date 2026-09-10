@@ -55,18 +55,27 @@ class Auth
 
     public static function issueToken(array $user): string
     {
-        $token = bin2hex(random_bytes(32));
-        Database::execute("DELETE FROM auth_tokens WHERE user_id=?", [$user['id']]);
-        Database::execute(
-            "INSERT INTO auth_tokens (token, user_id, created_at) VALUES (?,?,?)",
-            [$token, $user['id'], time()]
-        );
-        return $token;
+        return ApiKey::issueJwt([
+            'typ' => 'user',
+            'sub' => ApiKey::idToUuid((int) $user['id']),
+            'uid' => (int) $user['id'],
+            'username' => (string) $user['username'],
+            'role' => (string) ($user['role'] ?? 'operator'),
+            'tenant_id' => (int) ($user['tenant_id'] ?? 0),
+        ]);
     }
 
     public static function userFromToken(?string $token): ?array
     {
         if (!$token) {
+            return null;
+        }
+        if (strpos($token, '.') !== false) {
+            $claims = ApiKey::verifyJwt($token);
+            if ($claims && ($claims['typ'] ?? '') === 'user' && !empty($claims['uid'])) {
+                $u = Database::fetch("SELECT * FROM users WHERE id=?", [(int) $claims['uid']]);
+                return $u ? self::withDerivedRole($u) : null;
+            }
             return null;
         }
         $u = Database::fetch(

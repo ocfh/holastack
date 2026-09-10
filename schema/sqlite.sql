@@ -190,13 +190,16 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     created_at INTEGER NOT NULL
 );
 
--- ---- 应用级 API Key ----
+-- ---- API Key（ChirpStack 模型：全局 admin 或绑定租户） ----
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT NOT NULL DEFAULT '',
     tenant_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     api_key TEXT NOT NULL UNIQUE,
-    application_id INTEGER NOT NULL,
+    application_id INTEGER NOT NULL DEFAULT 0,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    is_read_only INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER DEFAULT 0
 );
 

@@ -326,6 +326,228 @@ function cs_appIntegrationEndpoint(string $method, int $appId, array $segs, arra
     return cs_invalid('method not allowed');
 }
 
+function handleInternalApi(string $method, array $segs, array $body, array $get): array|\stdClass
+{
+    $sub = $segs[1] ?? '';
+
+    if ($sub === 'login' && $method === 'POST') {
+        $email = (string) ($body['email'] ?? $body['username'] ?? '');
+        $password = (string) ($body['password'] ?? '');
+        $u = Auth::authenticate($email, $password);
+        if (!$u) {
+            http_response_code(401);
+            return cs_err(16, 'unauthenticated', 'invalid credentials');
+        }
+        return ['jwt' => Auth::issueToken($u)];
+    }
+
+    if ($sub === 'profile' && $method === 'GET') {
+        $u = Auth::currentUser();
+        $apiKeyInfo = null;
+        $tok = Auth::tokenFromRequest();
+        if (!$u && $tok) {
+            $apiKeyInfo = ApiKey::validate($tok);
+            if (!$apiKeyInfo) {
+                http_response_code(401);
+                return cs_err(16, 'unauthenticated', 'invalid token');
+            }
+        } elseif (!$u) {
+            http_response_code(401);
+            return cs_err(16, 'unauthenticated', 'no active user');
+        }
+
+        if ($apiKeyInfo) {
+            $tenants = [];
+            if (!$apiKeyInfo['is_admin'] && $apiKeyInfo['tenant_id'] > 0) {
+                $t = Database::fetch("SELECT * FROM tenants WHERE id=?", [$apiKeyInfo['tenant_id']]);
+                if ($t) {
+                    $tenants[] = [
+                        'tenantId'       => ApiKey::idToUuid($apiKeyInfo['tenant_id']),
+                        'isAdmin'        => true,
+                        'isDeviceAdmin'  => true,
+                        'isGatewayAdmin' => true,
+                        'createdAt'      => cs_ts($t['created_at'] ?? 0),
+                        'updatedAt'      => cs_ts($t['created_at'] ?? 0),
+                    ];
+                }
+            }
+            return [
+                'user'    => ['id' => '', 'email' => $apiKeyInfo['name'], 'isActive' => true, 'isAdmin' => $apiKeyInfo['is_admin'], 'note' => 'api-key'],
+                'tenants' => $tenants,
+            ];
+        }
+
+        $tenants = [];
+        if ($u['role'] === Auth::ROLE_TENANT && (int) $u['tenant_id'] > 0) {
+            $t = Database::fetch("SELECT * FROM tenants WHERE id=?", [(int) $u['tenant_id']]);
+            if ($t) {
+                $tenants[] = [
+                    'tenantId'       => ApiKey::idToUuid((int) $t['id']),
+                    'isAdmin'        => true,
+                    'isDeviceAdmin'  => true,
+                    'isGatewayAdmin' => true,
+                    'createdAt'      => cs_ts($t['created_at'] ?? 0),
+                    'updatedAt'      => cs_ts($t['created_at'] ?? 0),
+                ];
+            }
+        } elseif ($u['role'] === Auth::ROLE_ADMIN) {
+            foreach (Database::fetchAll("SELECT * FROM tenants ORDER BY id") as $t) {
+                $tenants[] = [
+                    'tenantId'       => ApiKey::idToUuid((int) $t['id']),
+                    'isAdmin'        => true,
+                    'isDeviceAdmin'  => true,
+                    'isGatewayAdmin' => true,
+                    'createdAt'      => cs_ts($t['created_at'] ?? 0),
+                    'updatedAt'      => cs_ts($t['created_at'] ?? 0),
+                ];
+            }
+        }
+        return [
+            'user'    => [
+                'id'       => ApiKey::idToUuid((int) $u['id']),
+                'email'    => (string) ($u['email'] ?? $u['username']),
+                'isActive' => true,
+                'isAdmin'  => ($u['role'] ?? '') === Auth::ROLE_ADMIN,
+                'note'     => '',
+            ],
+            'tenants' => $tenants,
+        ];
+    }
+
+    if ($sub === 'api-keys') {
+        $u = Auth::currentUser();
+        $sc = WebApp::scopePublic();
+        if (empty($segs[2])) {
+            if ($method === 'POST') {
+                if ($u && $u['role'] !== Auth::ROLE_ADMIN) {
+                    return cs_forbidden('only admin can create API keys');
+                }
+                if (!$u) {
+                    return cs_forbidden('permission denied');
+                }
+                $k = $body['apiKey'] ?? $body;
+                $isAdmin = !empty($k['isAdmin']);
+                $tenantId = isset($k['tenantId']) && $k['tenantId'] !== '' ? ApiKey::uuidToId((string) $k['tenantId']) : null;
+                $r = ApiKey::create($isAdmin ? null : $tenantId, (string) ($k['name'] ?? ''), $isAdmin, !empty($k['isReadOnly']));
+                if (isset($r['error'])) {
+                    return cs_invalid($r['error']);
+                }
+                return ['id' => $r['id'], 'token' => $r['token']];
+            }
+            if ($method === 'GET') {
+                $isAdminReq = !empty($get['isAdmin']);
+                $tenantId = isset($get['tenantId']) && $get['tenantId'] !== '' ? ApiKey::uuidToId((string) $get['tenantId']) : null;
+                if ($isAdminReq && $tenantId) {
+                    return cs_invalid('tenantId can not be set with isAdmin set to true');
+                }
+                if (!$isAdminReq && !$tenantId) {
+                    return cs_invalid('either isAdmin or tenantId must be set');
+                }
+                if ($u && $u['role'] !== Auth::ROLE_ADMIN && $tenantId !== (int) $sc['tenant_id']) {
+                    return cs_forbidden('permission denied');
+                }
+                $rows = ApiKey::list($tenantId, $isAdminReq);
+                $off = max(0, (int) ($get['offset'] ?? 0));
+                $lim = (int) ($get['limit'] ?? 50);
+                $result = array_map(static fn($k) => [
+                    'id'         => (string) ($k['uuid'] ?? ApiKey::idToUuid((int) $k['id'])),
+                    'name'       => $k['name'] ?? '',
+                    'isAdmin'    => (bool) $k['is_admin'],
+                    'tenantId'   => ApiKey::idToUuid((int) ($k['tenant_id'] ?? 0)),
+                    'isReadOnly' => (bool) ($k['is_read_only'] ?? 0),
+                ], $rows);
+                return cs_list(array_slice($result, $off, max(0, $lim)), count($result));
+            }
+            return cs_invalid('method not allowed');
+        }
+        if ($method === 'DELETE') {
+            $u2 = Auth::currentUser();
+            if (!$u2 || $u2['role'] !== Auth::ROLE_ADMIN) {
+                return cs_forbidden('only admin can delete API keys');
+            }
+            ApiKey::delete((string) $segs[2]);
+            return [];
+        }
+        return cs_invalid('method not allowed');
+    }
+
+    if ($sub === 'settings' && $method === 'GET') {
+        return [
+            'settings' => [
+                'branding' => cs_obj(),
+                'isDefaultBranding' => true,
+                'deviceAdrAlgorithms' => [],
+                'regionConfigurations' => array_map(static fn($r) => ['id' => strtoupper((string) ($r['id'] ?? $r['name'] ?? '')), 'region' => strtoupper((string) ($r['id'] ?? $r['name'] ?? ''))], WebApp::regions()),
+                'ownEmailActivation' => false,
+                'openidConnect' => cs_obj(),
+                'oauth2' => cs_obj(),
+            ],
+        ];
+    }
+
+    if ($sub === 'version' && $method === 'GET') {
+        return ['version' => '4.19.1-holastack'];
+    }
+
+    if ($sub === 'devices-summary' || $sub === 'gateways-summary') {
+        Auth::guardApi(Auth::ROLE_OPERATOR);
+        if ($sub === 'devices-summary') {
+            $rows = Database::fetchAll("SELECT status, COUNT(*) c FROM devices GROUP BY status");
+            $act = 0; $dis = 0; $pend = 0;
+            foreach ($rows as $r) {
+                if ($r['status'] === 'disabled') { $dis = (int) $r['c']; }
+                elseif ($r['status'] === 'pending') { $pend = (int) $r['c']; }
+                else { $act += (int) $r['c']; }
+            }
+            return ['active' => $act, 'inactive' => 0, 'disabled' => $dis, 'pending' => $pend, 'neverSeen' => 0];
+        }
+        $rows = Database::fetchAll("SELECT gw_id, last_seen FROM gateways");
+        $online = 0; $offline = 0; $never = 0;
+        foreach ($rows as $r) {
+            $ls = (int) $r['last_seen'];
+            if ($ls <= 0) { $never++; }
+            elseif ($ls >= time() - WebApp::GW_OFFLINE_TIMEOUT) { $online++; }
+            else { $offline++; }
+        }
+        return ['online' => $online, 'offline' => $offline, 'neverSeen' => $never];
+    }
+
+    if ($sub === 'global-search' && $method === 'GET') {
+        Auth::guardApi(Auth::ROLE_OPERATOR);
+        $q = trim((string) ($get['search'] ?? ''));
+        $limit = max(1, min(50, (int) ($get['limit'] ?? 10)));
+        $results = [];
+        if ($q !== '') {
+            foreach (WebApp::listDevices(null, null) as $d) {
+                if (stripos((string) $d['name'], $q) !== false || stripos((string) $d['dev_eui'], $q) !== false) {
+                    $results[] = ['device' => ['devEui' => $d['dev_eui'], 'name' => $d['name']]];
+                    if (count($results) >= $limit) { break; }
+                }
+            }
+            if (count($results) < $limit) {
+                foreach (WebApp::listGateways(null) as $g) {
+                    if (stripos((string) $g['name'], $q) !== false || stripos((string) $g['gw_id'], $q) !== false) {
+                        $results[] = ['gateway' => ['gatewayId' => $g['gw_id'], 'name' => $g['name']]];
+                        if (count($results) >= $limit) { break; }
+                    }
+                }
+            }
+        }
+        return ['result' => $results];
+    }
+
+    if ($sub === 'regions' && $method === 'GET') {
+        Auth::guardApi(Auth::ROLE_OPERATOR);
+        $result = array_map(static fn($r) => [
+            'id'     => strtoupper((string) ($r['id'] ?? $r['name'] ?? '')),
+            'region' => strtoupper((string) ($r['id'] ?? $r['name'] ?? '')),
+        ], WebApp::regions());
+        return ['result' => $result];
+    }
+
+    return cs_unimplemented('unknown internal endpoint: /api/internal/' . $sub);
+}
+
 function handleApi(string $method, string $path): array|\stdClass
 {
     $segs = explode('/', trim($path, '/'));
@@ -350,6 +572,10 @@ function handleApi(string $method, string $path): array|\stdClass
     $uuidOf = static function ($v): int {
         return $v !== null ? cs_uuidToInt((string) $v) : 0;
     };
+
+    if ($resource === 'internal') {
+        return handleInternalApi($method, $segs, $body, $get);
+    }
 
     if ($resource === 'login') {
         if ($method !== 'POST') {
@@ -404,7 +630,27 @@ function handleApi(string $method, string $path): array|\stdClass
     $isDemoClearLogs = ($resource === 'settings' && !empty($body['clear_logs']) && (WebApp::scopePublic())['demo']);
     $adminOnlyResource = in_array($resource, ['users', 'tenants', 'settings'], true);
 
-    if ($isDemoClearLogs) {
+    $apiKeyInfo = null;
+    $tokC = Auth::tokenFromRequest();
+    if (!Auth::currentUser() && $tokC) {
+        $apiKeyInfo = ApiKey::validate($tokC);
+        if (!$apiKeyInfo) {
+            http_response_code(401);
+            return cs_err(16, 'unauthenticated', 'invalid token');
+        }
+    }
+
+    if ($apiKeyInfo !== null) {
+        if (!empty($apiKeyInfo['is_read_only']) && $isWrite) {
+            return cs_forbidden('api key is read-only');
+        }
+        if ($isWrite && $adminOnlyResource && !$isPwChange && empty($apiKeyInfo['is_admin'])) {
+            return cs_forbidden('api key is tenant-scoped');
+        }
+        if ($resource === 'tenants' && empty($apiKeyInfo['is_admin'])) {
+            return cs_forbidden('api key is tenant-scoped');
+        }
+    } elseif ($isDemoClearLogs) {
         return [];
     } elseif ($isWrite && $adminOnlyResource && !$isPwChange) {
         Auth::guardApi(Auth::ROLE_ADMIN);
@@ -414,7 +660,7 @@ function handleApi(string $method, string $path): array|\stdClass
         Auth::guardApi(Auth::ROLE_OPERATOR);
     }
 
-    if (!$isWrite && $resource === 'tenants') {
+    if ($apiKeyInfo === null && !$isWrite && $resource === 'tenants') {
         Auth::guardApi(Auth::ROLE_ADMIN);
     }
 
@@ -2218,7 +2464,7 @@ function handleAppApi(string $method, string $path): array
     $get = $_GET;
 
     $token = ApiKey::tokenFromRequest();
-    $appId = $token ? ApiKey::validate($token) : 0;
+    $appId = $token ? ApiKey::validateApplicationToken($token) : 0;
     if (!$appId) {
         http_response_code(401);
         return ['error' => 'invalid_api_key', 'message' => '请在请求头携带 Authorization: Bearer <API_KEY> 或使用 ?api_key=<API_KEY>'];
@@ -2515,7 +2761,7 @@ function renderPage(): string
         $dictJson = '[]';
     }
     $i18nHead = '<script>window.UI_LANG=' . json_encode($lang) . ';window.I18N=' . $dictJson . ';</script>';
-    return $i18nHead . <<<'HTML'
+    $html = $i18nHead . <<<'HTML'
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -2581,15 +2827,21 @@ function renderPage(): string
 <div class="modal" id="modal"><div class="box" id="modalBox"></div></div>
 <div id="loader"><div class="spinner"></div></div>
 
-<script src="/assets/js/icons.js"></script>
-<script src="/assets/js/core.js"></script>
-<script src="/assets/js/table.js"></script>
-<script src="/assets/js/views.js?v=<?= filemtime(__DIR__ . '/assets/js/views.js') ?>"></script>
-<script src="/assets/js/forms.js?v=<?= filemtime(__DIR__ . '/assets/js/forms.js') ?>"></script>
-<script src="/assets/js/app.js"></script>
+<script src="/assets/js/icons.js?v=%%ICONS_V%%"></script>
+<script src="/assets/js/core.js?v=%%CORE_V%%"></script>
+<script src="/assets/js/table.js?v=%%TABLE_V%%"></script>
+<script src="/assets/js/views.js?v=%%VIEWS_V%%"></script>
+<script src="/assets/js/forms.js?v=%%FORMS_V%%"></script>
+<script src="/assets/js/app.js?v=%%APP_V%%"></script>
 <script src="/assets/loracalc.js"></script>
 <script src="/assets/apidocs.js"></script>
 </body>
 </html>
 HTML;
+    $vmap = ['%%ICONS_V%%' => 'icons.js', '%%CORE_V%%' => 'core.js', '%%TABLE_V%%' => 'table.js', '%%VIEWS_V%%' => 'views.js', '%%FORMS_V%%' => 'forms.js', '%%APP_V%%' => 'app.js'];
+    return str_replace(
+        array_keys($vmap),
+        array_map(fn($f) => (string) filemtime(__DIR__ . '/assets/js/' . $f), array_values($vmap)),
+        $html
+    );
 }

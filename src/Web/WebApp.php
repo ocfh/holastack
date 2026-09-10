@@ -2092,7 +2092,7 @@ class WebApp
             if ($appIds !== null && !in_array($applicationId, $appIds, true)) {
                 return [];
             }
-            return ApiKey::list($applicationId);
+            return ApiKey::legacyList($applicationId);
         }
 
         $appIds = self::visibleAppIds($tenantId);
@@ -2110,7 +2110,7 @@ class WebApp
         if (!self::appInScope($applicationId)) {
             return ['error' => 'forbidden: application not in your tenant'];
         }
-        return ApiKey::create($applicationId, $p['name'] ?? '');
+        return ApiKey::legacyCreate($applicationId, $p['name'] ?? '');
     }
     public static function deleteApiKey(int $id): array
     {

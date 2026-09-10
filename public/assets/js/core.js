@@ -283,7 +283,9 @@ const api = async (m,p,body) => {
     try { const ej = JSON.parse(text); if (ej.error && String(ej.error).indexOf('forbidden') !== -1) toast(t('演示模式：只读账号，无写权限。'), 'warn'); } catch(e) {}
   }
   if (r.status < 200 || r.status >= 300) {
-    throw new Error('HTTP ' + r.status + '：' + text.slice(0, 300));
+    let msg = text.slice(0, 200);
+    try { const ej = JSON.parse(text); if (ej && (ej.message || ej.error)) msg = String(ej.message || ej.error); } catch (e) {}
+    throw new Error(msg);
   }
   if (ct.indexOf('application/json') === -1) {
     throw new Error('服务器返回了非 JSON 响应（可能是错误页）：' + text.slice(0, 300));
@@ -470,7 +472,21 @@ const hexToText = (s) => {
 function showLoader(){ const l=document.getElementById('loader'); if(l) l.classList.add('show'); }
 function hideLoader(){ const l=document.getElementById('loader'); if(l) l.classList.remove('show'); }
 
-async function busy(label, fn){ showLoader(label); try { return await fn(); } finally { hideLoader(); } }
+async function busy(label, fn){
+  showLoader(label);
+  try { return await fn(); }
+  catch (e) { toast(String(e && e.message ? e.message : e).replace(/[{}\[\]"]/g,'').slice(0,150), 'err'); }
+  finally { hideLoader(); }
+}
+
+// 全局兜底：任何未被捕获的 Promise 异常（如不在 busy 内的写操作）都弹出提示，避免"没反应"
+window.addEventListener('unhandledrejection', (ev) => {
+  const e = ev.reason;
+  const msg = e && e.message ? e.message : String(e || '未知错误');
+  if (msg === 'unauthorized') return;
+  ev.preventDefault();
+  toast(String(msg).replace(/[{}\[\]"]/g,'').slice(0,150), 'err');
+});
 
 function resetFilters(clearPageState, viewFn){
   state.tenantFilter='';
@@ -646,8 +662,8 @@ function confirmDlg(msg, onOk){
   const box = document.getElementById('modalBox');
   renderModal(`<h3>${t('确认')}</h3><p style="margin:8px 0 16px;color:var(--txt);word-break:break-word">${esc(String(msg))}</p><div style="display:flex;gap:10px;justify-content:flex-end"><button class="ghost" data-act="cancel">${t('取消')}</button><button class="danger" data-act="ok">${t('删除')}</button></div>`);
   document.getElementById('modal').classList.add('show');
-  box.querySelector('[data-act="cancel"]').onclick = closeModal;
-  box.querySelector('[data-act="ok"]').onclick = () => { closeModal(); onOk(); };
+  box.querySelector('[data-act="cancel"]').onclick = () => { closeModal(); onOk(false); };
+  box.querySelector('[data-act="ok"]').onclick = () => { closeModal(); onOk(true); };
   if (isDemo()) {
     const ok = box.querySelector('[data-act="ok"]');
     ok.disabled = true; ok.style.opacity = '0.45'; ok.style.cursor = 'not-allowed'; ok.title = '演示模式：只读账号不能进行实际操作';

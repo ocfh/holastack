@@ -191,13 +191,16 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     created_at INT NOT NULL
 );
 
--- ---- 应用级 API Key ----
+-- ---- API Key（ChirpStack 模型：全局 admin 或绑定租户） ----
 CREATE TABLE IF NOT EXISTS api_keys (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    uuid VARCHAR(36) NOT NULL DEFAULT '',
     tenant_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
-    api_key VARCHAR(64) NOT NULL UNIQUE,
-    application_id INT NOT NULL,
+    api_key VARCHAR(255) NOT NULL UNIQUE,
+    application_id INT NOT NULL DEFAULT 0,
+    is_admin TINYINT NOT NULL DEFAULT 0,
+    is_read_only TINYINT NOT NULL DEFAULT 0,
     created_at INT NOT NULL DEFAULT 0,
     INDEX idx_api_keys_app (application_id)
 );

@@ -398,8 +398,9 @@ class NetworkServer
             $region = Region::get($device['region'] ?: ELW_DEFAULT_REGION);
             $rx1DrOffset = (int) ($device['rx1_dr_offset'] ?? 0) & 0x07;
 
-            $devRx2Dr = (int) ($device['rx2_dr'] ?? 0);
-            $rx2Dr = ($devRx2Dr > 0 ? $devRx2Dr : $region->getRx2DataRate()) & 0x0F;
+            // RX2 DR 一律取当前 region 默认：device.rx2_dr 可能是上一次 join（跨 region）残留值，
+            // 复用会导致 JoinAccept DLSettings 与实际 region 不符（CN470 残留 DR1 → EU868 设备 RXC 停在 SF11）
+            $rx2Dr = $region->getRx2DataRate() & 0x0F;
             $dlSettings = ($rx1DrOffset << 4) | $rx2Dr;
             $rxDelay = (int) ($device['rx_delay'] ?? 1) & 0x0F;
             $cfList = $region->getCfList();
@@ -1061,11 +1062,9 @@ class NetworkServer
             : $devRx2 / 1e6;
         $dlDatr = $region->drToDatr((int) ($device['rx2_dr'] ?? 0) > 0 ? (int) $device['rx2_dr'] : $region->getRx2DataRate());
         $sinceUp = time() - (int) ($device['last_seen'] ?? 0);
-        $airtimeUs = $this->uplinkAirtimeUs($downPhy, $dlDatr, $region);
-        $rx1DelayS = $region->getReceiveDelay1() / 1000.0;
-        if ($sinceUp >= 0 && $sinceUp < 2.5 && ($sinceUp + $airtimeUs / 1e6) > $rx1DelayS + 0.05) {
+        if ($sinceUp >= 0 && $sinceUp < 2.5) {
 
-            $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $ulTmst, $region, $ulFreq, $ulDatr, (int) ($device['rx2_frequency'] ?? 0));
+            $this->enqueueClassADownlink($gwEui, $peer, $downPhy, $ulTmst, $region, $ulFreq, $ulDatr, $devRx2);
             return [$dlFreq, $dlDatr, 'a-windows'];
         }
 
