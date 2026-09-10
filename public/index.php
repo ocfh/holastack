@@ -421,15 +421,25 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
         $sc = WebApp::scopePublic();
         if (empty($segs[2])) {
             if ($method === 'POST') {
-                if ($u && $u['role'] !== Auth::ROLE_ADMIN) {
-                    return cs_forbidden('only admin can create API keys');
-                }
                 if (!$u) {
                     return cs_forbidden('permission denied');
                 }
                 $k = $body['apiKey'] ?? $body;
                 $isAdmin = !empty($k['isAdmin']);
-                $tenantId = isset($k['tenantId']) && $k['tenantId'] !== '' ? ApiKey::uuidToId((string) $k['tenantId']) : null;
+                if ($u['role'] !== Auth::ROLE_ADMIN) {
+                    if ($isAdmin) {
+                        return cs_forbidden('only admin can create global API keys');
+                    }
+                    if ((int) $sc['tenant_id'] <= 0) {
+                        return cs_forbidden('account has no tenant scope');
+                    }
+                    $isAdmin = false;
+                    $tenantId = (int) $sc['tenant_id'];
+                } elseif (isset($k['tenantId']) && (string) $k['tenantId'] === 'self') {
+                    $tenantId = (int) $sc['tenant_id'];
+                } else {
+                    $tenantId = isset($k['tenantId']) && $k['tenantId'] !== '' ? ApiKey::uuidToId((string) $k['tenantId']) : null;
+                }
                 $r = ApiKey::create($isAdmin ? null : $tenantId, (string) ($k['name'] ?? ''), $isAdmin, !empty($k['isReadOnly']));
                 if (isset($r['error'])) {
                     return cs_invalid($r['error']);
@@ -646,7 +656,14 @@ function handleApi(string $method, string $path): array|\stdClass
 
     $apiKeyInfo = null;
     $tokC = Auth::tokenFromRequest();
-    if (!Auth::currentUser() && $tokC) {
+    $curUser = Auth::currentUser();
+    if ($curUser && !empty($curUser['is_api_key'])) {
+        $apiKeyInfo = [
+            'is_read_only' => !empty($curUser['api_key_read_only']),
+            'is_admin' => ($curUser['role'] ?? '') === Auth::ROLE_ADMIN,
+            'tenant_id' => (int) ($curUser['tenant_id'] ?? 0),
+        ];
+    } elseif (!$curUser && $tokC) {
         $apiKeyInfo = ApiKey::validate($tokC);
         if (!$apiKeyInfo) {
             http_response_code(401);

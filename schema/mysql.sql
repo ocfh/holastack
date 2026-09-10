@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS gateways (
     last_seen INT DEFAULT 0,
     ip VARCHAR(64) DEFAULT '',
     stats TEXT,
-    rf_config TEXT
+    rf_config TEXT,
+    latitude DOUBLE DEFAULT 0,
+    longitude DOUBLE DEFAULT 0,
+    altitude DOUBLE DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tenants (

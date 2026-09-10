@@ -77,6 +77,9 @@ class Auth
                 $u = Database::fetch("SELECT * FROM users WHERE id=?", [(int) $claims['uid']]);
                 return $u ? self::withDerivedRole($u) : null;
             }
+            if ($claims && ($claims['typ'] ?? '') === 'apikey') {
+                return self::identityFromApiKeyClaims($claims);
+            }
             return null;
         }
         $u = Database::fetch(
@@ -184,6 +187,26 @@ class Auth
         }
     }
 
+    private static function identityFromApiKeyClaims(array $claims): ?array
+    {
+        $row = Database::fetch("SELECT * FROM api_keys WHERE uuid=?", [(string) ($claims['jti'] ?? '')]);
+        if (!$row) {
+            return null;
+        }
+        $isAdmin = (bool) $row['is_admin'];
+        $tenantId = (int) $row['tenant_id'];
+        return [
+            'id' => 0,
+            'username' => (string) $row['name'],
+            'email' => (string) $row['name'],
+            'role' => $isAdmin ? self::ROLE_ADMIN : self::ROLE_TENANT,
+            'tenant_id' => $isAdmin ? 0 : $tenantId,
+            'is_api_key' => true,
+            'api_key_read_only' => (bool) ($row['is_read_only'] ?? 0),
+            'password_hash' => '',
+        ];
+    }
+
     public static function guardWrite(): void
     {
         $u = self::currentUser();
@@ -197,6 +220,12 @@ class Auth
             header('Content-Type: application/json; charset=utf-8');
             http_response_code(403);
             echo json_encode(['error' => 'forbidden: operator is read-only']);
+            exit;
+        }
+        if (!empty($u['api_key_read_only'])) {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code(403);
+            echo json_encode(['error' => 'forbidden: api key is read-only']);
             exit;
         }
     }

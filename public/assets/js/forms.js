@@ -156,7 +156,7 @@ window.rfBandChange = function(){
 function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   ${rfHtml(rfDefault('CN470'))}
   <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
-    <div style="font-weight:600;margin-bottom:6px">位置 GPS（手动填写，不依赖网关上报）</div>
+    <div style="font-weight:600;margin-bottom:6px">位置 GPS（可选，留空则由网关上报自动覆盖）</div>
     <div class="row"><div><label>纬度 latitude</label><input id="m_lat" type="number" step="any" placeholder="如 22.60271"></div><div><label>经度 longitude</label><input id="m_lon" type="number" step="any" placeholder="如 113.84091"></div><div><label>海拔 altitude (m)</label><input id="m_alt" type="number" step="any" placeholder="如 61"></div></div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveGateway)">保存</button></div>`); }
@@ -169,7 +169,7 @@ async function editGateway(gwId){ const r = await api('GET','/api/gateways'); co
   openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
   ${rfHtml(cfg || rfDefault(g.region || 'CN470'))}
   <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
-    <div style="font-weight:600;margin-bottom:6px">位置 GPS（手动填写，不依赖网关上报）</div>
+    <div style="font-weight:600;margin-bottom:6px">位置 GPS（可选，留空则由网关上报自动覆盖）</div>
     <div class="row"><div><label>纬度 latitude</label><input id="m_lat" type="number" step="any" placeholder="如 22.60271" ${latV}></div><div><label>经度 longitude</label><input id="m_lon" type="number" step="any" placeholder="如 113.84091" ${lonV}></div><div><label>海拔 altitude (m)</label><input id="m_alt" type="number" step="any" placeholder="如 61" ${altV}></div></div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveGatewayEdit('${gwId}'))">保存</button></div>`); }
@@ -384,7 +384,7 @@ function newApiKey(){
 async function saveApiKey(){
   const scope = isAdmin() ? (document.getElementById('m_scope')?.value||'admin') : 'tenant';
   const body = {apiKey:{name:v('m_name'), isAdmin: scope==='admin', isReadOnly: !!document.getElementById('m_ro')?.checked}};
-  if(scope==='tenant' && state.tenantFilter) body.apiKey.tenantId = state.tenantFilter;
+  if(scope==='tenant') body.apiKey.tenantId = 'self';
   const r=await api('POST','/api/internal/api-keys',body);
   if(r.error){alert(t(r.error));return;}
   openModal(`<h3>API 密钥已创建</h3><p class="muted">请立即复制保存，关闭后将无法再查看明文：</p>
