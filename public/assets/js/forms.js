@@ -1,13 +1,15 @@
+const hexRandField = (id, bytes, attrs='') => `<div style="position:relative"><input id="${id}" style="width:100%;padding-right:38px" oninput="hexOnly(this)" ${attrs}><button type="button" title="随机生成" onclick="document.getElementById('${id}').value=randHex(${bytes})" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;background:var(--bg-chip);border:1px solid var(--line);color:var(--mut);border-radius:6px;padding:4px;cursor:pointer" onmouseover="this.style.color='var(--acc)';this.style.borderColor='var(--acc)'" onmouseout="this.style.color='var(--mut)';this.style.borderColor='var(--line)'"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg></button></div>`;
+
 function newApplication(){ openModal(`<h3>新建应用</h3><label>名称</label><input id="m_name">
   <label>AppEUI（可选，留空自动随机生成）</label>
-  <div class="row"><div><input id="m_app_eui" placeholder="0000000000000000" oninput="hexOnly(this)"></div><div style="flex:0 0 auto"><button class="ghost" type="button" onclick="document.getElementById('m_app_eui').value=randHex(8)">随机生成</button></div></div>
+  ${hexRandField('m_app_eui', 8, 'placeholder="0000000000000000"')}
   <label>回调 URL（可选，设备上行/遥测 Webhook，留空不回调）</label><input id="m_cb" placeholder="https://example.com/uplink">
   <label>描述</label><input id="m_desc">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveApp)">保存</button></div>`); }
 async function saveApp(){ const r = await api('POST','/api/applications',{name:v('m_name'),app_eui:v('m_app_eui'),callback_url:v('m_cb'),description:v('m_desc')}); if(r.error){alert(t(r.error));return;} closeModal(); viewApplications(); }
 async function editApplication(id){ const r = await api('GET','/api/applications'); const a = (r.data||[]).find(x=>x.id===id); if(!a)return;
   openModal(`<h3>${t('编辑应用')} #${id}</h3><label>名称</label><input id="m_name" value="${esc(a.name)}">
-  <label>AppEUI</label><div class="row"><div><input id="m_app_eui" value="${esc(a.app_eui)}" oninput="hexOnly(this)"></div><div style="flex:0 0 auto"><button class="ghost" type="button" onclick="document.getElementById('m_app_eui').value=randHex(8)">随机生成</button></div></div></label>
+  <label>AppEUI</label>${hexRandField('m_app_eui', 8, `value="${esc(a.app_eui)}"`)}
   <label>回调 URL</label><input id="m_cb" value="${esc(a.callback_url||'')}" placeholder="https://example.com/uplink">
   <label>描述</label><input id="m_desc" value="${esc(a.description)}">
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveAppEdit(${id}))">保存</button></div>`); }
@@ -18,9 +20,9 @@ async function newDevice(appId){ const regions=regionOptions(""); const dps=awai
   const ar = await api('GET','/api/applications'); const apps = ar.data||[];
   const appOpts = apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(appId)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
   const appSel = apps.length ? `<label>应用</label><select id="m_app_sel" ${appId?'disabled':''}>${appOpts}</select>` : '<p class="muted">系统中暂无应用，请先在「应用」页面创建应用。</p>';
-  openModal(`<h3>${t('新建设备')}${appId?` (${t('应用')} #${appId})`:''}</h3>${appSel}<label>名称</label><input id="m_name"><label>DevEUI (16 hex)</label><input id="m_dev_eui" oninput="hexOnly(this)"><label>激活方式</label><select id="m_act" onchange="toggleAct()"><option value="OTAA">OTAA</option><option value="ABP">ABP</option></select>
-    <div id="otaa"><label>JoinEUI (16 hex)</label><input id="m_join_eui" oninput="hexOnly(this)"><label>AppKey (32 hex)</label><input id="m_app_key" oninput="hexOnly(this)"></div>
-    <div id="abp" class="hidden"><label>DevAddr (8 hex)</label><input id="m_dev_addr" oninput="hexOnly(this)"><label>NwkSKey (32 hex)</label><input id="m_nwk" oninput="hexOnly(this)"><label>AppSKey (32 hex)</label><input id="m_app" oninput="hexOnly(this)"></div>
+  openModal(`<h3>${t('新建设备')}${appId?` (${t('应用')} #${appId})`:''}</h3>${appSel}<label>名称</label><input id="m_name"><label>DevEUI (16 hex)</label>${hexRandField('m_dev_eui', 8)}<label>激活方式</label><select id="m_act" onchange="toggleAct()"><option value="OTAA">OTAA</option><option value="ABP">ABP</option></select>
+    <div id="otaa"><label>JoinEUI (16 hex)</label>${hexRandField('m_join_eui', 8)}<label>AppKey (32 hex)</label>${hexRandField('m_app_key', 16)}</div>
+    <div id="abp" class="hidden"><label>DevAddr (8 hex)</label>${hexRandField('m_dev_addr', 4)}<label>NwkSKey (32 hex)</label>${hexRandField('m_nwk', 16)}<label>AppSKey (32 hex)</label>${hexRandField('m_app', 16)}</div>
     <label>Class</label><select id="m_class"><option>A</option><option>B</option><option>C</option></select>
     <label>区域</label><select id="m_region">${regions}</select>
     <label>设备模板</label><select id="m_dp">${dps}</select>
@@ -38,7 +40,7 @@ async function editDevice(id){ const r = await api('GET','/api/devices'); const 
     <label>Class</label><select id="m_class"><option ${d.class==='A'?'selected':''}>A</option><option ${d.class==='B'?'selected':''}>B</option><option ${d.class==='C'?'selected':''}>C</option></select>
     <label>区域</label><select id="m_region">${regionOptions(d.region)}</select>
     <label>设备模板</label><select id="m_dp">${dps}</select>
-    ${otaa?`<label>DevEUI (16 hex，留空不改)</label><input id="m_dev_eui" value="${esc(d.dev_eui)}" placeholder="留空保持不变" oninput="hexOnly(this)"><label>JoinEUI (16 hex，留空不改)</label><input id="m_join_eui" value="${esc(d.join_eui)}" placeholder="留空保持不变" oninput="hexOnly(this)"><label>AppKey (32 hex，留空不改)</label><input id="m_app_key" placeholder="留空保持不变" oninput="hexOnly(this)">`:`<label>DevAddr (8 hex)</label><input id="m_dev_addr" value="${esc(d.dev_addr)}" oninput="hexOnly(this)"><label>NwkSKey (32 hex)</label><input id="m_nwk" value="${esc(d.nwk_s_key)}" oninput="hexOnly(this)"><label>AppSKey (32 hex)</label><input id="m_app" value="${esc(d.app_s_key)}" oninput="hexOnly(this)"`}
+    ${otaa?`<label>DevEUI (16 hex，留空不改)</label>${hexRandField('m_dev_eui', 8, `value="${esc(d.dev_eui)}" placeholder="留空保持不变"`)}<label>JoinEUI (16 hex，留空不改)</label>${hexRandField('m_join_eui', 8, `value="${esc(d.join_eui)}" placeholder="留空保持不变"`)}<label>AppKey (32 hex，留空不改)</label>${hexRandField('m_app_key', 16, 'placeholder="留空保持不变"')}`:`<label>DevAddr (8 hex)</label>${hexRandField('m_dev_addr', 4, `value="${esc(d.dev_addr)}"`)}<label>NwkSKey (32 hex)</label>${hexRandField('m_nwk', 16, `value="${esc(d.nwk_s_key)}"`)}<label>AppSKey (32 hex)</label>${hexRandField('m_app', 16, `value="${esc(d.app_s_key)}"`)}`}
     <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveDeviceEdit(${id}))">保存</button></div>`); }
 async function saveDeviceEdit(id){ const body={name:v('m_name'),class:v('m_class'),region:v('m_region'),device_profile_id:+v('m_dp')};
   if(document.getElementById('m_app_key')) body.app_key=v('m_app_key');
@@ -162,7 +164,7 @@ async function gwTenantOpts(selId){
   } catch(e){}
   return `<label>归属用户配置</label><select id="m_tid">${opts}</select>`;
 }
-function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label><input id="m_gwid" oninput="hexOnly(this)"><label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select><span id="m_tid_box"></span>
+function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label>${hexRandField('m_gwid', 8)}<label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select><span id="m_tid_box"></span>
   ${rfHtml(rfDefault('CN470'))}
   <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
     <div style="font-weight:600;margin-bottom:6px">位置 GPS（可选，留空则由网关上报自动覆盖）</div>
@@ -214,6 +216,8 @@ async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId
 async function newUser(){
   let roles = '';
   try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
+  let tenants = '<option value="0">未绑定</option>';
+  try { const tr = await api('GET','/api/tenants'); tenants += (tr.data||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
   openModal(`<h3>${t('新建用户')}</h3>
     <div class="rl-sec">
       <div class="row">
@@ -221,6 +225,7 @@ async function newUser(){
         <div><label>${t('密码')}（≥6 字符）</label><input id="m_pass" type="password"></div>
       </div>
       <div><label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" placeholder="user@example.com"></div>
+      <div><label>${t('用户配置')}（${t('留空则自动新建同名配置')}）</label><select id="m_tenant">${tenants}</select></div>
     </div>
     <div class="rl-sec">
       <div class="rl-sec-title"><h4>${t('角色与权限')}</h4></div>
@@ -230,7 +235,7 @@ async function newUser(){
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`, {wide:true});
 }
 async function saveUser(){
-  const body = {username:v('m_user'), password:v('m_pass'), email:v('m_email'), role_id: +v('m_role')||0};
+  const body = {username:v('m_user'), password:v('m_pass'), email:v('m_email'), role_id: +v('m_role')||0, tenant_id: +v('m_tenant')||0};
   const r = await api('POST','/api/users',body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
 async function delUser(id){ confirmDlg('确认删除该用户？', async ()=>{ const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(t(r.error));return;} viewUsers(); }); }
@@ -240,6 +245,8 @@ async function editUser(id){
   const u = (r.data||[]).find(x=>+x.id===+id || x.id===id); if(!u) return;
   let roles = '';
   try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.role_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
+  let tenants = '<option value="0">未绑定</option>';
+  try { const tr = await api('GET','/api/tenants'); tenants += (tr.data||[]).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.tenant_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
   const isSelf = state.user && +state.user.id === +id;
   openModal(`<h3>${t('编辑用户')} #${id}（${esc(u.username)}）</h3>
     <div class="rl-sec">
@@ -248,6 +255,7 @@ async function editUser(id){
         <div><label>${t('用户名')}</label><input id="m_user" value="${esc(u.username)}" disabled></div>
         <div><label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" value="${esc(u.email||'')}" placeholder="user@example.com"></div>
       </div>
+      <div><label>${t('用户配置')}（${t('决定该账号创建的应用/设备/网关归属')}）</label><select id="m_tenant">${tenants}</select></div>
     </div>
     <div class="rl-sec">
       <div class="rl-sec-title"><h4>${t('角色与权限')}</h4></div>
@@ -257,7 +265,7 @@ async function editUser(id){
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">${t('保存')}</button></div>`, {wide:true});
 }
 async function saveUserEdit(id){
-  const body = {email:v('m_email'), role_id: +v('m_role')||0};
+  const body = {email:v('m_email'), role_id: +v('m_role')||0, tenant_id: +v('m_tenant')||0};
   const r = await api('PUT',`/api/users/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
 
@@ -483,16 +491,14 @@ function multicastForm(m){
    <div class="row"><div><label>应用</label><select id="m_app">${appOpts}</select></div>
      <div><label>区域</label><select id="m_region">${regions}</select></div>
      <div><label>组类型</label><select id="m_type">${type(m.group_type||'C')}</select></div></div>
-   <div class="row"><div><label>MC Addr (8 hex)</label><input id="m_mcaddr" value="${esc(m.mc_addr||'')}" oninput="hexOnly(this)"></div>
-     <div><label>MC NwkSKey (32 hex)</label><input id="m_mcnwk" value="${esc(m.mc_nwk_s_key||'')}" oninput="hexOnly(this)"></div>
-     <div><label>MC AppSKey (32 hex)</label><input id="m_mcapp" value="${esc(m.mc_app_s_key||'')}" oninput="hexOnly(this)"></div></div>
-   <div style="margin-bottom:8px"><button class="btn ghost" type="button" onclick="genMc()">${ICON.arrowPath}随机生成组播密钥</button></div>
+   <div class="row"><div><label>MC Addr (8 hex)</label>${hexRandField('m_mcaddr', 4, `value="${esc(m.mc_addr||'')}"`)}</div>
+     <div><label>MC NwkSKey (32 hex)</label>${hexRandField('m_mcnwk', 16, `value="${esc(m.mc_nwk_s_key||'')}"`)}</div>
+     <div><label>MC AppSKey (32 hex)</label>${hexRandField('m_mcapp', 16, `value="${esc(m.mc_app_s_key||'')}"`)}</div></div>
    <div class="row"><div><label>DR</label><input id="m_dr" value="${m.dr||0}"></div>
      <div><label>频率 (Hz,0=区域默认)</label><input id="m_freq" value="${m.frequency||0}"></div>
      <div><label>ClassB Ping 周期</label><input id="m_bpp" value="${m.class_b_ping_slot_periodicity||0}"></div></div>
    <div class="row"><div><label>ClassC 调度类型</label><select id="m_sched">${sched(m.class_c_scheduling_type||'DELAY')}</select></div></div>`;
 }
-function genMc(){ document.getElementById('m_mcaddr').value=randHex(8); document.getElementById('m_mcnwk').value=randHex(32); document.getElementById('m_mcapp').value=randHex(32); }
 function newMulticast(){ if(!state.apps.length){alert('请先创建应用');return;} openModal(`<h3>新建组播组</h3>${multicastForm()}
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveMulticast(0))">保存</button></div>`); }
 async function saveMulticast(id){

@@ -259,6 +259,14 @@ class Database
             ] as [$tbl, $col, $def]) {
                 self::ensureColumn($tbl, $col, $def);
             }
+            foreach (['users' => ['department_id']] as $tbl => $dropCols) {
+                $cols = $pdo->query("PRAGMA table_info($tbl)")->fetchAll(\PDO::FETCH_COLUMN, 1);
+                foreach ($dropCols as $col) {
+                    if (in_array($col, $cols, true)) {
+                        $pdo->exec("ALTER TABLE $tbl DROP COLUMN $col");
+                    }
+                }
+            }
 
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL UNIQUE, kek TEXT NOT NULL DEFAULT \'\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, kind VARCHAR(16) NOT NULL, dev_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', gw_id TEXT NOT NULL DEFAULT \'\', peer TEXT DEFAULT \'\', ul_tmst INTEGER NOT NULL DEFAULT 0, region TEXT NOT NULL DEFAULT \'\', freq REAL NOT NULL DEFAULT 0, datr TEXT DEFAULT \'\', dl_delay INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL DEFAULT 0)');
@@ -455,11 +463,42 @@ class Database
                     $pdo->exec("ALTER TABLE $tbl ADD COLUMN $col $def");
                 }
             }
+            foreach (['users' => ['department_id']] as $tbl => $dropCols) {
+                foreach ($dropCols as $col) {
+                    if (self::mysqlColumnExists($tbl, $col)) {
+                        $pdo->exec("ALTER TABLE $tbl DROP COLUMN $col");
+                    }
+                }
+            }
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INT AUTO_INCREMENT PRIMARY KEY, label VARCHAR(32) NOT NULL UNIQUE, kek VARCHAR(64) DEFAULT \'\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INT AUTO_INCREMENT PRIMARY KEY, kind VARCHAR(16) NOT NULL, dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', gw_id VARCHAR(32) NOT NULL DEFAULT \'\', peer TEXT, ul_tmst INT NOT NULL DEFAULT 0, region VARCHAR(16) NOT NULL DEFAULT \'\', freq DOUBLE NOT NULL DEFAULT 0, datr VARCHAR(16) DEFAULT \'\', dl_delay INT NOT NULL DEFAULT 0, created_at INT NOT NULL, expires_at INT NOT NULL DEFAULT 0, INDEX idx_rp_dev (dev_eui), INDEX idx_rp_addr (dev_addr))');
         }
 
         self::seedSystemRoles();
+        self::reconcileTenantBindings();
+    }
+
+    public static function reconcileTenantBindings(): void
+    {
+        $orphans = self::fetchAll(
+            "SELECT u.id, u.username, u.role_id FROM users u
+             WHERE u.tenant_id=0 AND u.role_id>0
+               AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.is_system=1)
+             ORDER BY u.id ASC"
+        );
+        foreach ($orphans as $u) {
+            $existing = self::fetch("SELECT id FROM tenants WHERE name=?", [$u['username']]);
+            if ($existing) {
+                $tid = (int) $existing['id'];
+            } else {
+                self::execute(
+                    "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at) VALUES (?,?,0,1,?)",
+                    [$u['username'], '', time()]
+                );
+                $tid = (int) self::lastInsertId();
+            }
+            self::execute("UPDATE users SET tenant_id=? WHERE id=?", [$tid, $u['id']]);
+        }
     }
 
     public static function seedSystemRoles(): void

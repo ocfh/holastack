@@ -1980,12 +1980,13 @@ function handleApi(string $method, string $path): array|\stdClass
                 $roleId = (int) ($body['role_id'] ?? 0);
                 try {
                     $role = $roleId > 0 ? Auth::roleFromRoleId($roleId) : Auth::ROLE_OPERATOR;
+                    $reqTid = (int) ($body['tenant_id'] ?? 0);
                     $id = Auth::createUser(
                         $body['username'],
                         $body['password'],
                         $role,
-                        0,
-                        $role === Auth::ROLE_TENANT ? (string) $body['username'] : null,
+                        $reqTid,
+                        $role === Auth::ROLE_TENANT && $reqTid <= 0 ? (string) $body['username'] : null,
                         $body['email'] ?? null,
                         $roleId
                     );
