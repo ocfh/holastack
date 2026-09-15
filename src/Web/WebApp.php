@@ -68,7 +68,10 @@ class WebApp
     {
         $s = self::scope();
         if ($s['is_admin']) {
-            return (int) ($p['tenant_id'] ?? 0);
+            if (isset($p['tenant_id'])) {
+                return (int) $p['tenant_id'];
+            }
+            return $s['tenant_id'] > 0 ? $s['tenant_id'] : 0;
         }
         return $s['tenant_id'];
     }
@@ -1278,8 +1281,9 @@ class WebApp
         if (empty($p['name'])) {
             return ['error' => 'name required'];
         }
-        if (self::getGateway($gwId)) {
-            return ['error' => '网关已存在'];
+        $existing = Database::fetch("SELECT * FROM gateways WHERE gw_id=?", [$gwId]);
+        if ($existing) {
+            return ['error' => '网关已存在（ID 已被占用）'];
         }
         $region = strtoupper($p['region'] ?? '');
         if ($region && !in_array($region, Region::supported(), true)) {
@@ -1331,6 +1335,10 @@ class WebApp
              self::parseCoord($p['latitude'] ?? null), self::parseCoord($p['longitude'] ?? null),
              self::parseAlt($p['altitude'] ?? null), $gwId]
         );
+        $s = self::scope();
+        if ($s['is_admin'] && array_key_exists('tenant_id', $p)) {
+            Database::execute("UPDATE gateways SET tenant_id=? WHERE gw_id=?", [(int) $p['tenant_id'], $gwId]);
+        }
         return ['gw_id' => $gwId];
     }
 

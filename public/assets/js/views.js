@@ -462,27 +462,34 @@ async function viewGateways(){
     {value:'online',  label:'在线'},
     {value:'offline', label:'离线'},
   ];
+  let tenantMap = {};
+  if (isAdmin()) {
+    try { const tr = await api('GET','/api/tenants'); (tr.data||[]).forEach(x=>tenantMap[x.id]=x.name); } catch(e){}
+  }
+  const gwCols = [
+    {key:'gw_id',   label:'GatewayID', type:'str', firstDir:'asc', sortable:false},
+    {key:'name',    label:'名称',       type:'str', firstDir:'asc', sortable:false},
+    {key:'online',  label:'状态',       type:'status', firstDir:'asc', sortable:false, opts:{getValue:g=>g.status==='online'?'online':'offline', values:onlineValues}},
+    {key:'region',  label:'区域',       type:'str', firstDir:'asc', sortable:false},
+    {key:'uplinks', label:'上行数',     type:'num', firstDir:'asc', sortable:false},
+    {key:'time',    label:'最近心跳',   type:'time', firstDir:'desc'},
+    {key:'_raw',    label:'',          type:'raw'},
+  ];
+  if (isAdmin()) gwCols.splice(4, 0, {key:'tenant', label:'归属', type:'str', firstDir:'asc', sortable:false});
   const gwCfg = {
     state, stateKey:'gwsSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?'online':'offline', region:g.region||'', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
-    cols:[
-      {key:'gw_id',   label:'GatewayID', type:'str', firstDir:'asc', sortable:false},
-      {key:'name',    label:'名称',       type:'str', firstDir:'asc', sortable:false},
-      {key:'online',  label:'状态',       type:'status', firstDir:'asc', sortable:false, opts:{getValue:g=>g.status==='online'?'online':'offline', values:onlineValues}},
-      {key:'region',  label:'区域',       type:'str', firstDir:'asc', sortable:false},
-      {key:'uplinks', label:'上行数',     type:'num', firstDir:'asc', sortable:false},
-      {key:'time',    label:'最近心跳',   type:'time', firstDir:'desc'},
-      {key:'_raw',    label:'',          type:'raw'},
-    ],
+    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?'online':'offline', region:g.region||'', tenant:tenantMap[g.tenant_id]||'未分配', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
+    cols: gwCols,
     filterStatus: {col:'online', value: state.gwsFOnline},
     rows: state.gws,
     rowHtml: g => {
       const online = g.status==='online';
       const seen = g.last_seen ? new Date(g.last_seen*1000).toLocaleString() : '-';
+      const tenantTd = isAdmin() ? `<td class="muted">${esc(tenantMap[g.tenant_id]||'未分配')}</td>` : '';
       return `<tr><td class="muted">${g.gw_id}</td><td>${esc(g.name)}</td>
         <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
-        <td class="muted">${esc(g.region)}</td><td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
+        <td class="muted">${esc(g.region)}</td>${tenantTd}<td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
         <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">${ICON.trash}删除</button>`)}</td></tr>`;
     },
     emptyText:'暂无网关（网关连接后自动出现，亦可手动添加）',
