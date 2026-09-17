@@ -1,4 +1,4 @@
-const hexRandField = (id, bytes, attrs='') => `<div style="position:relative"><input id="${id}" style="width:100%;padding-right:38px" oninput="hexOnly(this)" ${attrs}><button type="button" title="随机生成" onclick="document.getElementById('${id}').value=randHex(${bytes})" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;background:var(--bg-chip);border:1px solid var(--line);color:var(--mut);border-radius:6px;padding:4px;cursor:pointer" onmouseover="this.style.color='var(--acc)';this.style.borderColor='var(--acc)'" onmouseout="this.style.color='var(--mut)';this.style.borderColor='var(--line)'"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg></button></div>`;
+const hexRandField = (id, bytes, attrs='') => `<div style="position:relative"><input id="${id}" style="width:100%;padding-right:38px" oninput="hexOnly(this)" ${attrs}><button type="button" title="随机生成" onclick="document.getElementById('${id}').value=randHex(${bytes*2})" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;background:var(--bg-chip);border:1px solid var(--line);color:var(--mut);border-radius:6px;padding:4px;cursor:pointer" onmouseover="this.style.color='var(--acc)';this.style.borderColor='var(--acc)'" onmouseout="this.style.color='var(--mut)';this.style.borderColor='var(--line)'"><svg style="width:16px;height:16px" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg></button></div>`;
 
 function newApplication(){ openModal(`<h3>新建应用</h3><label>名称</label><input id="m_name">
   <label>AppEUI（可选，留空自动随机生成）</label>
@@ -155,38 +155,29 @@ window.rfBandChange = function(){
   const box = document.getElementById('rfConfigBox');
   if (box) box.innerHTML = rfHtml(fresh);
 }
-async function gwTenantOpts(selId){
-  if (!isAdmin()) return '';
-  let opts = '<option value="0">未分配</option>';
-  try {
-    const r = await api('GET','/api/tenants');
-    opts += (r.data||[]).map(row=>`<option value="${row.id}" ${String(selId)===String(row.id)?'selected':''}>${esc(row.name)}</option>`).join('');
-  } catch(e){}
-  return `<label>归属用户配置</label><select id="m_tid">${opts}</select>`;
-}
-function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label>${hexRandField('m_gwid', 8)}<label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select><span id="m_tid_box"></span>
+function newGateway(){ openModal(`<h3>新建网关</h3><label>Gateway ID (16/32 hex)</label>${hexRandField('m_gwid', 8)}<label>名称</label><input id="m_name"><label>区域</label><select id="m_region">${regionOptions("")}</select>
   ${rfHtml(rfDefault('CN470'))}
   <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
     <div style="font-weight:600;margin-bottom:6px">位置 GPS（可选，留空则由网关上报自动覆盖）</div>
     <div class="row"><div><label>纬度 latitude</label><input id="m_lat" type="number" step="any" placeholder="如 22.60271"></div><div><label>经度 longitude</label><input id="m_lon" type="number" step="any" placeholder="如 113.84091"></div><div><label>海拔 altitude (m)</label><input id="m_alt" type="number" step="any" placeholder="如 61"></div></div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveGateway)">保存</button></div>`);
-  gwTenantOpts(0).then(h=>{ const b=document.getElementById('m_tid_box'); if(b) b.outerHTML=h; }); }
-async function saveGateway(){ const tidEl=document.getElementById('m_tid'); const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region'),rf_config:rfRead(),latitude:v('m_lat')||null,longitude:v('m_lon')||null,altitude:v('m_alt')||null,...(tidEl?{tenant_id:+tidEl.value}:{})}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+}
+async function saveGateway(){ const r = await api('POST','/api/gateways',{gw_id:v('m_gwid'),name:v('m_name'),region:v('m_region'),rf_config:rfRead(),latitude:v('m_lat')||null,longitude:v('m_lon')||null,altitude:v('m_alt')||null}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function editGateway(gwId){ const r = await api('GET','/api/gateways'); const g=(r.data||[]).find(x=>x.gw_id===gwId); if(!g)return;
   let cfg = null; try{ if(g.rf_config) cfg = JSON.parse(g.rf_config); }catch(e){}
   const latV = (g.latitude && +g.latitude!==0) ? ('value="'+Number(g.latitude).toFixed(6)+'"') : '';
   const lonV = (g.longitude && +g.longitude!==0) ? ('value="'+Number(g.longitude).toFixed(6)+'"') : '';
   const altV = (g.altitude && +g.altitude!==0) ? ('value="'+Number(g.altitude)+'"') : '';
-  openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select><span id="m_tid_box"></span>
+  openModal(`<h3>${t('编辑网关')} ${gwId}</h3><label>名称</label><input id="m_name" value="${esc(g.name)}"><label>区域</label><select id="m_region">${regionOptions(g.region)}</select>
   ${rfHtml(cfg || rfDefault(g.region || 'CN470'))}
   <div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
     <div style="font-weight:600;margin-bottom:6px">位置 GPS（可选，留空则由网关上报自动覆盖）</div>
     <div class="row"><div><label>纬度 latitude</label><input id="m_lat" type="number" step="any" placeholder="如 22.60271" ${latV}></div><div><label>经度 longitude</label><input id="m_lon" type="number" step="any" placeholder="如 113.84091" ${lonV}></div><div><label>海拔 altitude (m)</label><input id="m_alt" type="number" step="any" placeholder="如 61" ${altV}></div></div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', ()=>saveGatewayEdit('${gwId}'))">保存</button></div>`);
-  gwTenantOpts(g.tenant_id||0).then(h=>{ const b=document.getElementById('m_tid_box'); if(b) b.outerHTML=h; }); }
-async function saveGatewayEdit(gwId){ const tidEl=document.getElementById('m_tid'); const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region'),rf_config:rfRead(),latitude:v('m_lat')||null,longitude:v('m_lon')||null,altitude:v('m_alt')||null,...(tidEl?{tenant_id:+tidEl.value}:{})}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
+}
+async function saveGatewayEdit(gwId){ const r = await api('PUT',`/api/gateways/${gwId}`,{name:v('m_name'),region:v('m_region'),rf_config:rfRead(),latitude:v('m_lat')||null,longitude:v('m_lon')||null,altitude:v('m_alt')||null}); if(r.error){alert(t(r.error));return;} closeModal(); viewGateways(); }
 async function delGateway(gwId){ confirmDlg('确认删除该网关？', async ()=>{ const r = await api('DELETE',`/api/gateways/${gwId}`); if(r.error){alert(t(r.error));return;} viewGateways(); }); }
 
 function downlink(devId){ openModal(`<h3>${t('下发数据')} (${t('设备')} #${devId})</h3><label>端口 (1..223)</label><input id="m_port" value="10"><label>Hex 负载</label><input id="m_payload" placeholder="48656c6c6f">
@@ -216,8 +207,6 @@ async function sendDown(devId){ const r = await api('POST',`/api/devices/${devId
 async function newUser(){
   let roles = '';
   try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
-  let tenants = '<option value="0">未绑定</option>';
-  try { const tr = await api('GET','/api/tenants'); tenants += (tr.data||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); } catch(e){}
   openModal(`<h3>${t('新建用户')}</h3>
     <div class="rl-sec">
       <div class="row">
@@ -225,7 +214,6 @@ async function newUser(){
         <div><label>${t('密码')}（≥6 字符）</label><input id="m_pass" type="password"></div>
       </div>
       <div><label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" placeholder="user@example.com"></div>
-      <div><label>${t('用户配置')}（${t('留空则自动新建同名配置')}）</label><select id="m_tenant">${tenants}</select></div>
     </div>
     <div class="rl-sec">
       <div class="rl-sec-title"><h4>${t('角色与权限')}</h4></div>
@@ -235,7 +223,7 @@ async function newUser(){
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', saveUser)">${t('保存')}</button></div>`, {wide:true});
 }
 async function saveUser(){
-  const body = {username:v('m_user'), password:v('m_pass'), email:v('m_email'), role_id: +v('m_role')||0, tenant_id: +v('m_tenant')||0};
+  const body = {username:v('m_user'), password:v('m_pass'), email:v('m_email'), role_id: +v('m_role')||0};
   const r = await api('POST','/api/users',body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
 async function delUser(id){ confirmDlg('确认删除该用户？', async ()=>{ const r = await api('DELETE',`/api/users/${id}`); if(r.error){alert(t(r.error));return;} viewUsers(); }); }
@@ -245,8 +233,6 @@ async function editUser(id){
   const u = (r.data||[]).find(x=>+x.id===+id || x.id===id); if(!u) return;
   let roles = '';
   try { const rr = await api('GET','/api/roles'); roles = (rr.data||[]).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.role_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
-  let tenants = '<option value="0">未绑定</option>';
-  try { const tr = await api('GET','/api/tenants'); tenants += (tr.data||[]).map(x=>`<option value="${x.id}" ${String(x.id)===String(u.tenant_id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
   const isSelf = state.user && +state.user.id === +id;
   openModal(`<h3>${t('编辑用户')} #${id}（${esc(u.username)}）</h3>
     <div class="rl-sec">
@@ -255,7 +241,6 @@ async function editUser(id){
         <div><label>${t('用户名')}</label><input id="m_user" value="${esc(u.username)}" disabled></div>
         <div><label>${t('邮箱')}（${t('可选，用于头像')}）</label><input id="m_email" type="email" value="${esc(u.email||'')}" placeholder="user@example.com"></div>
       </div>
-      <div><label>${t('用户配置')}（${t('决定该账号创建的应用/设备/网关归属')}）</label><select id="m_tenant">${tenants}</select></div>
     </div>
     <div class="rl-sec">
       <div class="rl-sec-title"><h4>${t('角色与权限')}</h4></div>
@@ -265,7 +250,7 @@ async function editUser(id){
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveUserEdit(${id}))">${t('保存')}</button></div>`, {wide:true});
 }
 async function saveUserEdit(id){
-  const body = {email:v('m_email'), role_id: +v('m_role')||0, tenant_id: +v('m_tenant')||0};
+  const body = {email:v('m_email'), role_id: +v('m_role')||0};
   const r = await api('PUT',`/api/users/${id}`,body); if(r.error){alert(t(r.error));return;} closeModal(); viewUsers();
 }
 
@@ -276,53 +261,6 @@ async function dpOptions(sel){
   return list.map(d=>`<option value="${d.id}" ${String(d.id)===String(sel)?'selected':''}>${esc(d.name)}</option>`).join('');
 }
 
-function tenantForm(d){
-  d = d || {};
-  const unlimited = +d.private_gateways_unlimited === 1;
-  const limit = d.private_gateways_limit || 0;
-  return `<label>${t('名称')}</label><input id="t_name" value="${esc(d.name||'')}">
-  <label>${t('描述')}</label><input id="t_desc" value="${esc(d.description||'')}">
-  <div class="row" style="align-items:flex-end">
-    <div><label>${t('私有网关限额')}</label>
-      <label class="check" style="margin:6px 0 0">
-        <input type="checkbox" id="t_unlimited" ${unlimited?'checked':''} onchange="tenantLimitToggle()">
-        <span>${t('无限制（可创建任意数量网关）')}</span>
-      </label>
-      <div class="muted" style="font-size:11px;margin-top:4px">${t('勾选后该用户配置可创建任意数量的网关；取消勾选时按下方上限约束。')}</div>
-    </div>
-    <div id="t_limit_div" style="${unlimited?'display:none':''}"><label>${t('私有网关上限')}</label><input id="t_limit" type="number" min="0" value="${limit}"><div class="muted" style="font-size:11px;margin-top:4px">${t('0 = 不允许创建网关；正值 = 允许的最大私有网关数。')}</div></div>
-  </div>`;
-}
-function tenantLimitToggle(){
-  const cb = document.getElementById('t_unlimited');
-  if (!cb) return;
-  const div = document.getElementById('t_limit_div');
-  if (div) div.style.display = cb.checked ? 'none' : '';
-}
-function newTenant(){
-
-  openModal(`<h3>${t('新建用户配置')}</h3>${tenantForm({ private_gateways_unlimited: 0, private_gateways_limit: 0 })}
-   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(0))">${t('保存')}</button></div>`);
-}
-async function saveTenant(id){
-  const unlimited = document.getElementById('t_unlimited').checked;
-  const body = {
-    name: v('t_name'),
-    description: v('t_desc'),
-    private_gateways_unlimited: unlimited ? 1 : 0,
-    private_gateways_limit: unlimited ? 0 : (+v('t_limit') || 0),
-  };
-  const r = id ? await api('PUT',`/api/tenants/${id}`,body) : await api('POST','/api/tenants',body);
-  if(r.error){alert(t(r.error));return;} closeModal(); viewTenants();
-}
-async function editTenant(id){
-  const row = state.tenants.find(x=>x.id==id)||{};
-  openModal(`<h3>${t('编辑用户配置')}</h3>${tenantForm(row)}
-   <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">${t('取消')}</button><button onclick="busy('保存中…', ()=>saveTenant(${id}))">${t('保存')}</button></div>`);
-}
-async function delTenant(id){
-  confirmDlg(t('删除用户配置？其下资源将回退到默认用户配置。'), async ()=>{ const r = await api('DELETE',`/api/tenants/${id}`); if(r.error){alert(t(r.error));return;} viewTenants(); });
-}
 function deviceProfileForm(d){
   d = d||{};
   const regions=regionOptions(d.region||"");
@@ -396,7 +334,7 @@ async function delDeviceProfile(id){ confirmDlg('确认删除该模板？引用�
 function newApiKey(){
   openModal(`<h3>${t('新建 API 密钥')}</h3>
    <label>名称</label><input id="m_name" placeholder="如 dht11-board">
-   ${isAdmin()?`<label>作用域</label><select id="m_scope"><option value="admin">全局（所有租户）</option><option value="tenant">租户（限本租户资源）</option></select>`:''}
+   ${isAdmin()?`<label>作用域</label><select id="m_scope"><option value="admin">全局（管理员，可访问所有资源）</option><option value="tenant">私有（仅限本人创建的资源）</option></select>`:''}
    <label style="margin-top:10px"><input type="checkbox" id="m_ro" style="width:auto"> 只读密钥（拒绝所有写操作）</label>
    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end"><button class="ghost" onclick="closeModal()">取消</button><button onclick="busy('保存中…', saveApiKey)">保存</button></div>`);
 }

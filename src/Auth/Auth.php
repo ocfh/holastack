@@ -62,7 +62,7 @@ class Auth
             'uid' => (int) $user['id'],
             'username' => (string) $user['username'],
             'role' => (string) ($user['role'] ?? 'operator'),
-            'tenant_id' => (int) ($user['tenant_id'] ?? 0),
+            'owner_id' => (int) ($user['id'] ?? 0),
         ]);
     }
 
@@ -136,26 +136,9 @@ class Auth
         }
         $hash = password_hash($password, PASSWORD_DEFAULT);
         $role = in_array($role, self::ROLES, true) ? $role : self::ROLE_OPERATOR;
-        $tid = (int) $tenantId;
-        if ($role === self::ROLE_TENANT && $tid <= 0 && $newTenantName !== null && trim($newTenantName) !== '') {
-            $name = trim($newTenantName);
-            $exists = Database::fetch("SELECT id FROM tenants WHERE name=?", [$name]);
-            if ($exists) {
-                $tid = (int) $exists['id'];
-            } else {
-                Database::execute(
-                    "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at) VALUES (?,?,0,0,?)",
-                    [$name, '', time()]
-                );
-                $tid = Database::lastInsertId();
-            }
-        }
-        if ($role !== self::ROLE_TENANT) {
-            $tid = 0;
-        }
         Database::execute(
-            "INSERT INTO users (username, password_hash, role, tenant_id, email, role_id, created_at) VALUES (?,?,?,?,?,?,?)",
-            [$username, $hash, $role, $tid, $email, (int) $roleId, time()]
+            "INSERT INTO users (username, password_hash, role, email, role_id, created_at) VALUES (?,?,?,?,?,?)",
+            [$username, $hash, $role, $email, (int) $roleId, time()]
         );
         return Database::lastInsertId();
     }
@@ -194,13 +177,12 @@ class Auth
             return null;
         }
         $isAdmin = (bool) $row['is_admin'];
-        $tenantId = (int) $row['tenant_id'];
+        $ownerId = (int) ($row['owner_id'] ?? 0);
         return [
-            'id' => 0,
+            'id' => $ownerId,
             'username' => (string) $row['name'],
             'email' => (string) $row['name'],
             'role' => $isAdmin ? self::ROLE_ADMIN : self::ROLE_TENANT,
-            'tenant_id' => $isAdmin ? 0 : $tenantId,
             'is_api_key' => true,
             'api_key_read_only' => (bool) ($row['is_read_only'] ?? 0),
             'password_hash' => '',
@@ -244,6 +226,7 @@ class Auth
         'scheduled'        => '定时任务',
         'automations'      => '联动模型',
         'integrations'     => '外部集成',
+        'integration-logs' => '集成运行日志',
         'api-keys'         => 'API 密钥',
         'api-logs'         => 'API 调用日志',
         'apidocs'          => 'API 文档',
@@ -255,21 +238,20 @@ class Auth
         'map'              => '位置地图',
         'roles'            => '角色管理',
         'users'            => '用户管理',
-        'tenants'          => '用户配置',
         'settings'         => '站点设置',
     ];
 
     public const TENANT_PERMS = [
         'dashboard', 'applications', 'devices', 'gateways', 'device-profiles', 'multicast-groups', 'fuota',
         'thing-models', 'dashboard-data', 'alerts', 'notification-groups', 'scheduled',
-        'integrations', 'api-keys', 'api-logs', 'apidocs', 'loracalc',
+        'integrations', 'api-keys', 'api-logs', 'integration-logs', 'apidocs', 'loracalc',
         'uplinks', 'downlinks', 'events', 'noc', 'map', 'roles',
     ];
 
     public const OPERATOR_PERMS = [
         'dashboard', 'applications', 'devices', 'gateways', 'device-profiles', 'multicast-groups', 'fuota',
         'thing-models', 'dashboard-data', 'alerts', 'notification-groups', 'scheduled', 'automations',
-        'api-logs', 'apidocs', 'loracalc', 'uplinks', 'downlinks', 'events', 'noc', 'map',
+        'api-logs', 'integration-logs', 'apidocs', 'loracalc', 'uplinks', 'downlinks', 'events', 'noc', 'map',
     ];
 
     public static function permissionsFor(?array $user = null): array

@@ -46,8 +46,8 @@ class Integration
             $config = [];
         }
         Database::execute(
-            "INSERT INTO integrations (application_id, tenant_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?,?)",
-            [$appId, (int) ($p['tenant_id'] ?? 0), $kind, !empty($p['enabled']) ? 1 : 0, json_encode($config, JSON_UNESCAPED_UNICODE), time()]
+            "INSERT INTO integrations (application_id, owner_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?,?)",
+            [$appId, (int) ($p['owner_id'] ?? 0), $kind, !empty($p['enabled']) ? 1 : 0, json_encode($config, JSON_UNESCAPED_UNICODE), time()]
         );
         return ['id' => Database::lastInsertId()];
     }
@@ -91,43 +91,124 @@ class Integration
         }
 
         $data = self::buildPayload($device, $uplinkData, $telemetry, $eventType);
+        $bodyJson = json_encode($data, JSON_UNESCAPED_UNICODE);
+        $ids = $data['end_device_ids'] ?? [];
+        $um = $data['uplink_message'] ?? [];
         foreach ($rows as $it) {
             $cfg = json_decode($it['config_json'] ?? '{}', true) ?: [];
+            $t0 = microtime(true);
+            $notes = [];
+            $sink = function (string $m) use (&$notes, $log): void {
+                $notes[] = $m;
+                $log($m);
+            };
+            $ok = 0;
+            $err = '';
+            $httpStatus = 0;
             try {
                 switch ($it['kind']) {
                     case self::KIND_HTTP:
-                        self::handleHttp($cfg, $data, $log);
+                        self::handleHttp($cfg, $data, $sink);
                         break;
                     case self::KIND_INFLUX_DB:
-                        self::handleInfluxDb($cfg, $data, $log);
+                        self::handleInfluxDb($cfg, $data, $sink);
                         break;
                     case self::KIND_MQTT:
-                        self::handleMqtt($cfg, $data, $log, $eventType);
+                        self::handleMqtt($cfg, $data, $sink, $eventType);
                         break;
                     case self::KIND_AWS_SNS:
-                        self::handleAwsSns($cfg, $data, $log);
+                        self::handleAwsSns($cfg, $data, $sink);
                         break;
                     case self::KIND_AZURE_SB:
-                        self::handleAzureServiceBus($cfg, $data, $log);
+                        self::handleAzureServiceBus($cfg, $data, $sink);
                         break;
                     case self::KIND_GCP_PUBSUB:
-                        self::handleGcpPubsub($cfg, $data, $log);
+                        self::handleGcpPubsub($cfg, $data, $sink);
                         break;
                     case self::KIND_AMQP:
-                        self::handleAmqp($cfg, $data, $log, $eventType);
+                        self::handleAmqp($cfg, $data, $sink, $eventType);
                         break;
                     case self::KIND_KAFKA:
-                        self::handleKafka($cfg, $data, $log, $eventType);
+                        self::handleKafka($cfg, $data, $sink, $eventType);
                         break;
                     case self::KIND_MODBUS:
-                        self::handleModbus($cfg, $data, $log);
+                        self::handleModbus($cfg, $data, $sink);
                         break;
                     default:
-                        $log("INTEGRATION: unsupported kind {$it['kind']}");
+                        $sink("INTEGRATION: unsupported kind {$it['kind']}");
                 }
+                $joined = implode(' | ', $notes);
+                $httpStatus = 0;
+                if (preg_match('/status=(\d{3})/', $joined, $sm)) {
+                    $httpStatus = (int) $sm[1];
+                }
+                $hasFail = preg_match('/(failed|connect fail|missing|not loaded|unsupported|exception|no-response|bad scheme|no\/truncated)/i', $joined) === 1;
+                if ($httpStatus > 0) {
+                    $ok = ($httpStatus >= 200 && $httpStatus < 300) ? 1 : 0;
+                } else {
+                    $ok = $hasFail ? 0 : 1;
+                }
+                $err = $joined;
             } catch (\Throwable $e) {
-                $log("INTEGRATION: {$it['kind']} failed: " . $e->getMessage());
+                $err = "{$it['kind']} failed: " . $e->getMessage();
+                $sink("INTEGRATION: $err");
+                $httpStatus = 0;
             }
+            \holastack\Storage\IntegrationLog::record([
+                'created_at'     => time(),
+                'owner_id'       => (int) ($it['owner_id'] ?? 0),
+                'app_id'         => $appId,
+                'integration_id' => (int) $it['id'],
+                'kind'           => (string) $it['kind'],
+                'event'          => $eventType,
+                'trigger'        => $eventType === 'status' ? 'status' : 'uplink',
+                'dev_eui'        => (string) ($ids['dev_eui'] ?? ($uplinkData['dev_eui'] ?? '')),
+                'dev_addr'       => (string) ($ids['dev_addr'] ?? ($uplinkData['dev_addr'] ?? '')),
+                'fcnt'           => (int) ($um['f_cnt'] ?? ($uplinkData['fcnt'] ?? 0)),
+                'fport'          => (int) ($um['f_port'] ?? ($uplinkData['port'] ?? 0)),
+                'target'         => self::describeTarget((string) $it['kind'], $cfg, $eventType, $data),
+                'request_body'   => $bodyJson,
+                'http_status'    => $httpStatus,
+                'ok'             => $ok,
+                'latency_ms'     => (int) ((microtime(true) - $t0) * 1000),
+                'message'        => $err,
+            ]);
+        }
+    }
+
+    private static function describeTarget(string $kind, array $cfg, string $eventType, array $data): string
+    {
+        switch ($kind) {
+            case self::KIND_HTTP:
+            case self::KIND_INFLUX_DB:
+            case self::KIND_AMQP:
+                return (string) ($cfg['url'] ?? $cfg['endpoint'] ?? '');
+            case self::KIND_MQTT:
+                $server = (string) ($cfg['server'] ?? 'tcp://127.0.0.1:1883');
+                $topic = (string) ($cfg['topic'] ?? 'application/{app_id}/device/{dev_eui}/up');
+                $topic = str_replace(
+                    ['{app_id}', '{dev_eui}', '{dev_addr}', '{event}'],
+                    [
+                        $data['end_device_ids']['application_ids']['application_id'] ?? '',
+                        $data['end_device_ids']['dev_eui'] ?? '',
+                        $data['end_device_ids']['dev_addr'] ?? '',
+                        $eventType,
+                    ],
+                    $topic
+                );
+                return $server . ' topic=' . $topic;
+            case self::KIND_AWS_SNS:
+                return 'sns.' . (string) ($cfg['aws_region'] ?? '') . ' ' . (string) ($cfg['topic_arn'] ?? '');
+            case self::KIND_AZURE_SB:
+                return (string) ($cfg['publish_name'] ?? '');
+            case self::KIND_GCP_PUBSUB:
+                return (string) ($cfg['project_id'] ?? '') . '/' . (string) ($cfg['topic_name'] ?? '');
+            case self::KIND_KAFKA:
+                return (string) ($cfg['brokers'] ?? '') . ' topic=' . (string) ($cfg['topic'] ?? '');
+            case self::KIND_MODBUS:
+                return (string) ($cfg['server'] ?? '');
+            default:
+                return '';
         }
     }
 
@@ -329,6 +410,11 @@ class Integration
             $resp .= $chunk;
         }
         @fclose($fp);
+        $code = 0;
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $resp, $m)) {
+            $code = (int) $m[1];
+        }
+        $log("INTEGRATION HTTP: status=" . ($code ?: 'no-response') . " $url");
         $pos = strpos($resp, "\r\n\r\n");
         return $pos === false ? $resp : substr($resp, $pos + 4);
     }

@@ -9,13 +9,13 @@ class Role
 
     public const QUOTA_FIELDS = ['devices_limit', 'gateways_limit', 'gateways_unlimited'];
 
-    public static function list(?int $tenantId = null): array
+    public static function list(?int $ownerId = null): array
     {
-        if ($tenantId !== null) {
+        if ($ownerId !== null) {
             return Database::fetchAll(
                 "SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id=r.id) AS user_count
-                 FROM roles r WHERE (r.is_system=1 OR (r.is_system=0 AND r.tenant_id IN (0,?))) ORDER BY r.is_system DESC, r.id ASC",
-                [$tenantId]
+                 FROM roles r WHERE (r.is_system=1 OR (r.is_system=0 AND r.owner_id IN (0,?))) ORDER BY r.is_system DESC, r.id ASC",
+                [$ownerId]
             );
         }
         return Database::fetchAll(
@@ -37,8 +37,8 @@ class Role
         }
         $q = self::quotaValues($p);
         Database::execute(
-            "INSERT INTO roles (tenant_id, name, description, permissions, is_system, devices_limit, gateways_limit, gateways_unlimited, created_at) VALUES (?,?,?,?,0,?,?,?,?)",
-            [$norm['tenant_id'], $norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $q['devices_limit'], $q['gateways_limit'], $q['gateways_unlimited'], time()]
+            "INSERT INTO roles (owner_id, name, description, permissions, is_system, devices_limit, gateways_limit, gateways_unlimited, created_at) VALUES (?,?,?,?,0,?,?,?,?)",
+            [$norm['owner_id'], $norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $q['devices_limit'], $q['gateways_limit'], $q['gateways_unlimited'], time()]
         );
         return ['id' => Database::lastInsertId()];
     }
@@ -52,15 +52,15 @@ class Role
         if (!empty($m['is_system'])) {
             return ['error' => '系统内置角色不可修改'];
         }
-        $merged = array_merge($m, array_intersect_key($p, array_flip(['name', 'description', 'permissions', 'tenant_id'])));
+        $merged = array_merge($m, array_intersect_key($p, array_flip(['name', 'description', 'permissions', 'owner_id'])));
         $norm = self::normalize($merged, true);
         if (isset($norm['error'])) {
             return $norm;
         }
         $q = self::quotaValues(array_merge($m, $p));
         Database::execute(
-            "UPDATE roles SET name=?, description=?, permissions=?, tenant_id=?, devices_limit=?, gateways_limit=?, gateways_unlimited=? WHERE id=?",
-            [$norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $norm['tenant_id'], $q['devices_limit'], $q['gateways_limit'], $q['gateways_unlimited'], $id]
+            "UPDATE roles SET name=?, description=?, permissions=?, owner_id=?, devices_limit=?, gateways_limit=?, gateways_unlimited=? WHERE id=?",
+            [$norm['name'], $norm['description'], json_encode($norm['permissions'], JSON_UNESCAPED_UNICODE), $norm['owner_id'], $q['devices_limit'], $q['gateways_limit'], $q['gateways_unlimited'], $id]
         );
         return ['id' => $id];
     }
@@ -102,7 +102,7 @@ class Role
             'name'        => mb_substr($name, 0, 128),
             'description' => mb_substr((string) ($p['description'] ?? ''), 0, 255),
             'permissions' => $perm,
-            'tenant_id'   => (int) ($p['tenant_id'] ?? 0),
+            'owner_id'   => (int) ($p['owner_id'] ?? 0),
         ];
     }
 

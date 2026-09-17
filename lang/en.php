@@ -359,6 +359,18 @@ return [
     
 
     'API 调用日志' => 'API Call Logs',
+    '集成运行日志' => 'Integration Run Logs',
+    '设备 / FCnt' => 'Device / FCnt',
+    '目标 / 结果' => 'Target / Result',
+    '目标包含' => 'Target contains',
+    '目标地址' => 'Target URL',
+    '触发事件' => 'Trigger event',
+    '上行消息' => 'Uplink message',
+    '返回状态' => 'Response status',
+    '返回信息 / 错误' => 'Response / error',
+    '集成调用详情' => 'Integration Call Detail',
+    '提交的报文 (Payload)' => 'Submitted payload',
+    '暂无集成运行记录' => 'No integration runs yet',
     '路径包含' => 'Path contains',
     '状态码' => 'Status',
     '方法' => 'Method',

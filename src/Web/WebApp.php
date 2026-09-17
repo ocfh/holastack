@@ -6,7 +6,7 @@ use holastack\Region\Region;
 use holastack\Auth\Auth;
 use holastack\Storage\DeviceProfile;
 use holastack\Storage\ApiLog;
-use holastack\Storage\Tenant;
+use holastack\Storage\IntegrationLog;
 use holastack\Storage\ThingModel;
 use holastack\Storage\Alert;
 use holastack\Storage\Automation;
@@ -31,7 +31,7 @@ class WebApp
         $role = $u['role'] ?? '';
         return [
             'role' => $role,
-            'tenant_id' => (int) ($u['tenant_id'] ?? 0),
+            'owner_id' => (int) ($u['id'] ?? 0),
             'is_admin' => $role === Auth::ROLE_ADMIN,
             'can_write' => in_array($role, [Auth::ROLE_ADMIN, Auth::ROLE_TENANT], true),
             'demo' => $role === Auth::ROLE_OPERATOR,
@@ -43,72 +43,53 @@ class WebApp
         return self::scope();
     }
 
-    private static function effectiveTenant(?int $explicit = null): ?int
+    private static function effectiveOwner(): ?int
     {
         $s = self::scope();
-        if ($s['is_admin']) {
-            return ($explicit !== null && $explicit > 0) ? $explicit : null;
-        }
-        if ($s['demo']) {
+        if ($s['is_admin'] || $s['demo']) {
             return null;
         }
-        return $s['tenant_id'] > 0 ? $s['tenant_id'] : -1;
+        return $s['owner_id'] > 0 ? $s['owner_id'] : -1;
     }
 
-    private static function canAccess(array $row, string $tenantCol = 'tenant_id'): bool
+    private static function canAccess(array $row, string $col = 'owner_id'): bool
     {
         $s = self::scope();
         if ($s['is_admin'] || $s['demo']) {
             return true;
         }
-        return (int) ($row[$tenantCol] ?? 0) === ($s['tenant_id'] > 0 ? $s['tenant_id'] : -1);
+        return (int) ($row[$col] ?? 0) === ($s['owner_id'] > 0 ? $s['owner_id'] : -1);
     }
 
-    private static function createTenantId(array $p = []): int
+    private static function createOwnerId(): int
     {
         $s = self::scope();
-        if ($s['is_admin']) {
-            if (isset($p['tenant_id'])) {
-                return (int) $p['tenant_id'];
-            }
-            return $s['tenant_id'] > 0 ? $s['tenant_id'] : 0;
-        }
-        return $s['tenant_id'];
+        return $s['owner_id'] > 0 ? $s['owner_id'] : 0;
     }
 
-    public static function quotaForTenant(int $tenantId): array
+    public static function quotaForOwner(int $ownerId): array
     {
-        if ($tenantId > 0) {
+        if ($ownerId > 0) {
             $roleRow = Database::fetch(
                 "SELECT r.devices_limit, r.gateways_limit, r.gateways_unlimited
                  FROM users u JOIN roles r ON r.id=u.role_id
-                 WHERE u.tenant_id=? AND u.role_id>0 ORDER BY u.id ASC LIMIT 1",
-                [$tenantId]
+                 WHERE u.id=? AND u.role_id>0 LIMIT 1",
+                [$ownerId]
             );
             if ($roleRow && ((int) $roleRow['gateways_unlimited'] === 1 || (int) $roleRow['gateways_limit'] > 0 || (int) $roleRow['devices_limit'] > 0)) {
                 return [
                     'gateways_unlimited' => (int) $roleRow['gateways_unlimited'] === 1,
                     'gateways_limit'     => max(0, (int) $roleRow['gateways_limit']),
                     'devices_limit'      => max(0, (int) $roleRow['devices_limit']),
-                    'source'             => 'role',
-                ];
-            }
-            $t = Tenant::get($tenantId);
-            if ($t) {
-                return [
-                    'gateways_unlimited' => (int) ($t['private_gateways_unlimited'] ?? 0) === 1,
-                    'gateways_limit'     => max(0, (int) ($t['private_gateways_limit'] ?? 0)),
-                    'devices_limit'      => 0,
-                    'source'             => 'tenant',
                 ];
             }
         }
-        return ['gateways_unlimited' => false, 'gateways_limit' => 0, 'devices_limit' => 0, 'source' => 'none'];
+        return ['gateways_unlimited' => false, 'gateways_limit' => 0, 'devices_limit' => 0];
     }
 
-    private static function checkGatewayQuota(int $tenantId): ?string
+    private static function checkGatewayQuota(int $ownerId): ?string
     {
-        $q = self::quotaForTenant($tenantId);
+        $q = self::quotaForOwner($ownerId);
         if ($q['gateways_unlimited']) {
             return null;
         }
@@ -117,26 +98,24 @@ class WebApp
             return null;
         }
         $count = (int) Database::fetch(
-            "SELECT COUNT(*) AS c FROM gateways WHERE tenant_id=?",
-            [$tenantId]
+            "SELECT COUNT(*) AS c FROM gateways WHERE owner_id=?",
+            [$ownerId]
         )['c'];
         if ($count >= $limit) {
-            return $q['source'] === 'role'
-                ? '该角色的私有网关数量已达上限（' . $limit . '），请先在「角色管理」中调整或开启无限制'
-                : '该用户配置的私有网关数量已达上限（' . $limit . '），请先在「用户配置」中调整上限或开启无限制';
+            return '该角色的私有网关数量已达上限（' . $limit . '），请先在「角色管理」中调整或开启无限制';
         }
         return null;
     }
 
-    private static function checkDeviceQuota(int $tenantId): ?string
+    private static function checkDeviceQuota(int $ownerId): ?string
     {
-        $q = self::quotaForTenant($tenantId);
+        $q = self::quotaForOwner($ownerId);
         if ($q['devices_limit'] <= 0) {
             return null;
         }
         $count = (int) Database::fetch(
-            "SELECT COUNT(*) AS c FROM devices WHERE tenant_id=?",
-            [$tenantId]
+            "SELECT COUNT(*) AS c FROM devices WHERE owner_id=?",
+            [$ownerId]
         )['c'];
         if ($count >= $q['devices_limit']) {
             return '该角色的设备数量已达上限（' . $q['devices_limit'] . '），请先在「角色管理」中调整设备上限';
@@ -150,13 +129,18 @@ class WebApp
         return $appIds === null || in_array($appId, $appIds, true);
     }
 
-    private static function visibleAppIds(?int $explicit = null): ?array
+    public static function visibleAppIdsPublic(): ?array
     {
-        $tid = self::effectiveTenant($explicit);
-        if ($tid === null) {
+        return self::visibleAppIds();
+    }
+
+    private static function visibleAppIds(): ?array
+    {
+        $oid = self::effectiveOwner();
+        if ($oid === null) {
             return null;
         }
-        $rows = Database::fetchAll("SELECT id FROM applications WHERE tenant_id=?", [$tid]);
+        $rows = Database::fetchAll("SELECT id FROM applications WHERE owner_id=?", [$oid]);
         return array_map(static fn($r) => (int) $r['id'], $rows);
     }
 
@@ -191,11 +175,11 @@ class WebApp
     {
         $now = time();
         return [
-            ['id' => 1, 'tenant_id' => 0, 'name' => '智能楼宇', 'description' => '楼宇环境监测（演示）',
+            ['id' => 1, 'owner_id' => 0, 'name' => '智能楼宇', 'description' => '楼宇环境监测（演示）',
              'app_eui' => '0101010101010101', 'callback_url' => '', 'created_at' => $now - 86400 * 30],
-            ['id' => 2, 'tenant_id' => 0, 'name' => '智慧园区', 'description' => '园区能耗管理（演示）',
+            ['id' => 2, 'owner_id' => 0, 'name' => '智慧园区', 'description' => '园区能耗管理（演示）',
              'app_eui' => '0202020202020202', 'callback_url' => '', 'created_at' => $now - 86400 * 20],
-            ['id' => 3, 'tenant_id' => 0, 'name' => '仓库安防', 'description' => '仓库环境与门禁（演示）',
+            ['id' => 3, 'owner_id' => 0, 'name' => '仓库安防', 'description' => '仓库环境与门禁（演示）',
              'app_eui' => '0303030303030303', 'callback_url' => '', 'created_at' => $now - 86400 * 10],
         ];
     }
@@ -219,13 +203,13 @@ class WebApp
     private static function demoDeviceProfiles(): array
     {
         return [
-            ['id' => 1, 'tenant_id' => 0, 'name' => '温湿度传感器', 'region' => 'EU868', 'mac_version' => '1.0.4',
+            ['id' => 1, 'owner_id' => 0, 'name' => '温湿度传感器', 'region' => 'EU868', 'mac_version' => '1.0.4',
              'adr_algorithm' => 'lora_wan', 'payload_codec_runtime' => 'JS', 'supports_class_b' => 0, 'supports_class_c' => 0,
              'created_at' => time() - 86400 * 30],
-            ['id' => 2, 'tenant_id' => 0, 'name' => '电表（Class C）', 'region' => 'EU868', 'mac_version' => '1.0.4',
+            ['id' => 2, 'owner_id' => 0, 'name' => '电表（Class C）', 'region' => 'EU868', 'mac_version' => '1.0.4',
              'adr_algorithm' => 'lora_wan', 'payload_codec_runtime' => 'JS', 'supports_class_b' => 0, 'supports_class_c' => 1,
              'created_at' => time() - 86400 * 20],
-            ['id' => 3, 'tenant_id' => 0, 'name' => '烟感报警器', 'region' => 'EU868', 'mac_version' => '1.0.4',
+            ['id' => 3, 'owner_id' => 0, 'name' => '烟感报警器', 'region' => 'EU868', 'mac_version' => '1.0.4',
              'adr_algorithm' => 'lora_wan', 'payload_codec_runtime' => 'JS', 'supports_class_b' => 0, 'supports_class_c' => 0,
              'created_at' => time() - 86400 * 10],
         ];
@@ -235,11 +219,11 @@ class WebApp
     {
         $now = time();
         $rows = [
-            ['id' => 1, 'tenant_id' => 0, 'application_id' => 1, 'name' => '楼宇播报组', 'region' => 'EU868',
+            ['id' => 1, 'owner_id' => 0, 'application_id' => 1, 'name' => '楼宇播报组', 'region' => 'EU868',
              'group_type' => 'C', 'mc_addr' => '01020304', 'mc_nwk_s_key' => 'aabbccddeeff00112233445566778899',
              'mc_app_s_key' => '99887766554433221100ffeeddccbbaa', 'dr' => 0, 'frequency' => 868100000,
              'f_cnt' => 1024, 'created_at' => $now - 86400 * 15],
-            ['id' => 2, 'tenant_id' => 0, 'application_id' => 2, 'name' => '园区广播组', 'region' => 'EU868',
+            ['id' => 2, 'owner_id' => 0, 'application_id' => 2, 'name' => '园区广播组', 'region' => 'EU868',
              'group_type' => 'C', 'mc_addr' => '05060708', 'mc_nwk_s_key' => '11223344556677889900aabbccddeeff',
              'mc_app_s_key' => 'ffeeddccbbaa00998877665544332211', 'dr' => 1, 'frequency' => 868300000,
              'f_cnt' => 512, 'created_at' => $now - 86400 * 8],
@@ -423,19 +407,19 @@ class WebApp
     {
         $now = time();
         $rows = [
-            ['id' => 1, 'tenant_id' => 0, 'application_id' => 1, 'name' => '温湿度传感器模型', 'codec' => 'SEGMENT',
+            ['id' => 1, 'owner_id' => 0, 'application_id' => 1, 'name' => '温湿度传感器模型', 'codec' => 'SEGMENT',
              'fields_json' => json_encode([
                  ['key' => 'temperature', 'name' => '温度', 'type' => 'number', 'unit' => '°C', 'offset' => 0, 'len' => 2, 'dataType' => 'int16be', 'scale' => 0.1],
                  ['key' => 'humidity', 'name' => '湿度', 'type' => 'number', 'unit' => '%RH', 'offset' => 2, 'len' => 2, 'dataType' => 'uint16be', 'scale' => 0.1],
                  ['key' => 'battery', 'name' => '电量', 'type' => 'number', 'unit' => '%', 'offset' => 4, 'len' => 1, 'dataType' => 'uint8'],
              ], JSON_UNESCAPED_UNICODE), 'created_at' => $now - 86400 * 25],
-            ['id' => 2, 'tenant_id' => 0, 'application_id' => 2, 'name' => '电表读数模型', 'codec' => 'SEGMENT',
+            ['id' => 2, 'owner_id' => 0, 'application_id' => 2, 'name' => '电表读数模型', 'codec' => 'SEGMENT',
              'fields_json' => json_encode([
                  ['key' => 'voltage', 'name' => '电压', 'type' => 'number', 'unit' => 'V', 'offset' => 0, 'len' => 2, 'dataType' => 'uint16be', 'scale' => 0.1],
                  ['key' => 'current', 'name' => '电流', 'type' => 'number', 'unit' => 'A', 'offset' => 2, 'len' => 2, 'dataType' => 'uint16be', 'scale' => 0.01],
                  ['key' => 'energy', 'name' => '电能', 'type' => 'number', 'unit' => 'kWh', 'offset' => 4, 'len' => 4, 'dataType' => 'uint32be', 'scale' => 0.01],
              ], JSON_UNESCAPED_UNICODE), 'created_at' => $now - 86400 * 18],
-            ['id' => 3, 'tenant_id' => 0, 'application_id' => 3, 'name' => '烟感状态模型', 'codec' => 'JSON',
+            ['id' => 3, 'owner_id' => 0, 'application_id' => 3, 'name' => '烟感状态模型', 'codec' => 'JSON',
              'fields_json' => json_encode([
                  ['key' => 'alarm', 'name' => '报警状态', 'type' => 'number', 'unit' => '', 'jsonKey' => 'alarm'],
                  ['key' => 'smoke_ppm', 'name' => '烟雾浓度', 'type' => 'number', 'unit' => 'ppm', 'jsonKey' => 'smoke'],
@@ -451,11 +435,11 @@ class WebApp
     {
         $now = time();
         return [
-            ['id' => 1, 'tenant_id' => 0, 'name' => '运维值班群', 'webhook_url' => 'https://hooks.example.com/lora/ops',
+            ['id' => 1, 'owner_id' => 0, 'name' => '运维值班群', 'webhook_url' => 'https://hooks.example.com/lora/ops',
              'enabled' => 1, 'created_at' => $now - 86400 * 22],
-            ['id' => 2, 'tenant_id' => 0, 'name' => '告警升级群', 'webhook_url' => 'https://hooks.example.com/lora/escalate',
+            ['id' => 2, 'owner_id' => 0, 'name' => '告警升级群', 'webhook_url' => 'https://hooks.example.com/lora/escalate',
              'enabled' => 1, 'created_at' => $now - 86400 * 12],
-            ['id' => 3, 'tenant_id' => 0, 'name' => '测试通知组', 'webhook_url' => '',
+            ['id' => 3, 'owner_id' => 0, 'name' => '测试通知组', 'webhook_url' => '',
              'enabled' => 0, 'created_at' => $now - 86400 * 3],
         ];
     }
@@ -464,13 +448,13 @@ class WebApp
     {
         $now = time();
         $rows = [
-            ['id' => 1, 'tenant_id' => 0, 'application_id' => 1, 'device_id' => 0, 'name' => '温度过高',
+            ['id' => 1, 'owner_id' => 0, 'application_id' => 1, 'device_id' => 0, 'name' => '温度过高',
              'field_key' => 'temperature', 'operator' => 'gt', 'threshold' => '35', 'severity' => 'critical',
              'notify_group_id' => 1, 'enabled' => 1, 'created_at' => $now - 86400 * 20],
-            ['id' => 2, 'tenant_id' => 0, 'application_id' => 1, 'device_id' => 3, 'name' => '烟感电量低',
+            ['id' => 2, 'owner_id' => 0, 'application_id' => 1, 'device_id' => 3, 'name' => '烟感电量低',
              'field_key' => 'battery', 'operator' => 'lt', 'threshold' => '20', 'severity' => 'warn',
              'notify_group_id' => 2, 'enabled' => 1, 'created_at' => $now - 86400 * 14],
-            ['id' => 3, 'tenant_id' => 0, 'application_id' => 2, 'device_id' => 0, 'name' => '电压异常',
+            ['id' => 3, 'owner_id' => 0, 'application_id' => 2, 'device_id' => 0, 'name' => '电压异常',
              'field_key' => 'voltage', 'operator' => 'lt', 'threshold' => '200', 'severity' => 'warn',
              'notify_group_id' => 0, 'enabled' => 0, 'created_at' => $now - 86400 * 6],
         ];
@@ -500,7 +484,7 @@ class WebApp
             $val = $r['operator'] === 'gt' ? mt_rand(36, 42) : mt_rand(5, 19);
             $ts = $now - $i * mt_rand(1800, 14400);
             $out[] = [
-                'id' => 70000 + $i, 'tenant_id' => 0, 'device_id' => $d['id'], 'device_name' => $d['name'],
+                'id' => 70000 + $i, 'owner_id' => 0, 'device_id' => $d['id'], 'device_name' => $d['name'],
                 'rule_id' => $r['id'], 'rule_name' => $r['name'], 'field_key' => $r['field_key'],
                 'value' => $val, 'text_value' => (string) $val, 'severity' => $sev, 'status' => $st,
                 'message' => sprintf('设备 %s 字段 %s 触发规则「%s」（%s %s %s）', $d['name'], $r['field_key'], $r['name'], $r['field_key'], $r['operator'], $r['threshold']),
@@ -523,7 +507,7 @@ class WebApp
             $enabled = $i !== 3;
             $lastRun = $enabled ? $now - mt_rand(600, 7200) : 0;
             $out[] = [
-                'id' => 90000 + $i, 'tenant_id' => 0, 'name' => $names[$i],
+                'id' => 90000 + $i, 'owner_id' => 0, 'name' => $names[$i],
                 'application_id' => $d['app_id'], 'device_id' => $d['id'],
                 'port' => mt_rand(1, 3) === 1 ? 2 : 10,
                 'payload_hex' => sprintf('01%02x%02x', mt_rand(0, 255), mt_rand(0, 255)),
@@ -555,7 +539,7 @@ class WebApp
             $fired = mt_rand(0, 40);
             $lastFired = $fired > 0 ? $now - mt_rand(120, 86400) : 0;
             $out[] = [
-                'id' => 110000 + $i, 'tenant_id' => 0, 'application_id' => $d['app_id'], 'name' => $name,
+                'id' => 110000 + $i, 'owner_id' => 0, 'application_id' => $d['app_id'], 'name' => $name,
                 'trigger_device_id' => $i % 2 === 0 ? 0 : $d['id'], 'trigger_field' => $field,
                 'trigger_operator' => $op, 'trigger_value' => $val, 'cooldown_seconds' => $cd,
                 'enabled' => $enabled, 'action_type' => $atype,
@@ -598,7 +582,7 @@ class WebApp
                 'path' => $path, 'status' => $status,
                 'latency_ms' => mt_rand(3, 180),
                 'ip' => '192.168.1.' . (10 + ($i % 5)),
-                'username' => $uname, 'role' => $role, 'tenant_id' => 0,
+                'username' => $uname, 'role' => $role, 'owner_id' => 0,
                 'application_id' => $d['app_id'],
                 'query' => '', 'body_size' => mt_rand(0, 900),
             ];
@@ -629,16 +613,26 @@ class WebApp
         return ApiLog::list(Auth::currentUser(), $filters, $limit, $offset);
     }
 
-    public static function listApplications(?int $tenantId = null): array
+    public static function listIntegrationLogs(int $limit, int $offset, array $filters): array
+    {
+        return IntegrationLog::list(Auth::currentUser(), $filters, $limit, $offset);
+    }
+
+    public static function clearIntegrationLogs(): int
+    {
+        return IntegrationLog::clearAll(Auth::currentUser());
+    }
+
+    public static function listApplications(): array
     {
         if (self::scope()['demo']) {
             return self::demoApplications();
         }
-        $tid = self::effectiveTenant($tenantId);
-        if ($tid === null) {
+        $oid = self::effectiveOwner();
+        if ($oid === null) {
             return Database::fetchAll("SELECT * FROM applications ORDER BY id DESC");
         }
-        return Database::fetchAll("SELECT * FROM applications WHERE tenant_id=? ORDER BY id DESC", [$tid]);
+        return Database::fetchAll("SELECT * FROM applications WHERE owner_id=? ORDER BY id DESC", [$oid]);
     }
 
     public static function getApplicationByName(string $name): ?array
@@ -667,30 +661,30 @@ class WebApp
             return ['error' => 'AppEUI 已存在'];
         }
         $callbackUrl = trim($p['callback_url'] ?? '');
-        $tid = self::createTenantId($p);
+        $oid = self::createOwnerId();
         Database::execute(
-            "INSERT INTO applications (name, description, app_eui, callback_url, tenant_id, created_at) VALUES (?,?,?,?,?,?)",
-            [$p['name'], $p['description'] ?? '', $appEui, $callbackUrl, $tid, time()]
+            "INSERT INTO applications (name, description, app_eui, callback_url, owner_id, created_at) VALUES (?,?,?,?,?,?)",
+            [$p['name'], $p['description'] ?? '', $appEui, $callbackUrl, $oid, time()]
         );
         return ['id' => Database::lastInsertId(), 'app_eui' => $appEui];
     }
 
-    public static function listDevices(?int $appId = null, ?int $tenantId = null): array
+    public static function listDevices(?int $appId = null): array
     {
         if (self::scope()['demo']) {
             return self::demoDevices($appId);
         }
-        $tid = self::effectiveTenant($tenantId);
+        $oid = self::effectiveOwner();
         if ($appId) {
             $app = self::getApplication($appId);
             if (!$app || !self::canAccess($app)) {
                 return [];
             }
             $rows = Database::fetchAll("SELECT * FROM devices WHERE app_id=? ORDER BY id DESC", [$appId]);
-        } elseif ($tid === null) {
+        } elseif ($oid === null) {
             $rows = Database::fetchAll("SELECT * FROM devices ORDER BY id DESC");
         } else {
-            $rows = Database::fetchAll("SELECT * FROM devices WHERE tenant_id=? ORDER BY id DESC", [$tid]);
+            $rows = Database::fetchAll("SELECT * FROM devices WHERE owner_id=? ORDER BY id DESC", [$oid]);
         }
         $devTimeout = time() - self::DEV_OFFLINE_TIMEOUT;
         foreach ($rows as &$d) {
@@ -726,14 +720,14 @@ class WebApp
             return ['error' => 'application not found'];
         }
         if (!self::canAccess($app)) {
-            return ['error' => 'forbidden: application not in your tenant'];
+            return ['error' => 'forbidden: application not in your account'];
         }
 
-        $tid = (int) ($app['tenant_id'] ?? 0);
-        if ($tid <= 0) {
-            $tid = self::createTenantId($p);
+        $oid = (int) ($app['owner_id'] ?? 0);
+        if ($oid <= 0) {
+            $oid = self::createOwnerId();
         }
-        $devQuotaErr = $tid > 0 ? self::checkDeviceQuota($tid) : null;
+        $devQuotaErr = $oid > 0 ? self::checkDeviceQuota($oid) : null;
         if ($devQuotaErr !== null) {
             return ['error' => $devQuotaErr];
         }
@@ -762,9 +756,9 @@ class WebApp
 
             $nwkKey = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['nwk_key'] ?? $appKey));
             Database::execute(
-                "INSERT INTO devices (app_id, tenant_id, name, dev_eui, join_eui, activation, app_key, nwk_key, region, class, device_profile_id, mac_version, status, created_at)
+                "INSERT INTO devices (app_id, owner_id, name, dev_eui, join_eui, activation, app_key, nwk_key, region, class, device_profile_id, mac_version, status, created_at)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [$appId, $tid, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
+                [$appId, $oid, $p['name'], $devEui, $joinEui, 'OTAA', $appKey, $nwkKey, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'pending', time()]
             );
         } else {
 
@@ -775,9 +769,9 @@ class WebApp
                 return ['error' => 'ABP requires dev_addr(8), nwk_s_key(32), app_s_key(32) hex'];
             }
             Database::execute(
-                "INSERT INTO devices (app_id, tenant_id, name, dev_eui, dev_addr, activation, nwk_s_key, app_s_key, region, class, device_profile_id, mac_version, status, created_at)
+                "INSERT INTO devices (app_id, owner_id, name, dev_eui, dev_addr, activation, nwk_s_key, app_s_key, region, class, device_profile_id, mac_version, status, created_at)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [$appId, $tid, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'active', time()]
+                [$appId, $oid, $p['name'], $devEui, $devAddr, 'ABP', $nwk, $app, $p['region'] ?? ELW_DEFAULT_REGION, $class, $dpId, $macVersion, 'active', time()]
             );
         }
         if (!empty($p['codec'])) {
@@ -793,7 +787,7 @@ class WebApp
             return ['error' => 'application not found'];
         }
         if (!self::canAccess($app)) {
-            return ['error' => 'forbidden: application not in your tenant'];
+            return ['error' => 'forbidden: application not in your account'];
         }
         $rows = [];
         $format = strtolower(trim($format));
@@ -834,8 +828,8 @@ class WebApp
         if (empty($rows)) {
             return ['error' => '没有可导入的行'];
         }
-        $tid = (int) ($app['tenant_id'] ?? 0);
-        $defDp = Database::fetch("SELECT id FROM device_profiles WHERE tenant_id=? ORDER BY id ASC LIMIT 1", [$tid]);
+        $oid = (int) ($app['owner_id'] ?? 0);
+        $defDp = Database::fetch("SELECT id FROM device_profiles WHERE owner_id=? ORDER BY id ASC LIMIT 1", [$oid]);
         $defDpId = $defDp ? (int) $defDp['id'] : 0;
 
         $created = 0;
@@ -862,13 +856,13 @@ class WebApp
         return ['created' => $created, 'failed' => $failed, 'errors' => $errors];
     }
 
-    public static function listGateways(?int $tenantId = null): array
+    public static function listGateways(): array
     {
         if (self::scope()['demo']) {
             return self::demoGateways();
         }
-        $tid = self::effectiveTenant($tenantId);
-        if ($tid === null) {
+        $oid = self::effectiveOwner();
+        if ($oid === null) {
             $rows = Database::fetchAll(
                 "SELECT g.*, (SELECT COUNT(*) FROM uplinks u WHERE u.gateway_id=g.gw_id) AS uplinks
                  FROM gateways g ORDER BY g.last_seen DESC"
@@ -876,8 +870,8 @@ class WebApp
         } else {
             $rows = Database::fetchAll(
                 "SELECT g.*, (SELECT COUNT(*) FROM uplinks u WHERE u.gateway_id=g.gw_id) AS uplinks
-                 FROM gateways g WHERE g.tenant_id=? ORDER BY g.last_seen DESC",
-                [$tid]
+                 FROM gateways g WHERE g.owner_id=? ORDER BY g.last_seen DESC",
+                [$oid]
             );
         }
         $timeout = time() - self::GW_OFFLINE_TIMEOUT;
@@ -890,7 +884,7 @@ class WebApp
         return $rows;
     }
 
-    public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null, int $offset = 0): array
+    public static function listUplinks(?int $devId = null, ?int $appId = null, int $limit = 200, int $offset = 0): array
     {
         if (self::scope()['demo']) {
             return self::demoUplinks($limit > 50 ? 30 : max(1, $limit), $devId, $appId);
@@ -908,7 +902,7 @@ class WebApp
             $where[] = "app_id=?";
             $params[] = $appId;
         }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) {
             if (!$appIds) {
                 return [];
@@ -922,7 +916,7 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200, ?int $tenantId = null, int $offset = 0): array
+    public static function listDownlinks(?int $devId = null, ?int $appId = null, int $limit = 200, int $offset = 0): array
     {
         if (self::scope()['demo']) {
             return self::demoDownlinks($limit > 50 ? 20 : max(1, $limit), $devId, $appId);
@@ -940,7 +934,7 @@ class WebApp
             $where[] = "app_id=?";
             $params[] = $appId;
         }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) {
             if (!$appIds) {
                 return [];
@@ -954,7 +948,7 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    public static function listEvents(?int $devId = null, ?string $gwId = null, ?string $type = null, int $limit = 200, ?int $tenantId = null, int $offset = 0): array
+    public static function listEvents(?int $devId = null, ?string $gwId = null, ?string $type = null, int $limit = 200, int $offset = 0): array
     {
         if (self::scope()['demo']) {
             return self::demoEvents($limit > 50 ? 25 : max(1, $limit), $devId, $gwId, $type);
@@ -977,7 +971,7 @@ class WebApp
             $where[] = "type=?";
             $params[] = $type;
         }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) {
             if (!$appIds) {
                 return [];
@@ -991,31 +985,31 @@ class WebApp
         return Database::fetchAll($sql, $params);
     }
 
-    public static function countUplinks(?int $devId = null, ?int $appId = null, ?int $tenantId = null): int
+    public static function countUplinks(?int $devId = null, ?int $appId = null): int
     {
         if (self::scope()['demo']) { return 120; }
         $where = []; $params = [];
         if ($devId) { $where[] = 'dev_id=?'; $params[] = $devId; }
         if ($appId) { $where[] = 'app_id=?'; $params[] = $appId; }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) { if (!$appIds) return 0; $where[] = 'app_id IN (' . implode(',', $appIds) . ')'; }
         $sql = 'SELECT COUNT(*) AS c FROM uplinks' . ($where ? ' WHERE ' . implode(' AND ', $where) : '');
         return (int) Database::fetch($sql, $params)['c'];
     }
 
-    public static function countDownlinks(?int $devId = null, ?int $appId = null, ?int $tenantId = null): int
+    public static function countDownlinks(?int $devId = null, ?int $appId = null): int
     {
         if (self::scope()['demo']) { return 60; }
         $where = []; $params = [];
         if ($devId) { $where[] = 'dev_id=?'; $params[] = $devId; }
         if ($appId) { $where[] = 'app_id=?'; $params[] = $appId; }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) { if (!$appIds) return 0; $where[] = 'app_id IN (' . implode(',', $appIds) . ')'; }
         $sql = 'SELECT COUNT(*) AS c FROM downlinks' . ($where ? ' WHERE ' . implode(' AND ', $where) : '');
         return (int) Database::fetch($sql, $params)['c'];
     }
 
-    public static function countEvents(?int $devId = null, ?string $gwId = null, ?string $type = null, ?int $tenantId = null): int
+    public static function countEvents(?int $devId = null, ?string $gwId = null, ?string $type = null): int
     {
         if (self::scope()['demo']) { return 80; }
         $type = ($type !== null && $type !== '') ? $type : null;
@@ -1023,13 +1017,13 @@ class WebApp
         if ($devId) { $where[] = 'dev_id=?';     $params[] = $devId; }
         if ($gwId)  { $where[] = 'gateway_id=?'; $params[] = $gwId; }
         if ($type)  { $where[] = 'type=?';       $params[] = $type; }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) { if (!$appIds) return 0; $where[] = 'app_id IN (' . implode(',', $appIds) . ')'; }
         $sql = 'SELECT COUNT(*) AS c FROM events' . ($where ? ' WHERE ' . implode(' AND ', $where) : '');
         return (int) Database::fetch($sql, $params)['c'];
     }
 
-    public static function getUplink(int $id, ?int $tenantId = null): ?array
+    public static function getUplink(int $id): ?array
     {
         if ($id <= 0) { return null; }
         if (self::scope()['demo']) {
@@ -1039,7 +1033,7 @@ class WebApp
         }
         $row = Database::fetch("SELECT * FROM uplinks WHERE id=?", [$id]);
         if (!$row) { return null; }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) {
             $appId = (int) ($row['app_id'] ?? 0);
             if (!in_array($appId, $appIds, true)) { return null; }
@@ -1047,7 +1041,7 @@ class WebApp
         return $row;
     }
 
-    public static function getDownlink(int $id, ?int $tenantId = null): ?array
+    public static function getDownlink(int $id): ?array
     {
         if ($id <= 0) { return null; }
         if (self::scope()['demo']) {
@@ -1057,7 +1051,7 @@ class WebApp
         }
         $row = Database::fetch("SELECT * FROM downlinks WHERE id=?", [$id]);
         if (!$row) { return null; }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) {
             $appId = (int) ($row['app_id'] ?? 0);
             if (!in_array($appId, $appIds, true)) { return null; }
@@ -1072,7 +1066,7 @@ class WebApp
             return ['error' => 'device not found'];
         }
         if (!self::canAccess($device)) {
-            return ['error' => 'forbidden: device not in your tenant'];
+            return ['error' => 'forbidden: device not in your account'];
         }
         if (!ctype_xdigit($payloadHex)) {
             return ['error' => 'payload must be hex'];
@@ -1109,7 +1103,7 @@ class WebApp
             return ['error' => 'application not found'];
         }
         if (!self::canAccess($app)) {
-            return ['error' => 'forbidden: application not in your tenant'];
+            return ['error' => 'forbidden: application not in your account'];
         }
         if (empty($p['name'])) {
             return ['error' => 'name required'];
@@ -1139,7 +1133,7 @@ class WebApp
             return ['error' => 'application not found'];
         }
         if (!self::canAccess($app)) {
-            return ['error' => 'forbidden: application not in your tenant'];
+            return ['error' => 'forbidden: application not in your account'];
         }
         $devIds = Database::fetchAll("SELECT id FROM devices WHERE app_id=?", [$id]);
         if (!empty($devIds)) {
@@ -1168,7 +1162,7 @@ class WebApp
             return ['error' => 'device not found'];
         }
         if (!self::canAccess($device)) {
-            return ['error' => 'forbidden: device not in your tenant'];
+            return ['error' => 'forbidden: device not in your account'];
         }
         $name = $p['name'] ?? $device['name'];
         if (array_key_exists('name', $p) && $name !== '') {
@@ -1255,7 +1249,7 @@ class WebApp
             return ['error' => 'device not found'];
         }
         if (!self::canAccess($device)) {
-            return ['error' => 'forbidden: device not in your tenant'];
+            return ['error' => 'forbidden: device not in your account'];
         }
         Database::execute("DELETE FROM downlinks WHERE dev_id=?", [$id]);
         Database::execute("DELETE FROM uplinks WHERE dev_id=?", [$id]);
@@ -1289,29 +1283,14 @@ class WebApp
         if ($region && !in_array($region, Region::supported(), true)) {
             return ['error' => 'unsupported region'];
         }
-        $tid = self::createTenantId($p);
-
-        $t = $tid > 0 ? Tenant::get($tid) : null;
-        $quotaErr = $tid > 0 ? self::checkGatewayQuota($tid) : null;
+        $oid = self::createOwnerId();
+        $quotaErr = $oid > 0 ? self::checkGatewayQuota($oid) : null;
         if ($quotaErr !== null) {
             return ['error' => $quotaErr];
         }
-        if ($t) {
-            $unlimited = (int) ($t['private_gateways_unlimited'] ?? 0) === 1;
-            $limit = max(0, (int) ($t['private_gateways_limit'] ?? 0));
-            if (!$unlimited && $limit > 0 && self::quotaForTenant($tid)['source'] === 'tenant') {
-                $count = (int) Database::fetch(
-                    "SELECT COUNT(*) AS c FROM gateways WHERE tenant_id=?",
-                    [$tid]
-                )['c'];
-                if ($count >= $limit) {
-                    return ['error' => '该用户配置的私有网关数量已达上限（' . $limit . '），请先在「用户配置」中调整上限或开启无限制'];
-                }
-            }
-        }
         Database::execute(
-            "INSERT INTO gateways (gw_id, tenant_id, name, region, created_at, last_seen, ip, rf_config, latitude, longitude, altitude) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            [$gwId, $tid, $p['name'], $region, time(), 0, '', self::rfConfigJson($p['rf_config'] ?? null),
+            "INSERT INTO gateways (gw_id, owner_id, name, region, created_at, last_seen, ip, rf_config, latitude, longitude, altitude) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [$gwId, $oid, $p['name'], $region, time(), 0, '', self::rfConfigJson($p['rf_config'] ?? null),
              self::parseCoord($p['latitude'] ?? null), self::parseCoord($p['longitude'] ?? null),
              self::parseAlt($p['altitude'] ?? null)]
         );
@@ -1336,8 +1315,8 @@ class WebApp
              self::parseAlt($p['altitude'] ?? null), $gwId]
         );
         $s = self::scope();
-        if ($s['is_admin'] && array_key_exists('tenant_id', $p)) {
-            Database::execute("UPDATE gateways SET tenant_id=? WHERE gw_id=?", [(int) $p['tenant_id'], $gwId]);
+        if ($s['is_admin'] && array_key_exists('owner_id', $p)) {
+            Database::execute("UPDATE gateways SET owner_id=? WHERE gw_id=?", [(int) $p['owner_id'], $gwId]);
         }
         return ['gw_id' => $gwId];
     }
@@ -1392,17 +1371,16 @@ class WebApp
 
         if ($cur['role'] === Auth::ROLE_ADMIN) {
             return Database::fetchAll(
-                "SELECT u.id, u.username, u.email, u.role, u.tenant_id, COALESCE(t.name,'') AS tenant_name,
+                "SELECT u.id, u.username, u.email, u.role,
                         u.role_id, COALESCE(r.name,'') AS role_name, u.created_at
                  FROM users u
-                 LEFT JOIN tenants t ON t.id=u.tenant_id
                  LEFT JOIN roles r ON r.id=u.role_id
                  ORDER BY u.id DESC"
             );
         }
         return [[
             'id' => $cur['id'], 'username' => $cur['username'], 'email' => $cur['email'] ?? '', 'role' => $cur['role'],
-            'tenant_id' => (int) ($cur['tenant_id'] ?? 0), 'tenant_name' => '', 'created_at' => 0,
+            'created_at' => 0,
             'role_id' => (int) ($cur['role_id'] ?? 0),
             'role_name' => '',
         ]];
@@ -1475,11 +1453,7 @@ class WebApp
             return ['error' => 'cannot change own role'];
         }
         $role = $roleId > 0 ? Auth::roleFromRoleId($roleId) : $u['role'];
-        $tid = array_key_exists('tenant_id', $p) ? (int) $p['tenant_id'] : (int) ($u['tenant_id'] ?? 0);
-        if ($tid > 0 && !Tenant::get($tid)) {
-            return ['error' => 'invalid tenant_id'];
-        }
-        Database::execute("UPDATE users SET role=?, tenant_id=?, email=?, role_id=? WHERE id=?", [$role, $tid, $email, $roleId, $id]);
+        Database::execute("UPDATE users SET role=?, email=?, role_id=? WHERE id=?", [$role, $email, $roleId, $id]);
         return ['ok' => true];
     }
 
@@ -1508,7 +1482,7 @@ class WebApp
                 'gateway_logs' => self::demoEvents(5),
             ];
         }
-        $tid = self::effectiveTenant();
+        $oid = self::effectiveOwner();
         $appIds = self::visibleAppIds();
         $appClause = null;
 
@@ -1533,24 +1507,24 @@ class WebApp
             }
             return Database::fetch($sql, $extra);
         };
-        $apps = $tid !== null
-            ? Database::fetch("SELECT COUNT(*) c FROM applications WHERE tenant_id=?", [$tid])['c']
+        $apps = $oid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM applications WHERE owner_id=?", [$oid])['c']
             : Database::fetch("SELECT COUNT(*) c FROM applications")['c'];
         $devs = $appFilter("SELECT COUNT(*) c FROM devices")['c'];
-        $gws = $tid !== null
-            ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE tenant_id=?", [$tid])['c']
+        $gws = $oid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE owner_id=?", [$oid])['c']
             : Database::fetch("SELECT COUNT(*) c FROM gateways")['c'];
         $ups = $appFilter("SELECT COUNT(*) c FROM uplinks")['c'];
         $dls = $appFilter("SELECT COUNT(*) c FROM downlinks")['c'];
 
-        $dps = $tid !== null
-            ? Database::fetch("SELECT COUNT(*) c FROM device_profiles WHERE tenant_id=?", [$tid])['c']
+        $dps = $oid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM device_profiles WHERE owner_id=?", [$oid])['c']
             : Database::fetch("SELECT COUNT(*) c FROM device_profiles")['c'];
-        $mcs = $tid !== null
-            ? Database::fetch("SELECT COUNT(*) c FROM multicast_groups WHERE tenant_id=?", [$tid])['c']
+        $mcs = $oid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM multicast_groups WHERE owner_id=?", [$oid])['c']
             : Database::fetch("SELECT COUNT(*) c FROM multicast_groups")['c'];
-        $gwsOnline = $tid !== null
-            ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE tenant_id=? AND last_seen >= ?", [$tid, time() - self::GW_OFFLINE_TIMEOUT])['c']
+        $gwsOnline = $oid !== null
+            ? Database::fetch("SELECT COUNT(*) c FROM gateways WHERE owner_id=? AND last_seen >= ?", [$oid, time() - self::GW_OFFLINE_TIMEOUT])['c']
             : Database::fetch("SELECT COUNT(*) c FROM gateways WHERE last_seen >= ?", [time() - self::GW_OFFLINE_TIMEOUT])['c'];
 
         $devsOnline = $appFilter(
@@ -1583,12 +1557,12 @@ class WebApp
         return Region::supported();
     }
 
-    public static function listDeviceProfiles(?int $tenantId = null): array
+    public static function listDeviceProfiles(): array
     {
         if (self::scope()['demo']) {
             return self::demoDeviceProfiles();
         }
-        return DeviceProfile::list(self::effectiveTenant($tenantId));
+        return DeviceProfile::list(self::effectiveOwner());
     }
     public static function getDeviceProfile(int $id): ?array
     {
@@ -1600,14 +1574,14 @@ class WebApp
     }
     public static function createDeviceProfile(array $p): array
     {
-        $p['tenant_id'] = self::createTenantId($p);
+        $p['owner_id'] = self::createOwnerId();
         return DeviceProfile::create($p);
     }
     public static function updateDeviceProfile(int $id, array $p): array
     {
         $dp = DeviceProfile::get($id);
         if ($dp && !self::canAccess($dp)) {
-            return ['error' => 'forbidden: device profile not in your tenant'];
+            return ['error' => 'forbidden: device profile not in your account'];
         }
         return DeviceProfile::update($id, $p);
     }
@@ -1615,7 +1589,7 @@ class WebApp
     {
         $dp = DeviceProfile::get($id);
         if ($dp && !self::canAccess($dp)) {
-            return ['error' => 'forbidden: device profile not in your tenant'];
+            return ['error' => 'forbidden: device profile not in your account'];
         }
         return DeviceProfile::delete($id);
     }
@@ -1625,7 +1599,7 @@ class WebApp
         if (self::scope()['demo']) {
             return self::demoThingModels($appId);
         }
-        return ThingModel::list($appId, self::effectiveTenant());
+        return ThingModel::list($appId, self::effectiveOwner());
     }
 
     public static function getThingModel(int $id): ?array
@@ -1647,7 +1621,7 @@ class WebApp
         if ($appId <= 0 || !self::appInScope($appId)) {
             return ['error' => 'application_out_of_scope'];
         }
-        $body['tenant_id'] = self::createTenantId($body);
+        $body['owner_id'] = self::createOwnerId();
         return ThingModel::create($body);
     }
 
@@ -1658,7 +1632,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($m)) {
-            return ['error' => 'forbidden: thing model not in your tenant'];
+            return ['error' => 'forbidden: thing model not in your account'];
         }
         return ThingModel::update($id, $body);
     }
@@ -1670,7 +1644,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($m)) {
-            return ['error' => 'forbidden: thing model not in your tenant'];
+            return ['error' => 'forbidden: thing model not in your account'];
         }
         return ThingModel::delete($id);
     }
@@ -1706,7 +1680,7 @@ class WebApp
             mt_srand();
             return ['fields' => $latest, 'model' => array_merge(['fields' => $fields], $m)];
         }
-        $d = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]);
+        $d = Database::fetch("SELECT id, app_id, owner_id, name FROM devices WHERE id=?", [$devId]);
         if (!$d || !self::canAccess($d)) {
             return ['fields' => [], 'model' => null];
         }
@@ -1739,7 +1713,7 @@ class WebApp
             mt_srand();
             return ['data' => $data];
         }
-        $d = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]);
+        $d = Database::fetch("SELECT id, app_id, owner_id, name FROM devices WHERE id=?", [$devId]);
         if (!$d || !self::canAccess($d)) {
             return ['error' => 'forbidden'];
         }
@@ -1751,7 +1725,7 @@ class WebApp
         if (self::scope()['demo']) {
             return self::demoAlertRules($appId);
         }
-        return Alert::listRules((int) $appId, self::effectiveTenant());
+        return Alert::listRules((int) $appId, self::effectiveOwner());
     }
 
     public static function createAlertRule(array $body): array
@@ -1766,7 +1740,7 @@ class WebApp
         if (!in_array(strtolower((string) ($body['operator'] ?? '')), Alert::OPERATORS, true)) {
             return ['error' => 'invalid_operator'];
         }
-        $body['tenant_id'] = self::createTenantId($body);
+        $body['owner_id'] = self::createOwnerId();
         return Alert::createRule($body);
     }
 
@@ -1777,7 +1751,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($r)) {
-            return ['error' => 'forbidden: rule not in your tenant'];
+            return ['error' => 'forbidden: rule not in your account'];
         }
         return Alert::updateRule($id, $body);
     }
@@ -1789,7 +1763,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($r)) {
-            return ['error' => 'forbidden: rule not in your tenant'];
+            return ['error' => 'forbidden: rule not in your account'];
         }
         return Alert::deleteRule($id);
     }
@@ -1801,8 +1775,8 @@ class WebApp
             return ['data' => $data, 'counts' => self::demoAlertCounts($data)];
         }
         return [
-            'data' => Alert::listAlerts(self::effectiveTenant(), $limit, $offset, $deviceId, $status),
-            'counts' => Alert::counts(self::effectiveTenant()),
+            'data' => Alert::listAlerts(self::effectiveOwner(), $limit, $offset, $deviceId, $status),
+            'counts' => Alert::counts(self::effectiveOwner()),
         ];
     }
 
@@ -1811,7 +1785,7 @@ class WebApp
         if (self::scope()['demo']) {
             return ['data' => self::demoAlerts(min(500, max(1, $limit)), null, 'triggered')];
         }
-        return ['data' => Alert::activeAlerts(self::effectiveTenant(), $limit)];
+        return ['data' => Alert::activeAlerts(self::effectiveOwner(), $limit)];
     }
 
     public static function alertCounts(): array
@@ -1819,7 +1793,7 @@ class WebApp
         if (self::scope()['demo']) {
             return self::demoAlertCounts(self::demoAlerts(40));
         }
-        return Alert::counts(self::effectiveTenant());
+        return Alert::counts(self::effectiveOwner());
     }
 
     private static function demoAlertCounts(array $alerts): array
@@ -1840,7 +1814,7 @@ class WebApp
 
     public static function resolveAlert(int $alertId): array
     {
-        $a = Database::fetch("SELECT tenant_id FROM alerts WHERE id=?", [$alertId]);
+        $a = Database::fetch("SELECT owner_id FROM alerts WHERE id=?", [$alertId]);
         if (!$a || !self::canAccess($a)) {
             return ['error' => 'forbidden'];
         }
@@ -1852,12 +1826,12 @@ class WebApp
         if (self::scope()['demo']) {
             return ['data' => self::demoNotificationGroups()];
         }
-        return ['data' => Alert::listGroups(self::effectiveTenant())];
+        return ['data' => Alert::listGroups(self::effectiveOwner())];
     }
 
     public static function createNotificationGroup(array $body): array
     {
-        $body['tenant_id'] = self::createTenantId($body);
+        $body['owner_id'] = self::createOwnerId();
         $r = Alert::createGroup($body);
         if (isset($r['error'])) {
             return $r;
@@ -1872,7 +1846,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($g)) {
-            return ['error' => 'forbidden: group not in your tenant'];
+            return ['error' => 'forbidden: group not in your account'];
         }
         return Alert::updateGroup($id, $body);
     }
@@ -1884,7 +1858,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($g)) {
-            return ['error' => 'forbidden: group not in your tenant'];
+            return ['error' => 'forbidden: group not in your account'];
         }
         return Alert::deleteGroup($id);
     }
@@ -1894,7 +1868,7 @@ class WebApp
         if (self::scope()['demo']) {
             return ['data' => self::demoScheduledTasks()];
         }
-        $rows = ScheduledTask::list(self::effectiveTenant());
+        $rows = ScheduledTask::list(self::effectiveOwner());
         $now = time();
         foreach ($rows as &$row) {
             $row['enabled_fmt'] = $row['enabled'] ? 1 : 0;
@@ -1907,11 +1881,11 @@ class WebApp
     public static function createScheduledTask(array $body): array
     {
         $deviceId = (int) ($body['device_id'] ?? 0);
-        $d = $deviceId > 0 ? Database::fetch("SELECT id, app_id, tenant_id FROM devices WHERE id=?", [$deviceId]) : null;
+        $d = $deviceId > 0 ? Database::fetch("SELECT id, app_id, owner_id FROM devices WHERE id=?", [$deviceId]) : null;
         if (!$d || !self::appInScope((int) $d['app_id'])) {
             return ['error' => 'device_out_of_scope'];
         }
-        $body['tenant_id'] = self::createTenantId($body);
+        $body['owner_id'] = self::createOwnerId();
         $r = ScheduledTask::create($body);
         if (isset($r['error'])) {
             return $r;
@@ -1926,10 +1900,10 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($task)) {
-            return ['error' => 'forbidden: task not in your tenant'];
+            return ['error' => 'forbidden: task not in your account'];
         }
         if (isset($body['device_id']) && (int) $body['device_id'] > 0) {
-            $d = Database::fetch("SELECT app_id, tenant_id FROM devices WHERE id=?", [(int) $body['device_id']]);
+            $d = Database::fetch("SELECT app_id, owner_id FROM devices WHERE id=?", [(int) $body['device_id']]);
             if (!$d || !self::appInScope((int) $d['app_id'])) {
                 return ['error' => 'device_out_of_scope'];
             }
@@ -1944,7 +1918,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($task)) {
-            return ['error' => 'forbidden: task not in your tenant'];
+            return ['error' => 'forbidden: task not in your account'];
         }
         return ScheduledTask::delete($id);
     }
@@ -1956,7 +1930,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($task)) {
-            return ['error' => 'forbidden: task not in your tenant'];
+            return ['error' => 'forbidden: task not in your account'];
         }
         return ScheduledTask::setEnabled($id, $enabled);
     }
@@ -1968,7 +1942,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($task)) {
-            return ['error' => 'forbidden: task not in your tenant'];
+            return ['error' => 'forbidden: task not in your account'];
         }
         $r = ScheduledTask::run($task);
         if (isset($r['error'])) {
@@ -1982,7 +1956,7 @@ class WebApp
         if (self::scope()['demo']) {
             return ['data' => self::demoAutomations()];
         }
-        $rows = Automation::list(self::effectiveTenant());
+        $rows = Automation::list(self::effectiveOwner());
         foreach ($rows as &$row) {
             $row['fired_count'] = (int) ($row['fired_count'] ?? 0);
             $row['last_fired_at'] = (int) ($row['last_fired_at'] ?? 0);
@@ -2002,7 +1976,7 @@ class WebApp
         if (!self::appInScope($appId)) {
             return ['error' => 'application_out_of_scope'];
         }
-        $body['tenant_id'] = self::createTenantId($body);
+        $body['owner_id'] = self::createOwnerId();
         return Automation::create($body);
     }
 
@@ -2013,7 +1987,7 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($row)) {
-            return ['error' => 'forbidden: automation not in your tenant'];
+            return ['error' => 'forbidden: automation not in your account'];
         }
         return Automation::update($id, $body);
     }
@@ -2025,27 +1999,12 @@ class WebApp
             return ['error' => 'not_found'];
         }
         if (!self::canAccess($row)) {
-            return ['error' => 'forbidden: automation not in your tenant'];
+            return ['error' => 'forbidden: automation not in your account'];
         }
         return Automation::delete($id);
     }
 
-    public static function listTenants(): array
-    {
-        return Tenant::list();
-    }
-    public static function createTenant(array $p): array
-    {
-        return Tenant::create($p);
-    }
-    public static function updateTenant(int $id, array $p): array
-    {
-        return Tenant::update($id, $p);
-    }
-    public static function deleteTenant(int $id): array
-    {
-        return Tenant::delete($id);
-    }
+
 
     public static function permissionCatalog(): array
     {
@@ -2055,7 +2014,7 @@ class WebApp
     public static function listRoles(): array
     {
         $s = self::scope();
-        $rows = Role::list($s['is_admin'] ? null : $s['tenant_id']);
+        $rows = Role::list($s['is_admin'] ? null : $s['owner_id']);
         foreach ($rows as &$row) {
             $row['permissions'] = json_decode((string) ($row['permissions'] ?? ''), true) ?: [];
         }
@@ -2068,7 +2027,7 @@ class WebApp
         if (!$s['can_write']) {
             return ['error' => 'forbidden'];
         }
-        $p['tenant_id'] = $s['is_admin'] ? (int) ($p['tenant_id'] ?? 0) : $s['tenant_id'];
+        $p['owner_id'] = $s['is_admin'] ? (int) ($p['owner_id'] ?? 0) : $s['owner_id'];
         return Role::create($p);
     }
     public static function updateRole(int $id, array $p): array
@@ -2088,7 +2047,7 @@ class WebApp
         return Role::delete($id);
     }
 
-    public static function listIntegrations(int $applicationId, ?int $tenantId = null): array
+    public static function listIntegrations(int $applicationId): array
     {
 
         if (self::scope()['demo']) {
@@ -2103,14 +2062,14 @@ class WebApp
             ];
         }
         if ($applicationId > 0) {
-            $appIds = self::visibleAppIds($tenantId);
+            $appIds = self::visibleAppIds();
             if ($appIds !== null && !in_array($applicationId, $appIds, true)) {
                 return [];
             }
             return Integration::list($applicationId);
         }
 
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds === null || !$appIds) {
             return [];
         }
@@ -2123,9 +2082,9 @@ class WebApp
     {
         $appId = (int) ($p['application_id'] ?? 0);
         if (!self::appInScope($appId)) {
-            return ['error' => 'forbidden: application not in your tenant'];
+            return ['error' => 'forbidden: application not in your account'];
         }
-        $p['tenant_id'] = self::createTenantId($p);
+        $p['owner_id'] = self::createOwnerId();
         return Integration::create($p);
     }
     public static function updateIntegration(int $id, array $p): array
@@ -2135,7 +2094,7 @@ class WebApp
             return ['error' => 'integration not found'];
         }
         if (!self::appInScope((int) $row['application_id'])) {
-            return ['error' => 'forbidden: integration not in your tenant'];
+            return ['error' => 'forbidden: integration not in your account'];
         }
         return Integration::update($id, $p);
     }
@@ -2146,12 +2105,12 @@ class WebApp
             return ['error' => 'integration not found'];
         }
         if (!self::appInScope((int) $row['application_id'])) {
-            return ['error' => 'forbidden: integration not in your tenant'];
+            return ['error' => 'forbidden: integration not in your account'];
         }
         return Integration::delete($id);
     }
 
-    public static function listMulticastGroups(?int $appId = null, ?int $tenantId = null): array
+    public static function listMulticastGroups(?int $appId = null): array
     {
         if (self::scope()['demo']) {
             return self::demoMulticastGroups($appId);
@@ -2163,7 +2122,7 @@ class WebApp
             $where[] = "application_id=?";
             $params[] = $appId;
         }
-        $appIds = self::visibleAppIds($tenantId);
+        $appIds = self::visibleAppIds();
         if ($appIds !== null) {
             if (!$appIds) {
                 return [];
@@ -2191,9 +2150,9 @@ class WebApp
             return ['error' => 'application_id required'];
         }
         if (!self::appInScope($appId)) {
-            return ['error' => 'forbidden: application not in your tenant'];
+            return ['error' => 'forbidden: application not in your account'];
         }
-        $tid = self::createTenantId($p);
+        $oid = self::createOwnerId();
         $region = $p['region'] ?? ELW_DEFAULT_REGION;
         if (!in_array(strtoupper($region), Region::supported(), true)) {
             return ['error' => 'unsupported region: ' . $region];
@@ -2210,10 +2169,10 @@ class WebApp
             $type = 'C';
         }
         Database::execute(
-            "INSERT INTO multicast_groups (name, application_id, tenant_id, region, group_type, mc_addr, mc_nwk_s_key, mc_app_s_key, f_cnt, dr, frequency, class_b_ping_slot_periodicity, class_c_scheduling_type, created_at)
+            "INSERT INTO multicast_groups (name, application_id, owner_id, region, group_type, mc_addr, mc_nwk_s_key, mc_app_s_key, f_cnt, dr, frequency, class_b_ping_slot_periodicity, class_c_scheduling_type, created_at)
              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [
-                $p['name'] ?? 'Multicast', $appId, $tid, $region, $type, $mcAddr, $mcNwk, $mcApp,
+                $p['name'] ?? 'Multicast', $appId, $oid, $region, $type, $mcAddr, $mcNwk, $mcApp,
                 0, (int) ($p['dr'] ?? 0), (int) ($p['frequency'] ?? 0),
                 (int) ($p['class_b_ping_slot_periodicity'] ?? 0),
                 $p['class_c_scheduling_type'] ?? 'DELAY', time(),
@@ -2228,7 +2187,7 @@ class WebApp
             return ['error' => 'group not found'];
         }
         if (!self::canAccess($g)) {
-            return ['error' => 'forbidden: group not in your tenant'];
+            return ['error' => 'forbidden: group not in your account'];
         }
         $set = [];
         $params = [];
@@ -2264,7 +2223,7 @@ class WebApp
             return ['error' => 'group not found'];
         }
         if (!self::canAccess($g)) {
-            return ['error' => 'forbidden: group not in your tenant'];
+            return ['error' => 'forbidden: group not in your account'];
         }
         if ($port < 1 || $port > 223) {
             return ['error' => 'port must be 1..223'];
@@ -2309,7 +2268,7 @@ class WebApp
 
     public static function listFuotaCampaigns(): array
     {
-        $tid = self::effectiveTenant();
+        $tid = self::effectiveOwner();
         if ($tid === null) {
             return Fuota::listCampaigns(0, true);
         }
@@ -2327,7 +2286,7 @@ class WebApp
         if (!$mg || !self::appInScope((int) $mg['application_id'])) {
             return ['error' => 'multicast group not found or forbidden'];
         }
-        $p['tenant_id'] = self::createTenantId($p);
+        $p['owner_id'] = self::createOwnerId();
         return Fuota::createCampaign($p);
     }
 
@@ -2396,10 +2355,11 @@ class WebApp
         return ['ok' => true];
     }
 
-    public static function clearLogs(string $target, ?int $tenantId = null): array
+    public static function clearLogs(string $target): array
     {
         $tables = [
             'api' => 'api_logs',
+            'integration-logs' => 'integration_logs',
             'uplinks' => 'uplinks',
             'downlinks' => 'downlinks',
             'events' => 'events',
@@ -2408,25 +2368,22 @@ class WebApp
             return ['error' => 'invalid log target'];
         }
         $s = self::scope();
-
-        $tid = $s['is_admin']
-            ? ($tenantId && $tenantId > 0 ? (int) $tenantId : null)
-            : ($s['tenant_id'] ?: null);
+        $oid = $s['is_admin'] ? null : ($s['owner_id'] > 0 ? $s['owner_id'] : null);
         $tbl = $tables[$target];
-        if ($tid === null) {
+        if ($oid === null) {
             Database::execute("DELETE FROM " . $tbl);
-        } elseif ($target === 'api') {
-            Database::execute("DELETE FROM api_logs WHERE tenant_id=?", [$tid]);
+        } elseif ($target === 'api' || $target === 'integration-logs') {
+            Database::execute("DELETE FROM " . $tbl . " WHERE owner_id=?", [$oid]);
         } elseif ($target === 'events') {
             Database::execute(
-                "DELETE FROM events WHERE dev_id IN (SELECT id FROM devices WHERE tenant_id=?) "
-                . "OR gateway_id IN (SELECT gw_id FROM gateways WHERE tenant_id=?)",
-                [$tid, $tid]
+                "DELETE FROM events WHERE dev_id IN (SELECT id FROM devices WHERE owner_id=?) "
+                . "OR gateway_id IN (SELECT gw_id FROM gateways WHERE owner_id=?)",
+                [$oid, $oid]
             );
         } else {
 
-            Database::execute("DELETE FROM " . $tbl . " WHERE app_id IN (SELECT id FROM applications WHERE tenant_id=?)", [$tid]);
+            Database::execute("DELETE FROM " . $tbl . " WHERE app_id IN (SELECT id FROM applications WHERE owner_id=?)", [$oid]);
         }
-        return ['target' => $target, 'tenant_id' => $tid, 'cleared' => true];
+        return ['target' => $target, 'owner_id' => $oid, 'cleared' => true];
     }
 }

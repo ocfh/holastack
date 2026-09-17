@@ -7,10 +7,10 @@ class Automation
 {
     public const OPERATORS = ['gt', 'ge', 'lt', 'le', 'eq', 'neq', 'in'];
 
-    public static function list(?int $tenantId = null): array
+    public static function list(?int $ownerId = null): array
     {
-        if ($tenantId !== null) {
-            return Database::fetchAll("SELECT * FROM automations WHERE tenant_id=? ORDER BY id DESC", [$tenantId]);
+        if ($ownerId !== null) {
+            return Database::fetchAll("SELECT * FROM automations WHERE owner_id=? ORDER BY id DESC", [$ownerId]);
         }
         return Database::fetchAll("SELECT * FROM automations ORDER BY id DESC");
     }
@@ -32,9 +32,9 @@ class Automation
             return $norm;
         }
         Database::execute(
-            "INSERT INTO automations (tenant_id, application_id, name, trigger_device_id, trigger_field, trigger_operator, trigger_value, cooldown_seconds, enabled, action_type, action_device_id, action_port, action_payload_hex, action_confirmed, notify_group_id, fired_count, last_fired_at, last_result, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,'',?)",
+            "INSERT INTO automations (owner_id, application_id, name, trigger_device_id, trigger_field, trigger_operator, trigger_value, cooldown_seconds, enabled, action_type, action_device_id, action_port, action_payload_hex, action_confirmed, notify_group_id, fired_count, last_fired_at, last_result, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,'',?)",
             [
-                $norm['tenant_id'], $norm['application_id'], $norm['name'],
+                $norm['owner_id'], $norm['application_id'], $norm['name'],
                 $norm['trigger_device_id'], $norm['trigger_field'], $norm['trigger_operator'], $norm['trigger_value'],
                 $norm['cooldown_seconds'], $norm['enabled'],
                 $norm['action_type'], $norm['action_device_id'], $norm['action_port'], $norm['action_payload_hex'], $norm['action_confirmed'],
@@ -200,7 +200,7 @@ class Automation
     private static function normalize(array $p): array
     {
         $appId = (int) ($p['application_id'] ?? 0);
-        $app = $appId > 0 ? Database::fetch("SELECT id, tenant_id FROM applications WHERE id=?", [$appId]) : null;
+        $app = $appId > 0 ? Database::fetch("SELECT id, owner_id FROM applications WHERE id=?", [$appId]) : null;
         if (!$app) {
             return ['error' => 'application_not_found'];
         }
@@ -233,7 +233,7 @@ class Automation
             return ['error' => 'action_payload_hex_invalid'];
         }
         return [
-            'tenant_id'         => (int) ($p['tenant_id'] ?? (int) $app['tenant_id']),
+            'owner_id'         => (int) ($p['owner_id'] ?? (int) $app['owner_id']),
             'application_id'    => $appId,
             'name'              => $name,
             'trigger_device_id' => (int) ($p['trigger_device_id'] ?? 0),

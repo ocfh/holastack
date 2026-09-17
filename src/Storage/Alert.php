@@ -8,7 +8,7 @@ class Alert
     public const OPERATORS = ['gt', 'ge', 'lt', 'le', 'eq', 'neq', 'in'];
     public const SEVERITIES = ['info', 'warn', 'critical'];
 
-    public static function listRules(int $appId, ?int $tenantId = null): array
+    public static function listRules(int $appId, ?int $ownerId = null): array
     {
         $where = '1=1';
         $args = [];
@@ -16,9 +16,9 @@ class Alert
             $where .= ' AND application_id=?';
             $args[] = $appId;
         }
-        if ($tenantId !== null) {
-            $where .= ' AND tenant_id=?';
-            $args[] = $tenantId;
+        if ($ownerId !== null) {
+            $where .= ' AND owner_id=?';
+            $args[] = $ownerId;
         }
         return Database::fetchAll("SELECT * FROM alert_rules WHERE $where ORDER BY id DESC", $args);
     }
@@ -32,9 +32,9 @@ class Alert
     {
         $norm = self::normalizeRule($p);
         Database::execute(
-            "INSERT INTO alert_rules (tenant_id, application_id, device_id, name, field_key, operator, threshold, severity, notify_group_id, enabled, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO alert_rules (owner_id, application_id, device_id, name, field_key, operator, threshold, severity, notify_group_id, enabled, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
-                (int) ($p['tenant_id'] ?? 0),
+                (int) ($p['owner_id'] ?? 0),
                 $norm['application_id'],
                 $norm['device_id'],
                 $norm['name'],
@@ -97,10 +97,10 @@ class Alert
         ];
     }
 
-    public static function listGroups(?int $tenantId = null): array
+    public static function listGroups(?int $ownerId = null): array
     {
-        if ($tenantId !== null) {
-            return Database::fetchAll("SELECT * FROM alert_notification_groups WHERE tenant_id=? ORDER BY id DESC", [$tenantId]);
+        if ($ownerId !== null) {
+            return Database::fetchAll("SELECT * FROM alert_notification_groups WHERE owner_id=? ORDER BY id DESC", [$ownerId]);
         }
         return Database::fetchAll("SELECT * FROM alert_notification_groups ORDER BY id DESC");
     }
@@ -113,9 +113,9 @@ class Alert
     public static function createGroup(array $p): array
     {
         Database::execute(
-            "INSERT INTO alert_notification_groups (tenant_id, name, webhook_url, enabled, created_at) VALUES (?,?,?,?,?)",
+            "INSERT INTO alert_notification_groups (owner_id, name, webhook_url, enabled, created_at) VALUES (?,?,?,?,?)",
             [
-                (int) ($p['tenant_id'] ?? 0),
+                (int) ($p['owner_id'] ?? 0),
                 mb_substr((string) ($p['name'] ?? ''), 0, 128),
                 (string) ($p['webhook_url'] ?? ''),
                 empty($p['enabled']) ? 0 : 1,
@@ -145,13 +145,13 @@ class Alert
         return ['id' => $id];
     }
 
-    public static function listAlerts(?int $tenantId, int $limit, int $offset, ?int $deviceId = null, string $status = ''): array
+    public static function listAlerts(?int $ownerId, int $limit, int $offset, ?int $deviceId = null, string $status = ''): array
     {
         $where = '1=1';
         $args = [];
-        if ($tenantId !== null) {
-            $where .= ' AND tenant_id=?';
-            $args[] = $tenantId;
+        if ($ownerId !== null) {
+            $where .= ' AND owner_id=?';
+            $args[] = $ownerId;
         }
         if ($deviceId !== null && $deviceId > 0) {
             $where .= ' AND device_id=?';
@@ -166,16 +166,16 @@ class Alert
         return Database::fetchAll("SELECT * FROM alerts WHERE $where ORDER BY id DESC LIMIT $limit OFFSET $offset", $args);
     }
 
-    public static function activeAlerts(?int $tenantId, int $limit = 100): array
+    public static function activeAlerts(?int $ownerId, int $limit = 100): array
     {
-        return self::listAlerts($tenantId, $limit, 0, null, 'triggered');
+        return self::listAlerts($ownerId, $limit, 0, null, 'triggered');
     }
 
-    public static function counts(?int $tenantId): array
+    public static function counts(?int $ownerId): array
     {
         $where = '';
-        if ($tenantId !== null) {
-            $where = 'tenant_id=' . (int) $tenantId;
+        if ($ownerId !== null) {
+            $where = 'owner_id=' . (int) $ownerId;
         }
         $triggered = (int) Database::fetchOne(
             'SELECT COUNT(*) FROM alerts' . ($where !== '' ? " WHERE $where AND" : ' WHERE') . " status='triggered'"
@@ -203,17 +203,17 @@ class Alert
         if ($appId <= 0) {
             return;
         }
-        $tenantId = (int) ($device['tenant_id'] ?? 0);
+        $ownerId = (int) ($device['owner_id'] ?? 0);
         $rules = Database::fetchAll(
             "SELECT * FROM alert_rules WHERE enabled=1 AND application_id=? AND (device_id=0 OR device_id=?)",
             [$appId, $devId]
         );
         foreach ($rules as $rule) {
-            self::evalRule($devId, $tenantId, $device, $rule, $decoded);
+            self::evalRule($devId, $ownerId, $device, $rule, $decoded);
         }
     }
 
-    private static function evalRule(int $devId, int $tenantId, array $device, array $rule, array $decoded): void
+    private static function evalRule(int $devId, int $ownerId, array $device, array $rule, array $decoded): void
     {
         $key = (string) ($rule['field_key'] ?? '');
         if ($key === '' || !isset($decoded[$key])) {
@@ -236,8 +236,8 @@ class Alert
             $opLabel = self::opLabel((string) ($rule['operator'] ?? 'gt'));
             $msg = sprintf('%s 字段「%s」值 %s %s %s，触发告警', $devName, $key, $text, $opLabel, (string) ($rule['threshold'] ?? ''));
             Database::execute(
-                "INSERT INTO alerts (tenant_id, device_id, device_name, rule_id, rule_name, field_key, value, text_value, severity, status, message, ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                [$tenantId, $devId, $devName, $rule['id'], $ruleName, $key, is_numeric($value) ? (float) $value : 0, mb_substr($text, 0, 255), $sev, 'triggered', mb_substr($msg, 0, 255), time()]
+                "INSERT INTO alerts (owner_id, device_id, device_name, rule_id, rule_name, field_key, value, text_value, severity, status, message, ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                [$ownerId, $devId, $devName, $rule['id'], $ruleName, $key, is_numeric($value) ? (float) $value : 0, mb_substr($text, 0, 255), $sev, 'triggered', mb_substr($msg, 0, 255), time()]
             );
             self::notify($rule, $devName, $msg, $sev, 'triggered', ['field' => $key, 'value' => $value, 'text' => $text, 'device_id' => $devId]);
         } elseif ($open) {

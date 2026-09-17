@@ -13,7 +13,7 @@ class ApiLog
         try {
             Database::execute(
                 "INSERT INTO api_logs
-                  (created_at, method, path, status, latency_ms, ip, user_id, username, role, tenant_id, application_id, query, body_size)
+                  (created_at, method, path, status, latency_ms, ip, user_id, username, role, owner_id, application_id, query, body_size)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     (int) ($entry['created_at'] ?? time()),
@@ -25,7 +25,7 @@ class ApiLog
                     (int) ($entry['user_id'] ?? 0),
                     substr((string) ($entry['username'] ?? ''), 0, 64),
                     substr((string) ($entry['role'] ?? ''), 0, 16),
-                    (int) ($entry['tenant_id'] ?? 0),
+                    (int) ($entry['owner_id'] ?? 0),
                     (int) ($entry['application_id'] ?? 0),
                     substr((string) ($entry['query'] ?? ''), 0, 512),
                     max(0, (int) ($entry['body_size'] ?? 0)),
@@ -66,14 +66,14 @@ class ApiLog
         $where = [];
         $params = [];
         $role = (string) ($user['role'] ?? '');
-        $scope = ($role === 'admin' || $role === 'operator') ? 'all' : 'tenant';
-        if ($scope === 'tenant') {
-            $where[] = 'tenant_id=?';
-            $params[] = (int) ($user['tenant_id'] ?? 0);
+        $scope = ($role === 'admin' || $role === 'operator') ? 'all' : 'owner';
+        if ($scope === 'owner') {
+            $where[] = 'owner_id=?';
+            $params[] = (int) ($user['id'] ?? 0);
         }
-        if (!empty($filters['tenant_id'])) {
-            $where[] = 'tenant_id=?';
-            $params[] = (int) $filters['tenant_id'];
+        if (!empty($filters['owner_id'])) {
+            $where[] = 'owner_id=?';
+            $params[] = (int) $filters['owner_id'];
         }
         if (!empty($filters['application_id'])) {
             $where[] = 'application_id=?';
@@ -115,7 +115,7 @@ class ApiLog
         $limit = max(1, min(500, $limit));
         $offset = max(0, $offset);
         $rows = Database::fetchAll(
-            "SELECT id, created_at, method, path, status, latency_ms, ip, user_id, username, role, tenant_id, application_id, query, body_size
+            "SELECT id, created_at, method, path, status, latency_ms, ip, user_id, username, role, owner_id, application_id, query, body_size
              FROM api_logs$whereSql
              ORDER BY id DESC LIMIT $limit OFFSET $offset",
             $params

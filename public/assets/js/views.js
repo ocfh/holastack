@@ -124,18 +124,8 @@ function dashUpRow(e){
 const rawBtn = (id, fn) => `<button class="raw-btn" title="查看原始 JSON" onclick="${fn}(${id})">${ICON.magnifyingGlass}</button>`;
 const frameBtn = (id, fn) => `<button class="raw-btn" title="${t('帧结构检视')}" onclick="${fn}(${id})">${ICON.codeBracket}</button>`;
 
-async function tenantFilterHtml(){
-  if (!isAdmin()) return '';
-  let opts = '';
-  try {
-    const r = await api('GET','/api/tenants');
-    opts = (r.data||[]).map(row=>`<option value="${row.id}" ${String(state.tenantFilter)===String(row.id)?'selected':''}>${esc(row.name)}</option>`).join('');
-  } catch(e){}
-  return `<div style="flex:0 0 220px"><label>用户配置筛选</label><select id="tf" onchange="state.tenantFilter=this.value;nav(state.view)"><option value="">全部用户配置</option>${opts}</select></div>`;
-}
 async function viewApplications(){
-  const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
-  const [r, tf] = await Promise.all([api('GET','/api/applications'+q), tenantFilterHtml()]);
+  const r = await api('GET','/api/applications');
   state.apps = r.data||[];
   const cfg = {
     state, stateKey:'appsSort',
@@ -164,17 +154,15 @@ async function viewApplications(){
   window.viewApplications__page = p => _pagerGo({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',p);
   window.viewApplications__limit = l => _pagerSetLimit({pageKey:'appsPage',limitKey:'appsLimit',offsetKey:'appsOffset',totalKey:'appsTotal'},'viewApplications',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['applications']]||''}应用</h2>${adminBtn('<button onclick="newApplication()">'+ICON.plus+'新建应用</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">'+ICON.arrowPath+'重置</button>':''}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.appsPage=1;state.appsOffset=0;state.appsLimit=50;}, viewApplications)">'+ICON.arrowPath+'重置</button>':''}</div>
     ${table}
     ${pager}`;
 }
 async function viewDevices(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const q = [tq, state.devAppFilter ? ('app_id='+state.devAppFilter) : ''].filter(Boolean).join('&');
-  const [r, ar, tf] = await Promise.all([
+  const q = state.devAppFilter ? ('app_id='+state.devAppFilter) : '';
+  const [r, ar] = await Promise.all([
     api('GET','/api/devices'+(q?'?'+q:'')),
-    api('GET','/api/applications'+(tq?'?'+tq:'')),
-    tenantFilterHtml()
+    api('GET','/api/applications')
   ]);
   state.devs = r.data||[];
   const apps = ar.data||[];
@@ -262,7 +250,7 @@ async function viewDevices(){
   window.viewDevices__page = p => _pagerGo({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',p);
   window.viewDevices__limit = l => _pagerSetLimit({pageKey:'devsPage',limitKey:'devsLimit',offsetKey:'devsOffset',totalKey:'devsTotal'},'viewDevices',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['devices']]||''}设备</h2>${adminBtn('<div style="display:inline-flex;gap:8px;flex-wrap:wrap;margin-left:auto"><button onclick="newDevice()">'+ICON.plus+'添加设备</button><button class="btn ghost" onclick="importDevicesForm()">批量导入</button><button class="btn ghost" onclick="exportDevicesCsv()">导出CSV</button></div>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px"><div style="flex:0 0 240px"><label>按应用筛选</label><select id="devAppFilter" onchange="state.devAppFilter=this.value;viewDevices()">${appOpts}</select></div>
     <button class="btn ghost" onclick="resetFilters(()=>{state.devAppFilter='';state.devsFActivation='';state.devsFCls='';state.devsFOnline='';state.devsFStatus='';state.devsSort={col:'time',dir:'desc'};state.devsPage=1;state.devsOffset=0;state.devsLimit=50;}, viewDevices)">${ICON.arrowPath}重置</button></div>
     ${table}
     ${pager}`;
@@ -454,18 +442,13 @@ async function copyKeyField(input, label){
   toast(ok ? `${label} 已复制` : `复制失败，请手动选中`, ok ? 'copy' : 'err');
 }
 async function viewGateways(){
-  const q = state.tenantFilter ? `?tenant_id=${state.tenantFilter}` : '';
-  const [r, tf] = await Promise.all([api('GET','/api/gateways'+q), tenantFilterHtml()]);
+  const r = await api('GET','/api/gateways');
   state.gws = r.data||[];
   const onlineValues = [
     {value:'', label:'全部'},
     {value:'online',  label:'在线'},
     {value:'offline', label:'离线'},
   ];
-  let tenantMap = {};
-  if (isAdmin()) {
-    try { const tr = await api('GET','/api/tenants'); (tr.data||[]).forEach(x=>tenantMap[x.id]=x.name); } catch(e){}
-  }
   const gwCols = [
     {key:'gw_id',   label:'GatewayID', type:'str', firstDir:'asc', sortable:false},
     {key:'name',    label:'名称',       type:'str', firstDir:'asc', sortable:false},
@@ -475,21 +458,19 @@ async function viewGateways(){
     {key:'time',    label:'最近心跳',   type:'time', firstDir:'desc'},
     {key:'_raw',    label:'',          type:'raw'},
   ];
-  if (isAdmin()) gwCols.splice(4, 0, {key:'tenant', label:'归属', type:'str', firstDir:'asc', sortable:false});
   const gwCfg = {
     state, stateKey:'gwsSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?'online':'offline', region:g.region||'', tenant:tenantMap[g.tenant_id]||'未分配', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
+    cellValue: (g, k) => ({gw_id:g.gw_id, name:g.name, online:g.status==='online'?'online':'offline', region:g.region||'', uplinks:g.uplinks||0, time:+g.last_seen||0}[k]),
     cols: gwCols,
     filterStatus: {col:'online', value: state.gwsFOnline},
     rows: state.gws,
     rowHtml: g => {
       const online = g.status==='online';
       const seen = g.last_seen ? new Date(g.last_seen*1000).toLocaleString() : '-';
-      const tenantTd = isAdmin() ? `<td class="muted">${esc(tenantMap[g.tenant_id]||'未分配')}</td>` : '';
       return `<tr><td class="muted">${g.gw_id}</td><td>${esc(g.name)}</td>
         <td><span class="tag ${online?'ok':'off'}">${online?'在线':'离线'}</span></td>
-        <td class="muted">${esc(g.region)}</td>${tenantTd}<td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
+        <td class="muted">${esc(g.region)}</td><td class="muted">${g.uplinks||0}</td><td class="muted">${seen}</td>
         <td>${adminBtn(`<button class="btn ghost" onclick="editGateway('${g.gw_id}')">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delGateway('${g.gw_id}'))">${ICON.trash}删除</button>`)}</td></tr>`;
     },
     emptyText:'暂无网关（网关连接后自动出现，亦可手动添加）',
@@ -504,22 +485,20 @@ async function viewGateways(){
   window.viewGateways__page = p => _pagerGo({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',p);
   window.viewGateways__limit = l => _pagerSetLimit({pageKey:'gwsPage',limitKey:'gwsLimit',offsetKey:'gwsOffset',totalKey:'gwsTotal'},'viewGateways',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['gateways']]||''}网关</h2>${adminBtn('<button onclick="newGateway()">'+ICON.plus+'新建网关</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline=\'\';state.gwsSort={col:\'time\',dir:\'desc\'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">'+ICON.arrowPath+'重置</button>':''}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.gwsFOnline=\'\';state.gwsSort={col:\'time\',dir:\'desc\'};state.gwsPage=1;state.gwsOffset=0;state.gwsLimit=50;}, viewGateways)">'+ICON.arrowPath+'重置</button>':''}</div>
     ${table}
     ${pager}`;
 }
 
 async function viewUplinks(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const qs = [tq, state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : '', 'limit='+state.upsLimit, 'offset='+state.upsOffset].filter(Boolean).join('&');
+  const qs = [state.upsFilter ? ('dev_id='+state.upsFilter) : '', state.upsAppFilter ? ('app_id='+state.upsAppFilter) : '', 'limit='+state.upsLimit, 'offset='+state.upsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/uplinks' + (qs ? '?'+qs : '')); state.ups = r.data||[];
   if (typeof r.total === 'number') state.upsTotal = r.total;
 
-  const devQ = [tq, state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
-  const [dr, ar, tf] = await Promise.all([
+  const devQ = [state.upsAppFilter ? ('app_id='+state.upsAppFilter) : ''].filter(Boolean).join('&');
+  const [dr, ar] = await Promise.all([
     api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
-    api('GET','/api/applications' + (tq ? '?'+tq : '')),
-    tenantFilterHtml()
+    api('GET','/api/applications')
   ]);
   const devs = dr.data||[], apps = ar.data||[];
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
@@ -577,7 +556,6 @@ async function viewUplinks(){
   const pager = buildPager({ total: state.upsTotal, limit: state.upsLimit, offset: state.upsOffset, pageKey:'upsPage', limitKey:'upsLimit', offsetKey:'upsOffset', totalKey:'upsTotal', refresh:'viewUplinks' });
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['uplinks']]||''}上行消息日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('uplinks','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('uplinks','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('uplinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
-      ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="upAppFilter" onchange="state.upsAppFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="upFilter" onchange="state.upsFilter=this.value;state.upsPage=1;state.upsOffset=0;viewUplinks()">${devOpts}</select></div>
       <button class="btn ghost" onclick="resetFilters(()=>{state.upsFilter='';state.upsAppFilter='';state.upsSort={col:'time',dir:'desc'};state.upsFFcnt='';state.upsFPort='';state.upsPage=1;state.upsOffset=0;state.upsLimit=50;}, viewUplinks)">${ICON.arrowPath}重置</button>
@@ -634,16 +612,14 @@ const DL_STATUS = {
   error:      {label:'错误',   cls:'err'}
 };
 async function viewDownlinks(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const qs = [tq, state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : '', 'limit='+state.dlsLimit, 'offset='+state.dlsOffset].filter(Boolean).join('&');
+  const qs = [state.dlDevFilter ? ('dev_id='+state.dlDevFilter) : '', state.dlAppFilter ? ('app_id='+state.dlAppFilter) : '', 'limit='+state.dlsLimit, 'offset='+state.dlsOffset].filter(Boolean).join('&');
   const r = await api('GET','/api/downlinks' + (qs ? '?'+qs : '')); state.dls = r.data||[];
   if (typeof r.total === 'number') state.dlsTotal = r.total;
 
-  const devQ = [tq, state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
-  const [dr, ar, tf] = await Promise.all([
+  const devQ = [state.dlAppFilter ? ('app_id='+state.dlAppFilter) : ''].filter(Boolean).join('&');
+  const [dr, ar] = await Promise.all([
     api('GET','/api/devices' + (devQ ? '?'+devQ : '')),
-    api('GET','/api/applications' + (tq ? '?'+tq : '')),
-    tenantFilterHtml()
+    api('GET','/api/applications')
   ]);
   const devs = dr.data||[], apps = ar.data||[];
   const appName = id => { const a = apps.find(x=>x.id===id); return a ? a.name : ('#'+id); };
@@ -699,7 +675,6 @@ async function viewDownlinks(){
   const pager = buildPager({ total: state.dlsTotal, limit: state.dlsLimit, offset: state.dlsOffset, pageKey:'dlsPage', limitKey:'dlsLimit', offsetKey:'dlsOffset', totalKey:'dlsTotal', refresh:'viewDownlinks' });
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['downlinks']]||''}下行消息日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('downlinks','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('downlinks','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('downlinks')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
-      ${tf}
       <div style="flex:0 0 300px"><label>按应用筛选</label><select id="dlAppFilter" onchange="state.dlAppFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${appOpts}</select></div>
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="dlDevFilter" onchange="state.dlDevFilter=this.value;state.dlsPage=1;state.dlsOffset=0;viewDownlinks()">${devOpts}</select></div>
       <button class="btn ghost" onclick="resetFilters(()=>{state.dlDevFilter='';state.dlAppFilter='';state.dlsSort={col:'time',dir:'desc'};state.dlsPage=1;state.dlsOffset=0;state.dlsLimit=50;state.dlsFStatus='';}, viewDownlinks)">${ICON.arrowPath}重置</button>
@@ -751,17 +726,14 @@ async function showDownlinkRaw(id){
 }
 
 async function viewEvents(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
 
-  const [rd, rg, tf] = await Promise.all([
-    api('GET','/api/devices' + (tq ? '?'+tq : '')),
-    api('GET','/api/gateways' + (tq ? '?'+tq : '')),
-    tenantFilterHtml()
+  const [rd, rg] = await Promise.all([
+    api('GET','/api/devices'),
+    api('GET','/api/gateways')
   ]);
   state.devs = rd.data||[]; state.gws = rg.data||[];
 
   let q = [];
-  if (tq) q.push(tq);
   if (state.evsDevFilter) q.push('dev_id=' + state.evsDevFilter);
   if (state.evsGwFilter)  q.push('gw_id=' + encodeURIComponent(state.evsGwFilter));
   if (state.evsFType)     q.push('type=' + encodeURIComponent(state.evsFType));
@@ -830,7 +802,6 @@ async function viewEvents(){
   const pager = buildPager({ total: state.evsTotal, limit: state.evsLimit, offset: state.evsOffset, pageKey:'evsPage', limitKey:'evsLimit', offsetKey:'evsOffset', totalKey:'evsTotal', refresh:'viewEvents' });
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['events']]||''}网关日志</h2><div style="display:flex;gap:10px;align-items:center;margin-left:auto"><button class="btn ghost" onclick="exportCapture('events','json')">导出JSON</button><button class="btn ghost" onclick="exportCapture('events','csv')">导出CSV</button><button class="btn danger" onclick="clearPageLogs('events')">${ICON.trash}${t('清空日志')}</button> ${logRefreshCtrl()}</div></div>
     <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">
-      ${tf}
       <div style="flex:0 0 300px"><label>按设备筛选</label><select id="evs_dev" onchange="state.evsDevFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${devOpts}</select></div>
       <div style="flex:0 0 300px"><label>按网关筛选</label><select id="evs_gw" onchange="state.evsGwFilter=this.value; state.evsPage=1; state.evsOffset=0; viewEvents()">${gwOpts}</select></div>
       <button class="btn ghost" onclick="resetFilters(()=>{state.evsDevFilter=''; state.evsGwFilter=''; state.evsSort={col:'time',dir:'desc'}; state.evsFType=''; state.evsFLevel=''; state.evsPage=1; state.evsOffset=0; state.evsLimit=50;}, viewEvents)">${ICON.arrowPath}重置</button>
@@ -887,13 +858,11 @@ async function viewUsers(){
 }
 
 async function viewApiLogs(){
-  const showTenant = isAdmin() || isDemo();
   const params = [];
   if (state.apiLogFilter.path) params.push('path_contains=' + encodeURIComponent(state.apiLogFilter.path));
   if (state.apiLogFilter.ip) params.push('ip=' + encodeURIComponent(state.apiLogFilter.ip));
 
   if (state.apiLogFilter.method) params.push('method=' + state.apiLogFilter.method);
-  if (showTenant && state.apiLogFilter.tenant_id) params.push('tenant_id=' + state.apiLogFilter.tenant_id);
   if (state.apiLogFilter.application_id) params.push('application_id=' + state.apiLogFilter.application_id);
 
   params.push('limit=' + (state.apiLogLimit|0 || 50));
@@ -903,14 +872,9 @@ async function viewApiLogs(){
   const rowsAll = (r.data || []);
   state.apiLogTotal = +r.total || 0;
 
-  let tenantOpts = '';
   let appOpts = '';
-  if (showTenant) {
-    try { const tr = await api('GET','/api/tenants'); tenantOpts = (tr.data||[]).map(x=>`<option value="${x.id}" ${String(state.apiLogFilter.tenant_id)===String(x.id)?'selected':''}>${esc(x.name)}</option>`).join(''); } catch(e){}
-  }
   try {
-    const aq = showTenant && state.apiLogFilter.tenant_id ? ('?tenant_id=' + state.apiLogFilter.tenant_id) : '';
-    const ar = await api('GET', '/api/applications' + aq);
+    const ar = await api('GET', '/api/applications');
     appOpts = (ar.data||[]).map(x=>`<option value="${x.id}" ${String(state.apiLogFilter.application_id)===String(x.id)?'selected':''}>${esc(x.name)}</option>`).join('');
   } catch(e){}
   const statusTag = s => {
@@ -931,7 +895,7 @@ async function viewApiLogs(){
   const table = buildSortableTable({
     state, stateKey:'apiLogSort',
     defaultSort:{col:'time',dir:'desc'},
-    cellValue: (r, k) => ({time:r.created_at, method:r.method, path:r.path, status:r.status, latency:r.latency_ms, ip:r.ip, user:r.username||'', tenant:r.tenant_id||0, app:r.application_id||0, body:r.body_size||0}[k]),
+    cellValue: (r, k) => ({time:r.created_at, method:r.method, path:r.path, status:r.status, latency:r.latency_ms, ip:r.ip, user:r.username||'', app:r.application_id||0, body:r.body_size||0}[k]),
     cols:[
       {key:'time',    label:t('时间'), type:'time', firstDir:'desc'},
       {key:'method',  label:t('方法'), type:'str',  firstDir:'asc', sortable:false},
@@ -940,7 +904,6 @@ async function viewApiLogs(){
       {key:'latency', label:t('耗时'), type:'num',  firstDir:'asc', sortable:false},
       {key:'ip',      label:t('IP'),   type:'str',  firstDir:'asc', sortable:false},
       {key:'user',    label:t('用户'), type:'str',  firstDir:'asc', sortable:false},
-      ...(showTenant ? [{key:'tenant', label:t('租户'), type:'num', firstDir:'asc', sortable:false}] : []),
       {key:'app',     label:t('应用'), type:'num',  firstDir:'asc', sortable:false},
       {key:'body',    label:t('Body'), type:'num', firstDir:'asc', sortable:false},
     ],
@@ -954,7 +917,6 @@ async function viewApiLogs(){
       <td class="muted">${r.latency_ms}ms</td>
       <td class="muted" style="font-family:monospace">${esc(r.ip||'-')}</td>
       <td class="muted">${esc(r.username||'-')}${r.role?` <span class="tag">${esc(r.role)}</span>`:''}</td>
-      ${showTenant ? `<td class="muted">${r.tenant_id?('#'+r.tenant_id):'-'}</td>` : ''}
       <td class="muted">${r.application_id?('#'+r.application_id):'-'}</td>
       <td class="muted">${r.body_size||0}B</td>
     </tr>`,
@@ -974,7 +936,6 @@ async function viewApiLogs(){
          <option value="PUT" ${state.apiLogFilter.method==='PUT'?'selected':''}>PUT</option>
          <option value="DELETE" ${state.apiLogFilter.method==='DELETE'?'selected':''}>DELETE</option>
        </select></div>
-       ${showTenant ? `<div><label>${t('租户')}</label><select id="${filterId('tenant_id')}"><option value="">${t('全部租户')}</option>${tenantOpts}</select></div>` : ''}
        <div><label>${t('应用')}</label><select id="${filterId('application_id')}"><option value="">${t('全部应用')}</option>${appOpts}</select></div>
        <div style="flex:0 0 auto"><button onclick="applyApiLogFilter()">${t('应用筛选')}</button> <button class="ghost" onclick="resetApiLogFilter()">${t('重置')}</button></div>
      </div>
@@ -993,7 +954,6 @@ function applyApiLogFilter(){
     ip: get('ip').trim(),
     status: '',
     method: get('method'),
-    tenant_id: get('tenant_id'),
     application_id: get('application_id'),
   };
   state.apiLogFStatus = '';
@@ -1003,13 +963,156 @@ function applyApiLogFilter(){
   viewApiLogs();
 }
 function resetApiLogFilter(){
-  state.apiLogFilter = { path:'', ip:'', status:'', method:'', tenant_id:'', application_id:'' };
+  state.apiLogFilter = { path:'', ip:'', status:'', method:'', application_id:'' };
   state.apiLogFStatus = '';
   state.apiLogSort = {col:'time',dir:'desc'};
   state.apiLogPage = 1;
   state.apiLogOffset = 0;
   state.apiLogLimit = 50;
   busy('重置中…', viewApiLogs);
+}
+
+async function viewIntegrationLogs(){
+  state.iLogFilter = state.iLogFilter || { app_id:'', kind:'', event:'', ok:'', dev_eui:'', target:'' };
+  state.iLogLimit = state.iLogLimit || 50;
+  state.iLogOffset = state.iLogOffset || 0;
+  state.iLogTotal = state.iLogTotal || 0;
+  const f = state.iLogFilter;
+  const params = [];
+  if (f.app_id) params.push('app_id=' + encodeURIComponent(f.app_id));
+  if (f.kind) params.push('kind=' + encodeURIComponent(f.kind));
+  if (f.event) params.push('event=' + encodeURIComponent(f.event));
+  if (f.ok !== '' && f.ok !== null) params.push('ok=' + (f.ok ? 1 : 0));
+  if (f.dev_eui) params.push('dev_eui=' + encodeURIComponent(f.dev_eui));
+  if (f.target) params.push('target_contains=' + encodeURIComponent(f.target));
+  params.push('limit=' + (state.iLogLimit|0 || 50));
+  params.push('offset=' + (state.iLogOffset|0 || 0));
+  const r = await api('GET', '/api/integration-logs' + (params.length ? '?' + params.join('&') : ''));
+  const rowsAll = r.data || [];
+  state.iLogTotal = +r.total || 0;
+  state.iLogRows = rowsAll;
+
+  let appOpts = '';
+  try {
+    const ar = await api('GET', '/api/applications');
+    appOpts = (ar.data||[]).map(x=>`<option value="${x.id}" ${String(f.app_id)===String(x.id)?'selected':''}>${esc(x.name)}</option>`).join('');
+  } catch(e){}
+
+  const okTag = (ok, code) => {
+    if (ok) return `<span class="tag ok">${code?code:'OK'}</span>`;
+    return `<span class="tag err">${code?code:'失败'}</span>`;
+  };
+  const eventTag = (ev, trig) => {
+    const cls = ev === 'status' ? 'pending' : 'ok';
+    const label = trig === 'status' ? '状态' : (ev === 'down' ? '下行' : '上行');
+    return `<span class="tag ${cls}">${label}</span>`;
+  };
+
+  const table = buildSortableTable({
+    state, stateKey:'iLogSort',
+    defaultSort:{col:'time',dir:'desc'},
+    cellValue: (r, k) => ({time:r.createdAt, kind:r.kind, device:r.devEui, fcnt:r.fcnt, target:r.target, status:r.ok?1:0, latency:r.latencyMs}[k]),
+    cols:[
+      {key:'time',   label:t('时间'), type:'time', firstDir:'desc'},
+      {key:'kind',   label:t('类型'), type:'str',  firstDir:'asc', sortable:false},
+      {key:'device', label:t('设备 / FCnt'), type:'str', firstDir:'asc', sortable:false},
+      {key:'target', label:t('目标 / 结果'), type:'str', firstDir:'asc', sortable:false},
+      {key:'status', label:t('状态'), type:'num', firstDir:'asc', sortable:false},
+      {key:'latency',label:t('耗时'), type:'num', firstDir:'asc', sortable:false},
+    ],
+    rows: rowsAll,
+    rowHtml: r => `<tr style="cursor:pointer" onclick="showIntegrationLog(${r.id})">
+      <td class="muted">${new Date(r.createdAt*1000).toLocaleString()}</td>
+      <td><span class="tag">${esc(r.kind)}</span> ${eventTag(r.event, r.trigger)}</td>
+      <td style="font-family:monospace;font-size:12px">${esc(r.devEui||'-')}${r.fcnt?` <span class="muted">#${r.fcnt}</span>`:''}${r.fport?` <span class="tag">F${r.fport}</span>`:''}</td>
+      <td class="muted" style="font-family:monospace;font-size:12px;word-break:break-all;max-width:320px">${esc(r.target||'-')}</td>
+      <td>${okTag(r.ok, r.httpStatus)}</td>
+      <td class="muted">${r.latencyMs}ms</td>
+    </tr>`,
+    emptyText: t('暂无集成运行记录'),
+  });
+  const pager = buildPager({ total: state.iLogTotal, limit: state.iLogLimit, offset: state.iLogOffset, pageKey:'iLogPage', limitKey:'iLogLimit', offsetKey:'iLogOffset', totalKey:'iLogTotal', refresh:'viewIntegrationLogs' });
+  const fid = k => 'ilf_' + k;
+  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['integration-logs']]||''}${t('集成运行日志')}</h2><div style="display:flex;align-items:center;gap:12px"><div class="muted" style="font-size:12px">${t('共')} ${state.iLogTotal} ${t('条')}${t('（仅保留最近 10000 条）')}</div><button class="btn danger" onclick="clearPageLogs('integration')">${ICON.trash}${t('清空日志')}</button></div></div>
+   <div class="card" style="margin-bottom:12px">
+     <div class="row" style="align-items:flex-end">
+       <div><label>${t('应用')}</label><select id="${fid('app_id')}"><option value="">${t('全部应用')}</option>${appOpts}</select></div>
+       <div><label>${t('类型')}</label><select id="${fid('kind')}">
+         <option value="">${t('全部')}</option>
+         <option value="WEBHOOK" ${f.kind==='WEBHOOK'?'selected':''}>WEBHOOK</option>
+         <option value="HTTP" ${f.kind==='HTTP'?'selected':''}>HTTP</option>
+         <option value="MQTT_GLOBAL" ${f.kind==='MQTT_GLOBAL'?'selected':''}>MQTT</option>
+         <option value="INFLUX_DB" ${f.kind==='INFLUX_DB'?'selected':''}>InfluxDB</option>
+         <option value="AMQP" ${f.kind==='AMQP'?'selected':''}>AMQP</option>
+         <option value="KAFKA" ${f.kind==='KAFKA'?'selected':''}>Kafka</option>
+         <option value="MODBUS_TCP" ${f.kind==='MODBUS_TCP'?'selected':''}>Modbus</option>
+       </select></div>
+       <div><label>${t('结果')}</label><select id="${fid('ok')}">
+         <option value="">${t('全部')}</option>
+         <option value="1" ${f.ok===1||f.ok==='1'?'selected':''}>${t('成功')}</option>
+         <option value="0" ${f.ok===0||f.ok==='0'?'selected':''}>${t('失败')}</option>
+       </select></div>
+       <div><label>${t('设备 EUI')}</label><input id="${fid('dev_eui')}" value="${esc(f.dev_eui||'')}" placeholder="0080e1…" style="width:150px"></div>
+       <div><label>${t('目标包含')}</label><input id="${fid('target')}" value="${esc(f.target||'')}" placeholder="http://…" style="width:170px"></div>
+       <div style="flex:0 0 auto"><button onclick="applyIntegrationLogFilter()">${t('应用筛选')}</button> <button class="ghost" onclick="resetIntegrationLogFilter()">${t('重置')}</button></div>
+     </div>
+   </div>
+   ${table}
+   ${pager}`;
+  window.iLogSort_sort = col => _tableToggleSort('iLogSort','viewIntegrationLogs',col);
+  window.viewIntegrationLogs__page = p => _pagerGo({pageKey:'iLogPage',limitKey:'iLogLimit',offsetKey:'iLogOffset',totalKey:'iLogTotal'},'viewIntegrationLogs',p);
+  window.viewIntegrationLogs__limit = l => _pagerSetLimit({pageKey:'iLogPage',limitKey:'iLogLimit',offsetKey:'iLogOffset',totalKey:'iLogTotal'},'viewIntegrationLogs',l);
+}
+function applyIntegrationLogFilter(){
+  const get = k => (document.getElementById('ilf_' + k) || {}).value || '';
+  state.iLogFilter = {
+    app_id: get('app_id'),
+    kind: get('kind'),
+    event: '',
+    ok: get('ok'),
+    dev_eui: get('dev_eui').trim(),
+    target: get('target').trim(),
+  };
+  state.iLogSort = {col:'time',dir:'desc'};
+  state.iLogPage = 1;
+  state.iLogOffset = 0;
+  viewIntegrationLogs();
+}
+function resetIntegrationLogFilter(){
+  state.iLogFilter = { app_id:'', kind:'', event:'', ok:'', dev_eui:'', target:'' };
+  state.iLogSort = {col:'time',dir:'desc'};
+  state.iLogPage = 1;
+  state.iLogOffset = 0;
+  state.iLogLimit = 50;
+  busy('重置中…', viewIntegrationLogs);
+}
+function showIntegrationLog(id){
+  const r = (state.iLogRows||[]).find(x => String(x.id) === String(id));
+  if (!r) return;
+  let pretty = r.requestBody || '';
+  try { pretty = JSON.stringify(JSON.parse(pretty), null, 2); } catch(e){}
+  const okHtml = r.ok
+    ? `<span class="tag ok">${r.httpStatus ? r.httpStatus : 'OK'}</span>`
+    : `<span class="tag err">${r.httpStatus ? r.httpStatus : t('失败')}</span>`;
+  const rows = [
+    [t('时间'), new Date(r.createdAt*1000).toLocaleString()],
+    [t('类型'), esc(r.kind) + (r.integrationId ? ' <span class="muted">#' + r.integrationId + '</span>' : '') + (r.applicationId ? ' <span class="muted">app#' + r.applicationId + '</span>' : '')],
+    [t('触发事件'), (r.trigger==='status'?t('设备状态'):t('上行消息')) + (r.fcnt?(' · FCnt '+r.fcnt):'') + (r.fport?(' · FPort '+r.fport):'')],
+    [t('设备'), esc(r.devEui||'-') + (r.devAddr?(' · '+esc(r.devAddr)):'')],
+    [t('目标地址'), esc(r.target||'-')],
+    [t('返回状态'), okHtml + ' · ' + r.latencyMs + 'ms'],
+    [t('返回信息 / 错误'), '<span style="word-break:break-all">'+esc(r.message||'-')+'</span>'],
+  ];
+  const tableHtml = rows.map(([k,v])=>`<tr><td class="muted" style="white-space:nowrap;width:120px">${k}</td><td>${v}</td></tr>`).join('');
+  openModal(`
+    <div class="modal-head">${t('集成调用详情')}</div>
+    <div class="modal-body" style="max-width:760px">
+      <table class="kv" style="width:100%;border-collapse:collapse;margin-bottom:12px"><tbody>${tableHtml}</tbody></table>
+      <div class="muted" style="margin:6px 0 4px;font-size:12px">${t('提交的报文 (Payload)')}</div>
+      <pre style="max-height:46vh;overflow:auto;background:var(--bg-sub,#f6f8fa);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px;font-size:12px;margin:0;white-space:pre-wrap;word-break:break-all">${esc(pretty)}</pre>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">${t('关闭')}</button></div>
+  `, { wide: true });
 }
 
 async function viewSettings(){
@@ -1103,9 +1206,8 @@ async function clearMaintChecked(){
   const targets = Array.from(document.querySelectorAll('.maint_chk:checked')).map(c=>c.value);
   if (!targets.length){ toast(t('请先勾选要清空的日志'),'warn'); return; }
   if (!confirm(t('确认清空') + ' ' + targets.length + ' ' + t('项日志') + '？' + t('此操作不可恢复'))) return;
-  let tid = isTenant() ? (state.user.tenant_id||0) : 0;
   for (const t2 of targets){
-    const r = await api('POST','/api/settings',{clear_logs: t2, clear_logs_tenant: tid});
+    const r = await api('POST','/api/settings',{clear_logs: t2});
     if (r && r.error){ alert(t(r.error)); return; }
   }
   toast(t('已清空'),'ok');
@@ -1117,31 +1219,22 @@ async function clearPageLogs(target){
     downlinks:['downlinks','下行消息日志', viewDownlinks],
     events:   ['events',  '网关日志',    viewEvents],
     api:      ['api',     'API 调用日志', viewApiLogs],
+    integration: ['integration-logs', '集成运行日志', viewIntegrationLogs],
   };
   const m = map[target];
   if (!m) return;
   const [apiTarget, label, refresh] = m;
 
-  let tid = 0;
-  if (isTenant()) {
-    tid = state.user.tenant_id || 0;
-  } else if (target === 'api') {
-    tid = (state.apiLogFilter && state.apiLogFilter.tenant_id) ? state.apiLogFilter.tenant_id : 0;
-  } else if (target === 'events') {
-    tid = state.tenantFilter || 0;
-  } else {
-    tid = 0;
-  }
-  const scopeTxt = tid ? t('（仅清理当前用户配置）') : t('（将清空全部）');
+  const scopeTxt = t('（管理员清空全部 / 普通账号仅清空本人数据）');
   if (!confirm(t('确认清空') + ' ' + t(label) + '？' + t('此操作不可恢复') + scopeTxt)) return;
-  const r = await api('POST','/api/settings',{clear_logs: apiTarget, clear_logs_tenant: tid});
+  const r = await api('POST','/api/settings',{clear_logs: apiTarget});
   if (r.error){ alert(t(r.error)); return; }
-  toast(t('已清空') + ' ' + t(label) + (tid ? t('（当前用户配置）') : t('（全部）')), 'ok');
+  toast(t('已清空') + ' ' + t(label), 'ok');
   refresh();
 }
 
 let logRefreshTimer = null;
-const LOG_REFRESH_VIEWS = ['uplinks','downlinks','events','api-logs'];
+const LOG_REFRESH_VIEWS = ['uplinks','downlinks','events','api-logs','integration-logs'];
 const LOG_REFRESH_OPTS = [[0,'停止刷新'],[5,'5 秒'],[10,'10 秒'],[15,'15 秒'],[30,'30 秒'],[60,'1 分钟']];
 let refreshFloatOpen = false;
 let logRefreshTarget = null;
@@ -1226,7 +1319,6 @@ const FAB_PRIMARY = {
   gateways:          {icon:ICON.plus,  title:'新建网关',     onClick:"newGateway()",              danger:false},
   users:             {icon:ICON.plus,  title:'新建用户',     onClick:"newUser()",                 danger:false},
   'device-profiles': {icon:ICON.plus,  title:'新建模板',     onClick:"newDeviceProfile()",        danger:false},
-  tenants:           {icon:ICON.plus,  title:'新建用户配置', onClick:"newTenant()",               danger:false},
   'multicast-groups':{icon:ICON.plus,  title:'新建组播组',   onClick:"newMulticast()",            danger:false},
   uplinks:           {icon:ICON.trash, title:'清空日志',     onClick:"clearPageLogs('uplinks')",   danger:true},
   downlinks:         {icon:ICON.trash, title:'清空日志',     onClick:"clearPageLogs('downlinks')", danger:true},
@@ -1352,8 +1444,7 @@ async function savePwFor(id){
 
 const randHex = (n) => Array.from({length:n},()=>Math.floor(Math.random()*16).toString(16)).join('');
 async function viewDeviceProfiles(){
-  const q = state.tenantFilter ? ('?tenant_id='+state.tenantFilter) : '';
-  const [r, tf] = await Promise.all([api('GET','/api/device-profiles'+q), tenantFilterHtml()]);
+  const r = await api('GET','/api/device-profiles');
   state.dps = r.data||[];
 
   const clsOf = d => {
@@ -1407,22 +1498,11 @@ async function viewDeviceProfiles(){
   window.viewDeviceProfiles__page = p => _pagerGo({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',p);
   window.viewDeviceProfiles__limit = l => _pagerSetLimit({pageKey:'dpsPage',limitKey:'dpsLimit',offsetKey:'dpsOffset',totalKey:'dpsTotal'},'viewDeviceProfiles',l);
   document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['device-profiles']]||''}设备模板</h2>${adminBtn('<button onclick="newDeviceProfile()">'+ICON.plus+'新建模板</button>')}</div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px">${tf}${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion=\'\';state.dpsFCls=\'\';state.dpsSort={col:null,dir:\'desc\'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">'+ICON.arrowPath+'重置</button>':''}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px">${isAdmin()?'<button class="btn ghost" onclick="resetFilters(()=>{state.dpsFRegion=\'\';state.dpsFCls=\'\';state.dpsSort={col:null,dir:\'desc\'};state.dpsPage=1;state.dpsOffset=0;state.dpsLimit=50;}, viewDeviceProfiles)">'+ICON.arrowPath+'重置</button>':''}</div>
     ${table}
     ${pager}`;
 }
 
-async function viewTenants(){
-  const r = await api('GET','/api/tenants'); state.tenants = r.data||[];
-  const rows = state.tenants.map(row=>{
-    const unlimited = +row.private_gateways_unlimited === 1;
-    return `<tr><td>${row.id}</td><td>${esc(row.name)}</td><td class="muted">${esc(row.description||'')}</td>
-    <td class="muted">${unlimited ? t('无限制') : t('上限') + ' ' + (row.private_gateways_limit||0)}</td>
-    <td>${adminBtn(`<button class="btn ghost" onclick="editTenant(${row.id})">${ICON.pencilSquare}${t('编辑')}</button> <button class="btn danger" onclick="busy('删除中…', ()=>delTenant(${row.id}))">${ICON.trash}${t('删除')}</button>`)}</td></tr>`;
-  }).join('')||`<tr><td colspan="5" class="muted">${t('暂无用户配置')}</td></tr>`;
-  document.getElementById('view').innerHTML = `<div class="view-head"><h2>${ICON[VIEW_ICONS['tenants']]||''}${t('用户配置')}</h2>${adminBtn(`<button onclick="newTenant()">${ICON.plus}${t('新建用户配置')}</button>`)}</div>
-    <table><thead><tr><th>ID</th><th>${t('名称')}</th><th>${t('描述')}</th><th>${t('私有网关上限')}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
-}
 async function viewApiKeys(){
   let ks=[];
   const keyUuid = k => k.uuid || k.id || '';
@@ -1435,7 +1515,7 @@ async function viewApiKeys(){
   const akCfg = {
     state, stateKey:'apiKeysSort',
     defaultSort:{col:'name',dir:'asc'},
-    cellValue: (k, ck) => ({id:k.uuid, name:k.name, scope: k.is_admin?'全局':(k.tenantId&&k.tenantId!=='00000000-0000-0000-0000-000000000000'?'租户':'—'), ro: k.is_read_only?'只读':'', token:'', time:k.created_at}[ck]),
+    cellValue: (k, ck) => ({id:k.uuid, name:k.name, scope: k.is_admin?'全局':'私有', ro: k.is_read_only?'只读':'', token:'', time:k.created_at}[ck]),
     cols: [
       {key:'id',    label:'ID(UUID)',   type:'str', firstDir:'asc', sortable:false},
       {key:'name',  label:'名称',        type:'str', firstDir:'asc'},
@@ -1443,7 +1523,7 @@ async function viewApiKeys(){
       {key:'ro',    label:'权限',        type:'str', firstDir:'asc', sortable:false},
     ],
     rows: ks,
-    rowHtml: (k => `<tr><td class="muted"><code>${esc(k.uuid)}</code></td><td>${esc(k.name)}</td><td>${k.is_admin?'<span class="badge">全局</span>':'租户'}</td><td>${k.is_read_only?'只读':'读写'}</td>
+    rowHtml: (k => `<tr><td class="muted"><code>${esc(k.uuid)}</code></td><td>${esc(k.name)}</td><td>${k.is_admin?'<span class="badge">全局</span>':'私有'}</td><td>${k.is_read_only?'只读':'读写'}</td>
       <td>${adminBtn(`<button class="btn danger" onclick="busy('删除中…', ()=>delApiKey('${esc(k.uuid)}'))">${ICON.trash}删除</button>`)}</td></tr>`),
     emptyText: '暂无 API 密钥',
   };
@@ -1460,13 +1540,12 @@ async function viewApiKeys(){
    ${pager}`;
 }
 async function viewIntegrations(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
+  const ra = await api('GET','/api/applications');
   state.apps = ra.data||[];
   const opts=`<option value="">选择应用…</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.intAppSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
   let its=[];
   if(state.intAppSel){
-    const r=await api('GET','/api/integrations?app_id='+state.intAppSel+(tq?'&'+tq:'')); its=r.data||[];
+    const r=await api('GET','/api/integrations?app_id='+state.intAppSel); its=r.data||[];
   }
   state.intMap = Object.fromEntries((its||[]).map(x=>[x.id,x]));
   const summaryOf = it => {
@@ -1501,16 +1580,15 @@ async function viewIntegrations(){
   window.viewIntegrations__page = p => _pagerGo({pageKey:'intgPage',limitKey:'intgLimit',offsetKey:'intgOffset',totalKey:'intgTotal'},'viewIntegrations',p);
   window.viewIntegrations__limit = l => _pagerSetLimit({pageKey:'intgPage',limitKey:'intgLimit',offsetKey:'intgOffset',totalKey:'intgTotal'},'viewIntegrations',l);
   document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['integrations']]||''}外部集成</h2></div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;state.intgPage=1;state.intgOffset=0;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">'+ICON.plus+'新建外部集成</button>'):''}</div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px"><div style="flex:0 0 360px"><label>应用</label><select id="int_app" onchange="state.intAppSel=this.value;state.intgPage=1;state.intgOffset=0;nav('integrations')">${opts}</select></div>${state.intAppSel?adminBtn('<button onclick="newIntegration()">'+ICON.plus+'新建外部集成</button>'):''}</div>
    ${table}
    ${pager}`;
 }
 async function viewMulticastGroups(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const [ra, tf] = await Promise.all([api('GET','/api/applications'+(tq?'?'+tq:'')), tenantFilterHtml()]);
+  const ra = await api('GET','/api/applications');
   state.apps = ra.data||[];
   const opts=`<option value="">全部应用</option>`+state.apps.map(a=>`<option value="${a.id}" ${String(a.id)===String(state.appSel)?'selected':''}>#${a.id} ${esc(a.name)}</option>`).join('');
-  let q=[]; if(tq) q.push(tq); if(state.appSel) q.push('app_id='+state.appSel);
+  let q=[]; if(state.appSel) q.push('app_id='+state.appSel);
   const r=await api('GET','/api/multicast-groups'+(q.length?'?'+q.join('&'):'')); const ms=r.data||[];
   const appName=(id)=>{const a=(state.apps||[]).find(x=>x.id===id);return a?esc(a.name):('#'+id);};
   const rows=ms.map(m=>`<tr><td>${m.id}</td><td>${esc(m.name)}</td><td class="muted">${appName(m.application_id)}</td>
@@ -1518,7 +1596,7 @@ async function viewMulticastGroups(){
      <td class="muted"><code>${esc(m.mc_addr)}</code></td><td class="muted">DR${m.dr}</td><td class="muted">${m.f_cnt}</td>
      <td>${adminBtn(`<button class="btn ghost" onclick="mcDetail(${m.id})">${ICON.bookOpen}详情</button> <button class="btn ghost" onclick="editMulticast(${m.id})">${ICON.pencilSquare}编辑</button> <button class="btn danger" onclick="busy('删除中…', ()=>delMulticast(${m.id}))">${ICON.trash}删除</button>`)}</td></tr>`).join('')||`<tr><td colspan="9" class="muted">暂无组播组</td></tr>`;
   document.getElementById('view').innerHTML=`<div class="view-head"><h2>${ICON[VIEW_ICONS['multicast-groups']]||''}组播组</h2>${adminBtn('<button onclick="newMulticast()">'+ICON.plus+'新建组播组</button>')}</div>
-   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}<div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';}, viewMulticastGroups)">${ICON.arrowPath}重置</button></div>
+   <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px"><div style="flex:0 0 360px"><label>按应用筛选</label><select id="mc_app" onchange="state.appSel=this.value;nav('multicast-groups')">${opts}</select></div><button class="btn ghost" onclick="resetFilters(()=>{state.appSel='';}, viewMulticastGroups)">${ICON.arrowPath}重置</button></div>
    <table><thead><tr><th>ID</th><th>名称</th><th>应用</th><th>区域</th><th>类型</th><th>MC Addr</th><th>DR</th><th>FCnt</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function mcDetail(id){
@@ -1547,18 +1625,16 @@ const FUOTA_STATE_CLS = {PENDING:'',SETUP:'ok',FRAGMENTATION:'ok',STATUS:'ok',DO
 const FUOTA_STATE_LABEL = {PENDING:'待启动',SETUP:'参数下发',FRAGMENTATION:'分包传输',STATUS:'状态查询',DONE:'已完成',FAILED:'失败'};
 
 async function viewFuota(){
-  const tq = state.tenantFilter ? ('tenant_id='+state.tenantFilter) : '';
-  const [ra, rmc, tf] = await Promise.all([
-    api('GET','/api/applications'+(tq?'?'+tq:'')),
-    api('GET','/api/multicast-groups'+(tq?'?'+tq:'')),
-    tenantFilterHtml(),
+  const [ra, rmc] = await Promise.all([
+    api('GET','/api/applications'),
+    api('GET','/api/multicast-groups'),
   ]);
   state.apps = ra.data || [];
   const groups = rmc.data || [];
   const appOpts = `<option value="">选择应用…</option>` + state.apps.map(a=>`<option value="${a.id}">#${a.id} ${esc(a.name)}</option>`).join('');
   const grpOpts = `<option value="">选择组播组…</option>` + groups.map(g=>`<option value="${g.id}">#${g.id} ${esc(g.name)} · ${esc(g.region)} · ${esc(g.mc_addr||'')}</option>`).join('');
 
-  const campR = await api('GET','/api/fuota'+(tq?'?'+tq:''));
+  const campR = await api('GET','/api/fuota');
   const camps = (campR && campR.data) || [];
 
   const stateColor = (s) => {
@@ -1604,7 +1680,7 @@ async function viewFuota(){
       </div>
       <p class="muted" style="margin:8px 0 0;font-size:12px">活动创建后状态为 PENDING，需要先添加组播组成员设备，再上传固件启动。</p>
     </div>
-    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px">${tf}</div>
+    <div class="row" style="align-items:flex-end;margin-bottom:12px;gap:16px"></div>
     <table class="tbl">
       <thead><tr><th>ID</th><th>名称</th><th>区域</th><th>MC Addr</th><th>状态</th><th>进度</th><th>开始时间</th><th></th></tr></thead>
       <tbody>${rows}</tbody>

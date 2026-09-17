@@ -219,10 +219,10 @@ class Station
             return ['error' => 'name and gateway_id required'];
         }
         Database::execute(
-            "INSERT INTO stations (tenant_id, gateway_id, name, region, lns_secret, ca_cert, created_at)
+            "INSERT INTO stations (owner_id, gateway_id, name, region, lns_secret, ca_cert, created_at)
              VALUES (?,?,?,?,?,?,?)",
             [
-                (int) ($p['tenant_id'] ?? 0),
+                (int) ($p['owner_id'] ?? 0),
                 strtolower($p['gateway_id']),
                 $p['name'],
                 $p['region'] ?? ELW_DEFAULT_REGION,

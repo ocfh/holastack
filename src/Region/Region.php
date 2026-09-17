@@ -386,7 +386,7 @@ class Region
             $start2 = (float) ($r['ul_start2'] ?? 0);
 
             if ($ulFreqMHz >= 481.0 && $ulFreqMHz < 483.0) {
-                return round($ulFreqMHz + 2.4, 1);
+                return round($ulFreqMHz + 20.4, 1);
             }
 
             if ($start2 > 0 && $ulFreqMHz >= $start2 - $step / 2) {
@@ -460,6 +460,15 @@ class Region
             return (int) round((float) $list[$joinChannelIndex % $n] * 1000000);
         }
         return $this->getRx2Frequency();
+    }
+
+    public function getJoinRx2DeviceFrequency(float $ulFreqMHz, int $joinChannelIndex): int
+    {
+        $r = $this->cfg['rx1'] ?? null;
+        if (($r['type'] ?? '') === 'cn470_a20' && $ulFreqMHz >= 481.0 && $ulFreqMHz < 483.0) {
+            return (int) round($this->getRx1Frequency($ulFreqMHz) * 1000000);
+        }
+        return $this->getRx2FrequencyForJoinChannel($joinChannelIndex);
     }
 
     public function getBeaconFrequency(): int { return (int) $this->cfg['beacon_frequency']; }

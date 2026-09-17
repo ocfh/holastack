@@ -57,17 +57,17 @@ class Fuota
         }
     }
 
-    public static function listCampaigns(int $tenantId = 0, bool $admin = false): array
+    public static function listCampaigns(int $ownerId = 0, bool $admin = false): array
     {
         $sql = "SELECT c.*, g.name AS group_name, g.region AS region, g.mc_addr AS multicast_addr, g.dr AS dr
                 FROM fuota_campaigns c
                 LEFT JOIN multicast_groups g ON g.id = c.multicast_group_id";
-        if ($admin || $tenantId <= 0) {
+        if ($admin || $ownerId <= 0) {
             return Database::fetchAll($sql . " ORDER BY c.id DESC");
         }
         return Database::fetchAll(
-            $sql . " WHERE c.tenant_id IN (0,?) ORDER BY c.id DESC",
-            [$tenantId]
+            $sql . " WHERE c.owner_id IN (0,?) ORDER BY c.id DESC",
+            [$ownerId]
         );
     }
 
@@ -78,11 +78,11 @@ class Fuota
         }
         Database::execute(
             "INSERT INTO fuota_campaigns
-             (tenant_id, name, application_id, multicast_group_id, fragment_size, redundancy,
+             (owner_id, name, application_id, multicast_group_id, fragment_size, redundancy,
               descriptor_version, fw_version, fw_length, mc_ke_key, created_at)
              VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
-                (int) ($p['tenant_id'] ?? 0),
+                (int) ($p['owner_id'] ?? 0),
                 $p['name'],
                 (int) $p['application_id'],
                 (int) $p['multicast_group_id'],

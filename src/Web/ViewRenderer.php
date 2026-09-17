@@ -580,8 +580,6 @@ HTML;
                 'apis' => [
                     $t('cs-mc', 'GET', '/api/multicast-groups', '多播组列表',
                         '{totalCount, result:[…]}。POST 创建、GET/PUT/DELETE 单体；POST /{id}/queue 或 /enqueue 入队（body {queueItem:{fPort, data(Base64)}}）返回 {fCnt}；GET /queue 返回 {items:[…]}；DELETE 清空队列；devices/gateways 子路由增删成员。'),
-                    $t('cs-tenants', 'GET', '/api/tenants', '租户列表（List）',
-                        '{totalCount, result:[apiTenant]}（admin only）。GET 单体；GET /{id}/users 列租户成员；POST /{id}/users 添加成员；/by-devaddr-prefix-overlap 返回空列表（标准形状）。'),
                     $t('cs-users', 'GET', '/api/users', '用户列表（List）',
                         '{totalCount, result:[apiUser]}（admin only）。POST/PUT/DELETE 同标准路径；POST /api/users/{userId}/password 修改密码（body {password}）。'),
                     $t('cs-relays', 'GET', '/api/relays', 'Relay 列表',

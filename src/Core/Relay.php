@@ -37,10 +37,10 @@ class Relay
             return ['error' => 'name and relay_dev_eui required'];
         }
         Database::execute(
-            "INSERT INTO relay_gateways (tenant_id, name, relay_dev_eui, region, created_at)
+            "INSERT INTO relay_gateways (owner_id, name, relay_dev_eui, region, created_at)
              VALUES (?,?,?,?,?)",
             [
-                (int) ($p['tenant_id'] ?? 0),
+                (int) ($p['owner_id'] ?? 0),
                 $p['name'],
                 strtolower(preg_replace('/[^0-9a-fA-F]/', '', $p['relay_dev_eui'])),
                 $p['region'] ?? ELW_DEFAULT_REGION,

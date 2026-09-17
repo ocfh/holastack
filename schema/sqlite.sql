@@ -1,7 +1,7 @@
 -- holastack SQLite schema
 CREATE TABLE IF NOT EXISTS applications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     app_eui TEXT DEFAULT '',
@@ -9,21 +9,10 @@ CREATE TABLE IF NOT EXISTS applications (
     created_at INTEGER NOT NULL
 );
 
--- ---- 租户（Tenant，多租户隔离基础） ----
--- private_gateways_unlimited=1 → 关闭上限，无限创建
--- private_gateways_unlimited=0 → 按 private_gateways_limit 限制（默认 0 = 不允许创建网关）
-CREATE TABLE IF NOT EXISTS tenants (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    private_gateways_limit INTEGER NOT NULL DEFAULT 0,
-    private_gateways_unlimited INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS gateways (
     gw_id TEXT PRIMARY KEY,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     region TEXT DEFAULT '',
     created_at INTEGER NOT NULL,
@@ -36,7 +25,7 @@ CREATE TABLE IF NOT EXISTS gateways (
 CREATE TABLE IF NOT EXISTS devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     app_id INTEGER NOT NULL,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     dev_eui TEXT NOT NULL,
     join_eui TEXT DEFAULT '',
@@ -96,7 +85,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'admin',
-    tenant_id INTEGER NOT NULL DEFAULT 0,
+    owner_id INTEGER NOT NULL DEFAULT 0,
     email TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
@@ -161,7 +150,7 @@ CREATE TABLE IF NOT EXISTS events (
 -- ---- 设备配置模板（Device Profile） ----
 CREATE TABLE IF NOT EXISTS device_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     region TEXT NOT NULL DEFAULT 'EU868',
@@ -190,11 +179,11 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     created_at INTEGER NOT NULL
 );
 
--- ---- API Key（ChirpStack 模型：全局 admin 或绑定租户） ----
+-- ---- API Key（ChirpStack 模型：全局 admin 或绑定私有 owner） ----
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT NOT NULL DEFAULT '',
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     api_key TEXT NOT NULL UNIQUE,
     application_id INTEGER NOT NULL DEFAULT 0,
@@ -215,7 +204,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS integrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     application_id INTEGER NOT NULL,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     kind TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     config_json TEXT DEFAULT '',
@@ -225,7 +214,7 @@ CREATE TABLE IF NOT EXISTS integrations (
 -- ---- 组播组 ----
 CREATE TABLE IF NOT EXISTS multicast_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     application_id INTEGER NOT NULL,
     region TEXT NOT NULL DEFAULT 'EU868',
@@ -275,7 +264,7 @@ CREATE INDEX IF NOT EXISTS idx_mq_mg ON multicast_queue(multicast_group_id);
 -- ---- Basic Station / LNS（WebSocket 后端） ----
 CREATE TABLE IF NOT EXISTS stations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     gateway_id TEXT NOT NULL,
     name TEXT NOT NULL,
     region TEXT NOT NULL DEFAULT 'EU868',
@@ -287,7 +276,7 @@ CREATE TABLE IF NOT EXISTS stations (
 -- ---- 中继（Relay, TS011 / LoRaWAN 1.1 Relay） ----
 CREATE TABLE IF NOT EXISTS relay_gateways (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     relay_dev_eui TEXT NOT NULL,
     region TEXT NOT NULL DEFAULT 'EU868',
@@ -320,7 +309,7 @@ CREATE TABLE IF NOT EXISTS relay_devices (
 -- ---- FUOTA（固件分片 + 组播 + 时钟同步） ----
 CREATE TABLE IF NOT EXISTS fuota_campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     application_id INTEGER NOT NULL,
     multicast_group_id INTEGER NOT NULL,
@@ -379,7 +368,7 @@ CREATE TABLE IF NOT EXISTS fuota_frames (
 -- ---- 漫游（Roaming, Backend Interface） ----
 CREATE TABLE IF NOT EXISTS roaming_servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER DEFAULT 0,
+    owner_id INTEGER DEFAULT 0,
     name TEXT NOT NULL,
     kind VARCHAR(16) NOT NULL DEFAULT 'PASSIVE',
     protocol VARCHAR(16) NOT NULL DEFAULT 'BI_1_0',
@@ -389,7 +378,7 @@ CREATE TABLE IF NOT EXISTS roaming_servers (
     created_at INTEGER NOT NULL
 );
 
--- ---- API 调用日志（admin 全局 / tenant 仅本租户 可读） ----
+-- ---- API 调用日志（admin/demo 全局 / 其它仅本人可读） ----
 CREATE TABLE IF NOT EXISTS api_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at INTEGER NOT NULL,
@@ -401,11 +390,35 @@ CREATE TABLE IF NOT EXISTS api_logs (
     user_id INTEGER NOT NULL DEFAULT 0,
     username TEXT DEFAULT '',
     role VARCHAR(16) DEFAULT '',
-    tenant_id INTEGER NOT NULL DEFAULT 0,
+    owner_id INTEGER NOT NULL DEFAULT 0,
     application_id INTEGER NOT NULL DEFAULT 0,
     query TEXT DEFAULT '',
     body_size INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_logs_owner ON api_logs(owner_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at);
+
+CREATE TABLE IF NOT EXISTS integration_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    owner_id INTEGER NOT NULL DEFAULT 0,
+    app_id INTEGER NOT NULL DEFAULT 0,
+    integration_id INTEGER NOT NULL DEFAULT 0,
+    kind VARCHAR(24) NOT NULL DEFAULT 'WEBHOOK',
+    event VARCHAR(12) NOT NULL DEFAULT 'up',
+    `trigger` VARCHAR(16) NOT NULL DEFAULT 'uplink',
+    dev_eui TEXT DEFAULT '',
+    dev_addr TEXT DEFAULT '',
+    fcnt INTEGER NOT NULL DEFAULT 0,
+    fport INTEGER NOT NULL DEFAULT 0,
+    target TEXT DEFAULT '',
+    request_body TEXT DEFAULT '',
+    http_status INTEGER NOT NULL DEFAULT 0,
+    ok INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    message TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ilog_app ON integration_logs(app_id);
+CREATE INDEX IF NOT EXISTS idx_ilog_created ON integration_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_ilog_dev ON integration_logs(dev_eui);

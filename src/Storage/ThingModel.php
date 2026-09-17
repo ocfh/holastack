@@ -14,10 +14,10 @@ class ThingModel
         return [self::CODEC_SEGMENT, self::CODEC_JSON, self::CODEC_LPP];
     }
 
-    public static function list(int $appId, ?int $tenantId = null): array
+    public static function list(int $appId, ?int $ownerId = null): array
     {
-        if ($tenantId !== null) {
-            return Database::fetchAll("SELECT * FROM thing_models WHERE application_id=? AND tenant_id=? ORDER BY id ASC", [$appId, $tenantId]);
+        if ($ownerId !== null) {
+            return Database::fetchAll("SELECT * FROM thing_models WHERE application_id=? AND owner_id=? ORDER BY id ASC", [$appId, $ownerId]);
         }
         return Database::fetchAll("SELECT * FROM thing_models WHERE application_id=? ORDER BY id ASC", [$appId]);
     }
@@ -35,8 +35,8 @@ class ThingModel
     public static function create(array $p): array
     {
         $fields = self::normalizeFields($p['fields_json'] ?? '');
-        Database::execute("INSERT INTO thing_models (tenant_id, application_id, name, fields_json, codec, created_at) VALUES (?,?,?,?,?,?)", [
-            (int) ($p['tenant_id'] ?? 0),
+        Database::execute("INSERT INTO thing_models (owner_id, application_id, name, fields_json, codec, created_at) VALUES (?,?,?,?,?,?)", [
+            (int) ($p['owner_id'] ?? 0),
             (int) ($p['application_id'] ?? 0),
             (string) ($p['name'] ?? ''),
             json_encode($fields, JSON_UNESCAPED_UNICODE),

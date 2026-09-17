@@ -7,12 +7,12 @@ use holastack\Region\Region;
 class DeviceProfile
 {
 
-    public static function list(?int $tenantId = null): array
+    public static function list(?int $ownerId = null): array
     {
-        if ($tenantId !== null && $tenantId > 0) {
+        if ($ownerId !== null && $ownerId > 0) {
             return Database::fetchAll(
-                "SELECT * FROM device_profiles WHERE tenant_id IN (0, ?) ORDER BY id DESC",
-                [$tenantId]
+                "SELECT * FROM device_profiles WHERE owner_id IN (0, ?) ORDER BY id DESC",
+                [$ownerId]
             );
         }
         return Database::fetchAll("SELECT * FROM device_profiles ORDER BY id DESC");
@@ -57,10 +57,10 @@ class DeviceProfile
             $vals[] = '?';
         }
 
-        if (array_key_exists('tenant_id', $p)) {
-            $set[] = 'tenant_id';
+        if (array_key_exists('owner_id', $p)) {
+            $set[] = 'owner_id';
             $vals[] = '?';
-            $params[] = (int) $p['tenant_id'];
+            $params[] = (int) $p['owner_id'];
         }
         Database::execute(
             "INSERT INTO device_profiles (" . implode(',', $set) . ") VALUES (" . implode(',', $vals) . ")",

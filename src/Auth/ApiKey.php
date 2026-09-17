@@ -95,25 +95,25 @@ class ApiKey
         return '00000000-0000-0000-0000-' . $hex;
     }
 
-    public static function create(?int $tenantId, string $name, bool $isAdmin = false, bool $isReadOnly = false): array
+    public static function create(?int $ownerId, string $name, bool $isAdmin = false, bool $isReadOnly = false): array
     {
-        if ($isAdmin && $tenantId !== null && $tenantId > 0) {
-            return ['error' => 'tenant_id can not be set with is_admin set to true'];
+        if ($isAdmin && $ownerId !== null && $ownerId > 0) {
+            return ['error' => 'owner_id can not be set with is_admin set to true'];
         }
-        if (!$isAdmin && ($tenantId === null || $tenantId <= 0)) {
-            return ['error' => 'either is_admin or tenant_id must be set'];
+        if (!$isAdmin && ($ownerId === null || $ownerId <= 0)) {
+            return ['error' => 'either is_admin or owner_id must be set'];
         }
         if (empty($name)) {
             return ['error' => 'name required'];
         }
         $id = self::newUuid();
         $jwtId = $id;
-        $token = self::issueJwt(['typ' => 'apikey', 'jti' => $jwtId, 'adm' => $isAdmin, 'tid' => $tenantId ?? 0, 'ro' => $isReadOnly]);
+        $token = self::issueJwt(['typ' => 'apikey', 'jti' => $jwtId, 'adm' => $isAdmin, 'tid' => $ownerId ?? 0, 'ro' => $isReadOnly]);
         $hash = password_hash($token, PASSWORD_DEFAULT);
         $now = time();
         Database::execute(
-            "INSERT INTO api_keys (uuid, tenant_id, name, api_key, application_id, is_admin, is_read_only, created_at) VALUES (?,?,?,?,?,? ,?,?)",
-            [$id, (int) ($tenantId ?? 0), $name, $hash, 0, $isAdmin ? 1 : 0, $isReadOnly ? 1 : 0, $now]
+            "INSERT INTO api_keys (uuid, owner_id, name, api_key, application_id, is_admin, is_read_only, created_at) VALUES (?,?,?,?,?,? ,?,?)",
+            [$id, (int) ($ownerId ?? 0), $name, $hash, 0, $isAdmin ? 1 : 0, $isReadOnly ? 1 : 0, $now]
         );
         return ['id' => $id, 'token' => $token, 'name' => $name, 'created_at' => $now];
     }
@@ -133,7 +133,7 @@ class ApiKey
                         'id' => (string) $row['uuid'],
                         'name' => (string) $row['name'],
                         'is_admin' => (bool) $row['is_admin'],
-                        'tenant_id' => (int) $row['tenant_id'],
+                        'owner_id' => (int) $row['owner_id'],
                         'is_read_only' => (bool) ($row['is_read_only'] ?? 0),
                     ];
                 }
@@ -141,7 +141,7 @@ class ApiKey
             }
             return [];
         }
-        $rows = Database::fetchAll("SELECT id, uuid, name, api_key, application_id, tenant_id, is_admin, is_read_only FROM api_keys");
+        $rows = Database::fetchAll("SELECT id, uuid, name, api_key, application_id, owner_id, is_admin, is_read_only FROM api_keys");
         foreach ($rows as $r) {
             if (password_verify($token, $r['api_key'])) {
                 if ((string) $r['uuid'] === '') {
@@ -152,7 +152,7 @@ class ApiKey
                     'id' => (string) $r['uuid'],
                     'name' => (string) $r['name'],
                     'is_admin' => (bool) $r['is_admin'],
-                    'tenant_id' => (int) $r['tenant_id'],
+                    'owner_id' => (int) $r['owner_id'],
                     'is_read_only' => (bool) ($r['is_read_only'] ?? 0),
                 ];
             }
@@ -163,18 +163,18 @@ class ApiKey
     private static function migrateLegacyRow(array $r): array
     {
         $uuid = self::newUuid();
-        $tenantId = (int) $r['tenant_id'];
-        if ($tenantId <= 0) {
-            $t = Database::fetch("SELECT tenant_id FROM applications WHERE id=? AND tenant_id>0 LIMIT 1", [(int) $r['application_id']]);
-            $tenantId = $t ? (int) $t['tenant_id'] : 0;
+        $ownerId = (int) $r['owner_id'];
+        if ($ownerId <= 0) {
+            $t = Database::fetch("SELECT owner_id FROM applications WHERE id=? AND owner_id>0 LIMIT 1", [(int) $r['application_id']]);
+            $ownerId = $t ? (int) $t['owner_id'] : 0;
         }
-        if ($tenantId > 0) {
-            Database::execute("UPDATE api_keys SET uuid=?, tenant_id=?, application_id=0 WHERE id=?", [$uuid, $tenantId, (int) $r['id']]);
+        if ($ownerId > 0) {
+            Database::execute("UPDATE api_keys SET uuid=?, owner_id=?, application_id=0 WHERE id=?", [$uuid, $ownerId, (int) $r['id']]);
         } else {
             Database::execute("UPDATE api_keys SET uuid=?, is_admin=1, application_id=0 WHERE id=?", [$uuid, (int) $r['id']]);
         }
         $r['uuid'] = $uuid;
-        $r['tenant_id'] = $tenantId;
+        $r['owner_id'] = $ownerId;
         $r['application_id'] = 0;
         return $r;
     }
@@ -193,17 +193,17 @@ class ApiKey
         return null;
     }
 
-    public static function list(?int $tenantId = null, bool $isAdminOnly = false, bool $all = false): array
+    public static function list(?int $ownerId = null, bool $isAdminOnly = false, bool $all = false): array
     {
-        $sql = "SELECT id, uuid, tenant_id, name, is_admin, is_read_only, application_id, substr(api_key,1,12) AS token_preview, created_at FROM api_keys";
+        $sql = "SELECT id, uuid, owner_id, name, is_admin, is_read_only, application_id, substr(api_key,1,12) AS token_preview, created_at FROM api_keys";
         $w = [];
         $p = [];
         if (!$all) {
             if ($isAdminOnly) {
                 $w[] = "is_admin=1";
-            } elseif ($tenantId !== null && $tenantId > 0) {
-                $w[] = "tenant_id=?";
-                $p[] = $tenantId;
+            } elseif ($ownerId !== null && $ownerId > 0) {
+                $w[] = "owner_id=?";
+                $p[] = $ownerId;
             } else {
                 $w[] = "is_admin=0";
             }

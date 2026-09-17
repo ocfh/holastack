@@ -14,6 +14,7 @@ use holastack\Storage\ScheduledTask;
 use holastack\Integration\Integration;
 use holastack\Core\Multicast;
 use holastack\Core\Roaming;
+use holastack\Storage\IntegrationLog;
 
 class NetworkServer
 {
@@ -435,7 +436,8 @@ class NetworkServer
             $setCols[] = 'rx2_dr=?';          $setParams[] = $rx2Dr;
 
             [$joinChIdx, ] = $region->findJoinChannel((float) $freq);
-            $setCols[] = 'rx2_frequency=?';   $setParams[] = $region->getRx2FrequencyForJoinChannel($joinChIdx);
+            $setCols[] = 'rx2_frequency=?';
+            $setParams[] = $region->getJoinRx2DeviceFrequency((float) $freq, $joinChIdx);
             $setParams[] = $device['id'];
             Database::execute("UPDATE devices SET " . implode(',', $setCols) . " WHERE id=?", $setParams);
             $this->log("JOIN OK devEUI=$devEui -> devAddr=" . bin2hex($devAddr) . " (mac_version=$macVersion)" . sprintf(" (parse=%.0fms db_q=%.0fms mic=%.0fms key=%.0fms ja=%.0fms total=%.0fms)",
@@ -1213,7 +1215,21 @@ class NetworkServer
 
     private function fireCallback(int $appId, array $data): void
     {
-        $app = Database::fetch("SELECT id, name, callback_url FROM applications WHERE id=?", [$appId]);
+        $t0 = microtime(true);
+        $app = Database::fetch("SELECT id, name, owner_id, callback_url FROM applications WHERE id=?", [$appId]);
+        $base = [
+            'owner_id'       => (int) ($app['owner_id'] ?? 0),
+            'app_id'         => $appId,
+            'integration_id' => 0,
+            'kind'           => 'WEBHOOK',
+            'event'          => 'up',
+            'trigger'        => 'uplink',
+            'dev_eui'        => (string) ($data['dev_eui'] ?? ''),
+            'dev_addr'       => (string) ($data['dev_addr'] ?? ''),
+            'fcnt'           => (int) ($data['fcnt'] ?? 0),
+            'fport'          => (int) ($data['port'] ?? 0),
+            'created_at'     => time(),
+        ];
         if (!$app || empty($app['callback_url'])) {
             return;
         }
@@ -1221,10 +1237,14 @@ class NetworkServer
         $parts = parse_url($url);
         $scheme = strtolower($parts['scheme'] ?? '');
         if ($scheme !== 'http' && $scheme !== 'https') {
+            IntegrationLog::record($base + ['target' => $url, 'ok' => 0, 'http_status' => 0,
+                'latency_ms' => (int) ((microtime(true) - $t0) * 1000), 'message' => 'bad url scheme: ' . $scheme]);
             return;
         }
         $host = $parts['host'] ?? '';
         if ($host === '') {
+            IntegrationLog::record($base + ['target' => $url, 'ok' => 0, 'http_status' => 0,
+                'latency_ms' => (int) ((microtime(true) - $t0) * 1000), 'message' => 'missing host']);
             return;
         }
         $port = (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
@@ -1290,6 +1310,8 @@ class NetworkServer
         );
         if (!$fp) {
             $this->log("CALLBACK: connect failed app#$appId ($errstr #$errno) url=$url");
+            IntegrationLog::record($base + ['target' => $url, 'request_body' => $body, 'ok' => 0, 'http_status' => 0,
+                'latency_ms' => (int) ((microtime(true) - $t0) * 1000), 'message' => "connect failed: $errstr (#$errno)"]);
             return;
         }
         $req = "POST $path HTTP/1.1\r\n"
@@ -1309,12 +1331,21 @@ class NetworkServer
         }
         if ($written < $len) {
             $this->log("CALLBACK: write incomplete app#$appId (wrote $written/$len) url=$url");
+            IntegrationLog::record($base + ['target' => $url, 'request_body' => $body, 'ok' => 0, 'http_status' => 0,
+                'latency_ms' => (int) ((microtime(true) - $t0) * 1000), 'message' => "write incomplete ($written/$len)"]);
         } else {
 
             stream_set_timeout($fp, 2);
             $resp = @fread($fp, 512);
             $status = $resp ? trim(strtok($resp, "\r\n")) : 'no-response';
             $this->log("CALLBACK: POST app#$appId -> $status url=$url");
+            $code = 0;
+            if (preg_match('#HTTP/\S+\s+(\d{3})#', (string) $status, $m)) {
+                $code = (int) $m[1];
+            }
+            IntegrationLog::record($base + ['target' => $url, 'request_body' => $body,
+                'ok' => ($code >= 200 && $code < 300) ? 1 : 0, 'http_status' => $code,
+                'latency_ms' => (int) ((microtime(true) - $t0) * 1000), 'message' => $status]);
         }
         @fclose($fp);
     }
@@ -2078,10 +2109,10 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
 
         $dlTmstRx1 = $tmst + $region->getJoinAcceptDelay1() * 1000;
 
-        $rx1Freq = $region->getRx1Frequency($freq);
+        $rx1Freq = $region->getRx1Frequency((float) $freq);
         $this->log(sprintf(
-            "JOIN DOWNLINK RX1%s: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f (ul=%.3f) RX1datr=%s (dedup rssi=%d)",
-            $tag, $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $rx1Freq, $freq, $datr, $e['bestRssi']
+            "JOIN DOWNLINK RX1%s: gw=%s ul_tmst=%d delay=%dms dl_tmst_rx1=%d RX1freq=%.3f (ul=%.3f, offset=%+.1f) RX1datr=%s (dedup rssi=%d)",
+            $tag, $gwEui, $tmst, $region->getJoinAcceptDelay1(), $dlTmstRx1, $rx1Freq, $freq, $rx1Freq - $freq, $datr, $e['bestRssi']
         ));
         if ($reason !== 'resched') {
 
@@ -2100,7 +2131,14 @@ private function handleFuotaAppPayload(array $device, ?int $fport, string $decry
         } else {
             $dlTmstRx2 = $tmst + $region->getJoinAcceptDelay2() * 1000;
 
-            $rx2Freq = $region->hasJoinChannels() ? $rx1Freq : ($region->getRx2Frequency() / 1e6);
+            if ($freq >= 481.0 && $freq < 483.0) {
+                $rx2Freq = $rx1Freq;
+            } elseif ($region->hasJoinChannels()) {
+                [$joinChIdx2, ] = $region->findJoinChannel((float) $freq);
+                $rx2Freq = $region->getRx2FrequencyForJoinChannel($joinChIdx2) / 1e6;
+            } else {
+                $rx2Freq = $region->getRx2Frequency() / 1e6;
+            }
             $rx2Datr = $region->drToDatr($region->getRx2DataRate());
             $this->log(sprintf(
                 "JOIN DOWNLINK RX2%s: dl_tmst_rx2=%d RX2freq=%.3f RX2datr=%s",

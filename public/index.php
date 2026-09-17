@@ -54,7 +54,7 @@ if ($logApi) {
             'user_id' => $u['id'] ?? 0,
             'username' => $u['username'] ?? '',
             'role' => $u['role'] ?? '',
-            'tenant_id' => (int) ($u['tenant_id'] ?? 0),
+            'owner_id' => (int) ($u['id'] ?? 0),
             'application_id' => (int) ($__apiLogCtx['application_id'] ?? 0),
             'query' => $__apiLogCtx['query'],
             'body_size' => $__apiLogCtx['body_size'],
@@ -312,7 +312,7 @@ function cs_appIntegrationEndpoint(string $method, int $appId, array $segs, arra
             );
         } else {
             Database::execute(
-                "INSERT INTO integrations (application_id, tenant_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO integrations (application_id, owner_id, kind, enabled, config_json, created_at) VALUES (?,?,?,?,?,?)",
                 [$appId, 0, $pathKind, 1, json_encode($cfg, JSON_UNESCAPED_UNICODE), time()]
             );
         }
@@ -359,51 +359,12 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
         }
 
         if ($apiKeyInfo) {
-            $tenants = [];
-            if (!$apiKeyInfo['is_admin'] && $apiKeyInfo['tenant_id'] > 0) {
-                $t = Database::fetch("SELECT * FROM tenants WHERE id=?", [$apiKeyInfo['tenant_id']]);
-                if ($t) {
-                    $tenants[] = [
-                        'tenantId'       => ApiKey::idToUuid($apiKeyInfo['tenant_id']),
-                        'isAdmin'        => true,
-                        'isDeviceAdmin'  => true,
-                        'isGatewayAdmin' => true,
-                        'createdAt'      => cs_ts($t['created_at'] ?? 0),
-                        'updatedAt'      => cs_ts($t['created_at'] ?? 0),
-                    ];
-                }
-            }
             return [
                 'user'    => ['id' => '', 'email' => $apiKeyInfo['name'], 'isActive' => true, 'isAdmin' => $apiKeyInfo['is_admin'], 'note' => 'api-key'],
-                'tenants' => $tenants,
+                'tenants' => [],
             ];
         }
 
-        $tenants = [];
-        if ($u['role'] === Auth::ROLE_TENANT && (int) $u['tenant_id'] > 0) {
-            $t = Database::fetch("SELECT * FROM tenants WHERE id=?", [(int) $u['tenant_id']]);
-            if ($t) {
-                $tenants[] = [
-                    'tenantId'       => ApiKey::idToUuid((int) $t['id']),
-                    'isAdmin'        => true,
-                    'isDeviceAdmin'  => true,
-                    'isGatewayAdmin' => true,
-                    'createdAt'      => cs_ts($t['created_at'] ?? 0),
-                    'updatedAt'      => cs_ts($t['created_at'] ?? 0),
-                ];
-            }
-        } elseif ($u['role'] === Auth::ROLE_ADMIN) {
-            foreach (Database::fetchAll("SELECT * FROM tenants ORDER BY id") as $t) {
-                $tenants[] = [
-                    'tenantId'       => ApiKey::idToUuid((int) $t['id']),
-                    'isAdmin'        => true,
-                    'isDeviceAdmin'  => true,
-                    'isGatewayAdmin' => true,
-                    'createdAt'      => cs_ts($t['created_at'] ?? 0),
-                    'updatedAt'      => cs_ts($t['created_at'] ?? 0),
-                ];
-            }
-        }
         return [
             'user'    => [
                 'id'       => ApiKey::idToUuid((int) $u['id']),
@@ -412,7 +373,7 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
                 'isAdmin'  => ($u['role'] ?? '') === Auth::ROLE_ADMIN,
                 'note'     => '',
             ],
-            'tenants' => $tenants,
+            'tenants' => [],
         ];
     }
 
@@ -430,13 +391,13 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
                     if ($isAdmin) {
                         return cs_forbidden('only admin can create global API keys');
                     }
-                    if ((int) $sc['tenant_id'] <= 0) {
-                        return cs_forbidden('account has no tenant scope');
+                    if ((int) $sc['owner_id'] <= 0) {
+                        return cs_forbidden('account has no owner scope');
                     }
                     $isAdmin = false;
-                    $tenantId = (int) $sc['tenant_id'];
+                    $tenantId = (int) $sc['owner_id'];
                 } elseif (isset($k['tenantId']) && (string) $k['tenantId'] === 'self') {
-                    $tenantId = (int) $sc['tenant_id'];
+                    $tenantId = (int) $sc['owner_id'];
                 } else {
                     $tenantId = isset($k['tenantId']) && $k['tenantId'] !== '' ? ApiKey::uuidToId((string) $k['tenantId']) : null;
                 }
@@ -457,13 +418,13 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
                 }
                 if (!$isAdminReq && !$tenantId && !$allReq) {
                     if ($u && $u['role'] !== Auth::ROLE_ADMIN) {
-                        $tenantId = (int) $sc['tenant_id'];
+                        $tenantId = (int) $sc['owner_id'];
                     } else {
                         return cs_invalid('either isAdmin or tenantId must be set');
                     }
                 }
                 if (!$allReq && $u && $u['role'] !== Auth::ROLE_ADMIN
-                    && $tenantId !== (int) $sc['tenant_id'] && !($isAdminReq && empty($get['isAdmin']))) {
+                    && $tenantId !== (int) $sc['owner_id'] && !($isAdminReq && empty($get['isAdmin']))) {
                     return cs_forbidden('permission denied');
                 }
                 if ($allReq && $u && $u['role'] !== Auth::ROLE_ADMIN) {
@@ -477,7 +438,7 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
                     'uuid'       => (string) ($k['uuid'] ?? ''),
                     'name'       => $k['name'] ?? '',
                     'isAdmin'    => (bool) $k['is_admin'],
-                    'tenantId'   => ApiKey::idToUuid((int) ($k['tenant_id'] ?? 0)),
+                    'tenantId'   => ApiKey::idToUuid((int) ($k['owner_id'] ?? 0)),
                     'isReadOnly' => (bool) ($k['is_read_only'] ?? 0),
                 ], $rows);
                 return cs_list(array_slice($result, $off, max(0, $lim)), count($result));
@@ -542,14 +503,14 @@ function handleInternalApi(string $method, array $segs, array $body, array $get)
         $limit = max(1, min(50, (int) ($get['limit'] ?? 10)));
         $results = [];
         if ($q !== '') {
-            foreach (WebApp::listDevices(null, null) as $d) {
+            foreach (WebApp::listDevices(null) as $d) {
                 if (stripos((string) $d['name'], $q) !== false || stripos((string) $d['dev_eui'], $q) !== false) {
                     $results[] = ['device' => ['devEui' => $d['dev_eui'], 'name' => $d['name']]];
                     if (count($results) >= $limit) { break; }
                 }
             }
             if (count($results) < $limit) {
-                foreach (WebApp::listGateways(null) as $g) {
+                foreach (WebApp::listGateways() as $g) {
                     if (stripos((string) $g['name'], $q) !== false || stripos((string) $g['gw_id'], $q) !== false) {
                         $results[] = ['gateway' => ['gatewayId' => $g['gw_id'], 'name' => $g['name']]];
                         if (count($results) >= $limit) { break; }
@@ -652,7 +613,7 @@ function handleApi(string $method, string $path): array|\stdClass
     $isPwChange = ($resource === 'users' && in_array($segs[1] ?? '', ['password'], true) || ($resource === 'users' && ($segs[2] ?? '') === 'password'));
     $isMulticastEnqueue = ($resource === 'multicast-groups' && in_array($segs[2] ?? '', ['enqueue', 'queue'], true));
     $isDemoClearLogs = ($resource === 'settings' && !empty($body['clear_logs']) && (WebApp::scopePublic())['demo']);
-    $adminOnlyResource = in_array($resource, ['users', 'tenants', 'settings'], true);
+    $adminOnlyResource = in_array($resource, ['users', 'settings'], true);
 
     $apiKeyInfo = null;
     $tokC = Auth::tokenFromRequest();
@@ -661,7 +622,7 @@ function handleApi(string $method, string $path): array|\stdClass
         $apiKeyInfo = [
             'is_read_only' => !empty($curUser['api_key_read_only']),
             'is_admin' => ($curUser['role'] ?? '') === Auth::ROLE_ADMIN,
-            'tenant_id' => (int) ($curUser['tenant_id'] ?? 0),
+            'owner_id' => (int) ($curUser['id'] ?? 0),
         ];
     } elseif (!$curUser && $tokC) {
         $apiKeyInfo = ApiKey::validate($tokC);
@@ -678,9 +639,6 @@ function handleApi(string $method, string $path): array|\stdClass
         if ($isWrite && $adminOnlyResource && !$isPwChange && empty($apiKeyInfo['is_admin'])) {
             return cs_forbidden('api key is tenant-scoped');
         }
-        if ($resource === 'tenants' && empty($apiKeyInfo['is_admin'])) {
-            return cs_forbidden('api key is tenant-scoped');
-        }
     } elseif ($isDemoClearLogs) {
         return [];
     } elseif ($isWrite && $adminOnlyResource && !$isPwChange) {
@@ -691,15 +649,12 @@ function handleApi(string $method, string $path): array|\stdClass
         Auth::guardApi(Auth::ROLE_OPERATOR);
     }
 
-    if ($apiKeyInfo === null && !$isWrite && $resource === 'tenants') {
-        Auth::guardApi(Auth::ROLE_ADMIN);
-    }
 
     $applicationRow = static function (array $a, bool $listItem) use ($camelParam, $get): array {
         $row = array_merge(cs_rowBase($a), [
             'name'        => $a['name'] ?? '',
             'description' => $a['description'] ?? '',
-            'tenantId'    => cs_intToUuid((int) ($a['tenant_id'] ?? 0)),
+            'tenantId'    => cs_intToUuid((int) ($a['owner_id'] ?? 0)),
             'tags'        => cs_obj(),
         ]);
 
@@ -793,7 +748,7 @@ function handleApi(string $method, string $path): array|\stdClass
             'gatewayId'   => $g['gw_id'] ?? '',
             'name'        => $g['name'] ?? '',
             'description' => '',
-            'tenantId'    => cs_intToUuid((int) ($g['tenant_id'] ?? 0)),
+            'tenantId'    => cs_intToUuid((int) ($g['owner_id'] ?? 0)),
             'state'       => $gatewayStateOf($lastSeen),
             'lastSeenAt'  => cs_ts($lastSeen),
             'location'    => ((float) ($g['latitude'] ?? 0) !== 0.0 || (float) ($g['longitude'] ?? 0) !== 0.0)
@@ -832,8 +787,7 @@ function handleApi(string $method, string $path): array|\stdClass
         case 'settings':
             if ($method === 'POST' && !empty($body['clear_logs'])) {
                 Auth::guardApi(Auth::ROLE_TENANT);
-                $tid = isset($body['clear_logs_tenant']) ? (int) $body['clear_logs_tenant'] : null;
-                $r = WebApp::clearLogs((string) $body['clear_logs'], $tid);
+                $r = WebApp::clearLogs((string) $body['clear_logs']);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return [];
             }
@@ -871,7 +825,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 }
                 if ($sub2 === 'device-profiles' && $method === 'GET') {
 
-                    $dpRows2 = WebApp::listDeviceProfiles(null);
+                    $dpRows2 = WebApp::listDeviceProfiles();
                     $profRows = [];
                     foreach ($dpRows2 as $p) {
                         $rev2 = preg_replace('/^RP00[12][-._]/', '', $p['reg_params_revision'] ?? 'RP002-1.0.3');
@@ -926,13 +880,12 @@ function handleApi(string $method, string $path): array|\stdClass
             }
             if ($method === 'POST') {
                 $in = $body['application'] ?? $body;
-                if (isset($in['tenantId']) && !isset($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenantId']); }
+                if (isset($in['tenantId']) && !isset($in['owner_id'])) { $in['owner_id'] = cs_uuidToInt((string) $in['tenantId']); }
                 $r = WebApp::createApplication($in);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            $rows = WebApp::listApplications($tid !== null ? (int) $tid : null);
+            $rows = WebApp::listApplications();
             if (($get['applicationId'] ?? $get['app_id'] ?? '') !== '') {
                 $rows = array_values(array_filter($rows, fn($a) => (int) $a['id'] === (int) ($get['applicationId'] ?? $get['app_id'])));
             }
@@ -1300,8 +1253,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 return cs_obj();
             }
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            $rows = WebApp::listDevices($appId, $tid);
+            $rows = WebApp::listDevices($appId);
 
             $search = trim((string) ($get['search'] ?? ''));
             if ($search !== '') {
@@ -1367,14 +1319,14 @@ function handleApi(string $method, string $path): array|\stdClass
                 if ($method === 'GET' && !isset($segs[2])) {
                     $sc = WebApp::scopePublic();
                     $rgRows = Database::fetchAll(
-                        "SELECT * FROM relay_gateways" . ($sc['is_admin'] || $sc['demo'] ? '' : ' WHERE tenant_id=' . (int) $sc['tenant_id']) . " ORDER BY id DESC"
+                        "SELECT * FROM relay_gateways" . ($sc['is_admin'] || $sc['demo'] ? '' : ' WHERE owner_id=' . (int) $sc['owner_id']) . " ORDER BY id DESC"
                     );
                     $result = array_map(static function ($rg) {
                         return [
                             'relayId'       => substr(md5((string) $rg['relay_dev_eui']), 0, 8),
                             'name'          => $rg['name'] ?? '',
                             'description'   => '',
-                            'tenantId'      => cs_intToUuid((int) ($rg['tenant_id'] ?? 0)),
+                            'tenantId'      => cs_intToUuid((int) ($rg['owner_id'] ?? 0)),
                             'regionConfigId' => strtoupper($rg['region'] ?? ''),
                             'state'         => 'NEVER_SEEN',
                             'lastSeenAt'    => CS_ZERO_TS,
@@ -1393,7 +1345,7 @@ function handleApi(string $method, string $path): array|\stdClass
                     $relayId = strtolower((string) $segs[2]);
                     $sc = WebApp::scopePublic();
                     $rg = Database::fetch("SELECT * FROM relay_gateways WHERE substr(md5(relay_dev_eui),1,8)=? OR relay_dev_eui=?", [$relayId, $relayId]);
-                    if (!$rg || !($sc['is_admin'] || $sc['demo'] || (int) ($rg['tenant_id'] ?? 0) === (int) $sc['tenant_id'])) {
+                    if (!$rg || !($sc['is_admin'] || $sc['demo'] || (int) ($rg['owner_id'] ?? 0) === (int) $sc['owner_id'])) {
                         return cs_notFound('relay gateway not found');
                     }
                     Database::execute("DELETE FROM relay_gateways WHERE substr(md5(relay_dev_eui),1,8)=? OR relay_dev_eui=?", [$relayId, $relayId]);
@@ -1421,13 +1373,12 @@ function handleApi(string $method, string $path): array|\stdClass
             if ($method === 'POST') {
                 $in = $body['gateway'] ?? $body;
                 if (isset($in['gatewayId']) && !isset($in['gw_id'])) { $in['gw_id'] = $in['gatewayId']; }
-                if (isset($in['tenantId']) && !isset($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenantId']); }
+                if (isset($in['tenantId']) && !isset($in['owner_id'])) { $in['owner_id'] = cs_uuidToInt((string) $in['tenantId']); }
                 $r = WebApp::createGateway($in);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return cs_obj();
             }
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            $rows = WebApp::listGateways($tid !== null ? (int) $tid : null);
+            $rows = WebApp::listGateways();
 
             $search = trim((string) ($get['search'] ?? ''));
             if ($search !== '') {
@@ -1529,7 +1480,7 @@ function handleApi(string $method, string $path): array|\stdClass
                     'abpRx2Freq'             => (int) ($dp['abp_rx2_freq'] ?? 0),
                     'allowRoaming'           => (bool) ($dp['allow_roaming'] ?? 0),
                     'tags'                   => cs_obj(),
-                    'tenantId'               => cs_intToUuid((int) ($dp['tenant_id'] ?? 0)),
+                    'tenantId'               => cs_intToUuid((int) ($dp['owner_id'] ?? 0)),
 
                     'numericId'              => (int) $dp['id'],
                 ]);
@@ -1537,7 +1488,7 @@ function handleApi(string $method, string $path): array|\stdClass
             }
             if ($method === 'POST') {
                 $in = $body['deviceProfile'] ?? $body;
-                foreach (['macVersion' => 'mac_version', 'regParamsRevision' => 'reg_params_revision', 'supportsOtaa' => 'supports_otaa', 'supportsClassB' => 'supports_class_b', 'supportsClassC' => 'supports_class_c', 'uplinkInterval' => 'uplink_interval', 'payloadCodecRuntime' => 'payload_codec_runtime', 'payloadCodecScript' => 'payload_codec_script', 'tenantId' => 'tenant_id'] as $cs => $hs) {
+                foreach (['macVersion' => 'mac_version', 'regParamsRevision' => 'reg_params_revision', 'supportsOtaa' => 'supports_otaa', 'supportsClassB' => 'supports_class_b', 'supportsClassC' => 'supports_class_c', 'uplinkInterval' => 'uplink_interval', 'payloadCodecRuntime' => 'payload_codec_runtime', 'payloadCodecScript' => 'payload_codec_script', 'tenantId' => 'owner_id'] as $cs => $hs) {
                     if (isset($in[$cs]) && !isset($in[$hs])) { $in[$hs] = $in[$cs]; }
                 }
                 if (isset($in['mac_version'])) {
@@ -1547,12 +1498,12 @@ function handleApi(string $method, string $path): array|\stdClass
                 if (isset($in['reg_params_revision'])) {
                     $in['reg_params_revision'] = preg_replace('/^RP00[12]_/', '', str_replace('_', '.', $in['reg_params_revision']));
                 }
-                if (isset($in['tenant_id']) && !is_numeric($in['tenant_id'])) { $in['tenant_id'] = cs_uuidToInt((string) $in['tenant_id']); }
+                if (isset($in['owner_id']) && !is_numeric($in['owner_id'])) { $in['owner_id'] = cs_uuidToInt((string) $in['owner_id']); }
                 $r = WebApp::createDeviceProfile($in);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return ['id' => cs_intToUuid((int) $r['id'])];
             }
-            $dpRows = WebApp::listDeviceProfiles(null);
+            $dpRows = WebApp::listDeviceProfiles();
             $dpList = [];
             foreach ($dpRows as $p) {
                 $rev = preg_replace('/^RP00[12][-._]/', '', $p['reg_params_revision'] ?? 'RP002-1.0.3');
@@ -1582,7 +1533,7 @@ function handleApi(string $method, string $path): array|\stdClass
                     'abpRx2Freq'        => (int) ($p['abp_rx2_freq'] ?? 0),
                     'allowRoaming'      => (bool) ($p['allow_roaming'] ?? 0),
                     'tags'              => cs_obj(),
-                    'tenantId'          => cs_intToUuid((int) ($p['tenant_id'] ?? 0)),
+                    'tenantId'          => cs_intToUuid((int) ($p['owner_id'] ?? 0)),
 
                     'numericId'         => (int) $p['id'],
                 ]);
@@ -1800,7 +1751,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 return cs_err(12, 'unimplemented', 'method not allowed');
             }
             if ($method === 'POST') {
-                if (isset($body['tenantId']) && !isset($body['tenant_id'])) { $body['tenant_id'] = cs_uuidToInt((string) $body['tenantId']); }
+                if (isset($body['tenantId']) && !isset($body['owner_id'])) { $body['owner_id'] = cs_uuidToInt((string) $body['tenantId']); }
                 $r = WebApp::createRole($body);
                 if ($e = cs_wrapError($r)) { return $e; }
                 return ['id' => cs_intToUuid((int) $r['id'])];
@@ -1831,17 +1782,16 @@ function handleApi(string $method, string $path): array|\stdClass
             return cs_err(12, 'unimplemented', 'legacy per-app api-keys removed; use /api/internal/api-keys');
 
         case 'uplinks':
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            if (isset($segs[1]) && $segs[1] !== '' && $method === 'GET' && ctype_digit((string) $segs[1])) {
-                $row = WebApp::getUplink((int) $segs[1], $tid);
+                        if (isset($segs[1]) && $segs[1] !== '' && $method === 'GET' && ctype_digit((string) $segs[1])) {
+                $row = WebApp::getUplink((int) $segs[1]);
                 if (!$row) { return cs_notFound('uplink not found'); }
                 return ['uplink' => $row];
             }
             $devId = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
-            $ups = WebApp::listUplinks($devId, $appId, $lim, $tid, $off);
-            $total = WebApp::countUplinks($devId, $appId, $tid);
+            $ups = WebApp::listUplinks($devId, $appId, $lim, $off);
+            $total = WebApp::countUplinks($devId, $appId);
             $upRows = array_map(static function ($u) {
                 return [
                     'id'          => (string) $u['id'],
@@ -1868,9 +1818,8 @@ function handleApi(string $method, string $path): array|\stdClass
             }, $ups);
             return cs_list($upRows, $total);
         case 'downlinks':
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            if (isset($segs[1]) && $segs[1] !== '' && $method === 'GET' && ctype_digit((string) $segs[1])) {
-                $row = WebApp::getDownlink((int) $segs[1], $tid);
+                        if (isset($segs[1]) && $segs[1] !== '' && $method === 'GET' && ctype_digit((string) $segs[1])) {
+                $row = WebApp::getDownlink((int) $segs[1]);
                 if (!$row) { return cs_notFound('downlink not found'); }
                 return ['downlink' => $row];
             }
@@ -1883,7 +1832,7 @@ function handleApi(string $method, string $path): array|\stdClass
 
                 $cur = Auth::currentUser();
                 if ($cur && ($cur['role'] ?? '') !== Auth::ROLE_ADMIN) {
-                    $visible = WebApp::visibleAppIds(isset($tid) && $tid ? (int) $tid : null) ?? [];
+                    $visible = WebApp::visibleAppIdsPublic() ?? [];
                     if (!in_array((int) $dl['app_id'], $visible, true)) {
                         return cs_forbidden('downlink not in your application');
                     }
@@ -1898,8 +1847,8 @@ function handleApi(string $method, string $path): array|\stdClass
             $devId = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
             $lim = $limitOf('limit'); $off = $offsetOf('offset');
-            $dls = WebApp::listDownlinks($devId, $appId, $lim, $tid, $off);
-            $total = WebApp::countDownlinks($devId, $appId, $tid);
+            $dls = WebApp::listDownlinks($devId, $appId, $lim, $off);
+            $total = WebApp::countDownlinks($devId, $appId);
             $dlRows = array_map(static function ($d) {
                 return [
                     'id'        => (string) $d['id'],
@@ -1929,10 +1878,9 @@ function handleApi(string $method, string $path): array|\stdClass
             $devId = isset($get['devId']) ? cs_uuidToInt((string) $get['devId']) : (isset($get['dev_id']) ? (int) $get['dev_id'] : null);
             $gwId = isset($get['gatewayId']) ? trim((string) $get['gatewayId']) : (isset($get['gw_id']) ? trim($get['gw_id']) : null);
             $type = isset($get['type']) ? trim($get['type']) : null;
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            $lim = $limitOf('limit'); $off = $offsetOf('offset');
-            $evs = WebApp::listEvents($devId, $gwId, $type, $lim, $tid, $off);
-            $total = WebApp::countEvents($devId, $gwId, $type, $tid);
+                        $lim = $limitOf('limit'); $off = $offsetOf('offset');
+            $evs = WebApp::listEvents($devId, $gwId, $type, $lim, $off);
+            $total = WebApp::countEvents($devId, $gwId, $type);
             $evRows = array_map(static function ($e) {
                 return [
                     'id'        => (string) $e['id'],
@@ -1980,13 +1928,12 @@ function handleApi(string $method, string $path): array|\stdClass
                 $roleId = (int) ($body['role_id'] ?? 0);
                 try {
                     $role = $roleId > 0 ? Auth::roleFromRoleId($roleId) : Auth::ROLE_OPERATOR;
-                    $reqTid = (int) ($body['tenant_id'] ?? 0);
                     $id = Auth::createUser(
                         $body['username'],
                         $body['password'],
                         $role,
-                        $reqTid,
-                        $role === Auth::ROLE_TENANT && $reqTid <= 0 ? (string) $body['username'] : null,
+                        0,
+                        null,
                         $body['email'] ?? null,
                         $roleId
                     );
@@ -2001,7 +1948,7 @@ function handleApi(string $method, string $path): array|\stdClass
                     'username'       => $u['username'] ?? '',
                     'email'          => $u['email'] ?? '',
                     'role'           => $u['role'] ?? '',
-                    'tenantId'       => cs_intToUuid((int) ($u['tenant_id'] ?? 0)),
+                    'tenantId'       => cs_intToUuid((int) ($u['id'] ?? 0)),
                     'tenantName'     => $u['tenant_name'] ?? '',
                     'roleId'         => cs_intToUuid((int) ($u['role_id'] ?? 0)),
                     'roleName'       => $u['role_name'] ?? '',
@@ -2038,8 +1985,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 return ['id' => cs_intToUuid((int) $r['id'])];
             }
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : 0);
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            $integrations = WebApp::listIntegrations($appId, $tid);
+                        $integrations = WebApp::listIntegrations($appId);
             $intRows = array_map(static function ($i) {
                 return array_merge(cs_rowBase($i), [
                     'applicationId' => cs_intToUuid((int) ($i['application_id'] ?? $i['app_id'] ?? 0)),
@@ -2162,8 +2108,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 return ['id' => cs_intToUuid((int) $r['id'])];
             }
             $appId = isset($get['applicationId']) ? cs_uuidToInt((string) $get['applicationId']) : (isset($get['app_id']) ? (int) $get['app_id'] : null);
-            $tid = isset($get['tenantId']) ? cs_uuidToInt((string) $get['tenantId']) : (isset($get['tenant_id']) ? (int) $get['tenant_id'] : null);
-            $mgs = WebApp::listMulticastGroups($appId, $tid);
+                        $mgs = WebApp::listMulticastGroups($appId);
             $mgRows = array_map(static function ($m) {
                 return array_merge(cs_rowBase($m), [
                     'name'          => $m['name'] ?? '',
@@ -2218,116 +2163,6 @@ function handleApi(string $method, string $path): array|\stdClass
             }
             $camps = WebApp::listFuotaCampaigns();
             return cs_list($camps, count($camps));
-        case 'tenants':
-            if (isset($segs[1]) && ($segs[2] ?? '') === 'users') {
-
-                $tid2 = cs_uuidToInt((string) $segs[1]);
-                if ($method === 'GET') {
-                    $tUsers = Database::fetchAll("SELECT * FROM users WHERE tenant_id=? ORDER BY id", [$tid2]);
-                    $tuRows = array_map(static fn($tu) => [
-                        'tenantId'       => cs_intToUuid($tid2),
-                        'userId'         => cs_intToUuid((int) $tu['id']),
-                        'email'          => $tu['email'] ?? '',
-                        'isAdmin'        => ($tu['role'] ?? '') === 'admin',
-                        'isDeviceAdmin'  => in_array($tu['role'] ?? '', ['admin', 'tenant'], true),
-                        'isGatewayAdmin' => in_array($tu['role'] ?? '', ['admin', 'tenant'], true),
-                        'createdAt'      => cs_ts($tu['created_at'] ?? 0),
-                        'updatedAt'      => cs_ts($tu['created_at'] ?? 0),
-                        'numericId'      => (int) $tu['id'],
-                    ], $tUsers);
-                    $offT = $offsetOf('offset');
-                    $limT = $limitOf('limit');
-                    return cs_list(array_slice($tuRows, $offT, $limT), count($tuRows));
-                }
-                if ($method === 'POST') {
-                    $tu = $body['tenantUser'] ?? $body;
-                    $email = (string) ($tu['email'] ?? '');
-                    if ($email === '') {
-                        return cs_invalid('email required');
-                    }
-                    $existing = Database::fetch("SELECT id FROM users WHERE email=?", [$email]);
-                    if ($existing) {
-                        Database::execute("UPDATE users SET tenant_id=? WHERE id=?", [$tid2, (int) $existing['id']]);
-                        return [];
-                    }
-                    return cs_notFound('user with given email does not exist');
-                }
-                if (isset($segs[3]) && ($method === 'PUT' || $method === 'DELETE')) {
-                    $uid2 = cs_uuidToInt((string) $segs[3]);
-                    if ($method === 'DELETE') {
-                        Database::execute("UPDATE users SET tenant_id=0 WHERE id=? AND tenant_id=?", [$uid2, $tid2]);
-                        return [];
-                    }
-                    $tu = $body['tenantUser'] ?? $body;
-                    $role = !empty($tu['isAdmin']) ? 'admin' : (!empty($tu['isDeviceAdmin']) ? 'tenant' : 'operator');
-                    Database::execute("UPDATE users SET role=?, tenant_id=? WHERE id=?", [$role, $tid2, $uid2]);
-                    return [];
-                }
-            }
-            if (isset($segs[1]) && $segs[1] === 'by-devaddr-prefix-overlap' && $method === 'GET') {
-
-                return cs_list([], 0);
-            }
-            if (isset($segs[1]) && $method === 'GET') {
-
-                $t = Database::fetch("SELECT * FROM tenants WHERE id=?", [cs_uuidToInt((string) $segs[1])]);
-                if (!$t) {
-                    return cs_notFound('tenant not found');
-                }
-                return ['tenant' => array_merge(cs_rowBase($t), [
-                    'name'                => $t['name'] ?? '',
-                    'description'         => $t['description'] ?? '',
-                    'canHaveGateways'     => (int) ($t['private_gateways_unlimited'] ?? 0) > 0,
-                    'privateGatewaysUp'   => false,
-                    'privateGatewaysDown' => false,
-                    'maxDeviceCount'      => 0,
-                    'maxGatewayCount'     => (int) ($t['private_gateways_limit'] ?? 0),
-                    'tags'                => cs_obj(),
-                    'numericId'           => (int) $t['id'],
-                ])];
-            }
-            if (isset($segs[1]) && $method === 'PUT') {
-                $r = WebApp::updateTenant(cs_uuidToInt((string) $segs[1]), $body);
-                if ($e = cs_wrapError($r)) { return $e; }
-                return [];
-            }
-            if (isset($segs[1]) && $method === 'DELETE') {
-                $r = WebApp::deleteTenant(cs_uuidToInt((string) $segs[1]));
-                if ($e = cs_wrapError($r)) { return $e; }
-                return [];
-            }
-            if ($method === 'POST') {
-                $in = $body['tenant'] ?? $body;
-                if (isset($in['name'])) { $in['name'] = $in['name']; }
-                $r = WebApp::createTenant($in);
-                if ($e = cs_wrapError($r)) { return $e; }
-                return ['id' => cs_intToUuid((int) $r['id'])];
-            }
-            $tenants = WebApp::listTenants();
-
-            $search = trim((string) ($get['search'] ?? ''));
-            if ($search !== '') {
-                $tenants = array_values(array_filter($tenants, fn($t) => stripos((string) ($t['name'] ?? ''), $search) !== false));
-            }
-            $tenantRows = array_map(static function ($t) {
-                return array_merge(cs_rowBase($t), [
-                    'name'                => $t['name'] ?? '',
-                    'description'         => $t['description'] ?? '',
-                    'canHaveGateways'     => (int) ($t['private_gateways_unlimited'] ?? 0) > 0,
-                    'privateGatewaysUp'   => false,
-                    'privateGatewaysDown' => false,
-                    'maxDeviceCount'      => 0,
-                    'maxGatewayCount'     => (int) ($t['private_gateways_limit'] ?? 0),
-                    'tags'                => cs_obj(),
-
-                    'numericId'           => (int) $t['id'],
-                ]);
-            }, $tenants);
-            $totalT = count($tenantRows);
-            if ((int) ($get['limit'] ?? 50) === 0) {
-                return cs_list([], $totalT);
-            }
-            return cs_list(array_slice($tenantRows, $offsetOf('offset'), $limitOf('limit')), $totalT);
         case 'device-profile-templates':
 
             if ($method === 'GET' && !isset($segs[1])) {
@@ -2351,12 +2186,12 @@ function handleApi(string $method, string $path): array|\stdClass
         case 'relays':
 
             $sc = WebApp::scopePublic();
-            $relayTid = (int) $sc['tenant_id'];
+            $relayOid = (int) $sc['owner_id'];
             $relayAll = $sc['is_admin'] || $sc['demo'];
             if (isset($segs[1]) && ($segs[2] ?? '') === 'devices') {
                 $relayEui = strtolower(preg_replace('/[^0-9a-fA-F]/', '', (string) $segs[1]));
                 $relayGw = Database::fetch("SELECT * FROM relay_gateways WHERE relay_dev_eui=?", [$relayEui]);
-                if (!$relayGw || (!$relayAll && (int) ($relayGw['tenant_id'] ?? 0) !== $relayTid)) {
+                if (!$relayGw || (!$relayAll && (int) ($relayGw['owner_id'] ?? 0) !== $relayOid)) {
                     return cs_notFound('relay gateway not found');
                 }
                 if ($method === 'GET') {
@@ -2397,7 +2232,7 @@ function handleApi(string $method, string $path): array|\stdClass
             if ($method === 'GET') {
 
                 $relRows = Database::fetchAll(
-                    "SELECT d.dev_eui, d.name FROM devices d WHERE (d.relay_state='relay' OR d.dev_eui IN (SELECT relay_dev_eui FROM relay_gateways))" . ($relayAll ? '' : ' AND d.tenant_id=' . $relayTid) . " ORDER BY d.id DESC"
+                    "SELECT d.dev_eui, d.name FROM devices d WHERE (d.relay_state='relay' OR d.dev_eui IN (SELECT relay_dev_eui FROM relay_gateways))" . ($relayAll ? '' : ' AND d.owner_id=' . $relayOid) . " ORDER BY d.id DESC"
                 );
                 $relList = array_map(static fn($r) => ['devEui' => $r['dev_eui'] ?? '', 'name' => $r['name'] ?? ''], $relRows);
                 $offR2 = $offsetOf('offset');
@@ -2414,7 +2249,7 @@ function handleApi(string $method, string $path): array|\stdClass
                 return ['error' => 'forbidden'];
             }
             $filters = [
-                'tenant_id' => isset($get['tenant_id']) ? (int) $get['tenant_id'] : null,
+                'owner_id' => isset($get['owner_id']) ? (int) $get['owner_id'] : null,
                 'application_id' => isset($get['application_id']) ? (int) $get['application_id'] : null,
                 'ip' => isset($get['ip']) ? trim((string) $get['ip']) : null,
                 'status' => isset($get['status']) ? $get['status'] : null,
@@ -2435,7 +2270,7 @@ function handleApi(string $method, string $path): array|\stdClass
                     'ip'        => $l['ip'] ?? '',
                     'username'  => $l['username'] ?? '',
                     'role'      => $l['role'] ?? '',
-                    'tenantId'  => (int) ($l['tenant_id'] ?? 0),
+                    'tenantId'  => (int) ($l['owner_id'] ?? 0),
                     'applicationId' => (int) ($l['application_id'] ?? 0),
                     'query'     => $l['query'] ?? '',
                     'bodySize'  => (int) ($l['body_size'] ?? 0),
@@ -2443,6 +2278,49 @@ function handleApi(string $method, string $path): array|\stdClass
                 ];
             }, $out['rows'] ?? []);
             return cs_list($logRows, (int) ($out['total'] ?? count($logRows)));
+        case 'integration-logs':
+
+            $u = Auth::currentUser();
+            $role = $u['role'] ?? '';
+            if (!in_array($role, [Auth::ROLE_ADMIN, Auth::ROLE_TENANT, Auth::ROLE_OPERATOR], true)) {
+                http_response_code(403);
+                return ['error' => 'forbidden'];
+            }
+            $ifilters = [
+                'owner_id' => isset($get['owner_id']) ? (int) $get['owner_id'] : null,
+                'app_id' => isset($get['app_id']) ? (int) $get['app_id'] : null,
+                'integration_id' => isset($get['integration_id']) ? (int) $get['integration_id'] : null,
+                'dev_eui' => isset($get['dev_eui']) ? trim((string) $get['dev_eui']) : null,
+                'kind' => isset($get['kind']) ? trim((string) $get['kind']) : null,
+                'event' => isset($get['event']) ? trim((string) $get['event']) : null,
+                'ok' => isset($get['ok']) && $get['ok'] !== '' ? ((int) $get['ok'] ? 1 : 0) : null,
+                'target_contains' => isset($get['target_contains']) ? trim((string) $get['target_contains']) : null,
+                'since' => isset($get['since']) ? (int) $get['since'] : null,
+            ];
+            $iout = WebApp::listIntegrationLogs($limitOf('limit'), $offsetOf('offset'), $ifilters);
+            $irows = array_map(static function ($l) {
+                return [
+                    'id'             => (string) ($l['id'] ?? ''),
+                    'time'           => cs_ts($l['created_at'] ?? 0),
+                    'createdAt'      => (int) ($l['created_at'] ?? 0),
+                    'applicationId'  => (int) ($l['app_id'] ?? 0),
+                    'integrationId'  => (int) ($l['integration_id'] ?? 0),
+                    'kind'           => $l['kind'] ?? 'WEBHOOK',
+                    'event'          => $l['event'] ?? 'up',
+                    'trigger'        => $l['trigger'] ?? 'uplink',
+                    'devEui'         => $l['dev_eui'] ?? '',
+                    'devAddr'        => $l['dev_addr'] ?? '',
+                    'fcnt'           => (int) ($l['fcnt'] ?? 0),
+                    'fport'          => (int) ($l['fport'] ?? 0),
+                    'target'         => $l['target'] ?? '',
+                    'requestBody'    => $l['request_body'] ?? '',
+                    'httpStatus'     => (int) ($l['http_status'] ?? 0),
+                    'ok'             => (int) ($l['ok'] ?? 0) ? true : false,
+                    'latencyMs'      => (int) ($l['latency_ms'] ?? 0),
+                    'message'        => $l['message'] ?? '',
+                ];
+            }, $iout['rows'] ?? []);
+            return cs_list($irows, (int) ($iout['total'] ?? count($irows)));
         default:
             http_response_code(501);
             return cs_unimplemented('unknown endpoint: /api/' . $resource);

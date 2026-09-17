@@ -6,10 +6,10 @@ use holastack\Core\Cron;
 
 class ScheduledTask
 {
-    public static function list(?int $tenantId = null): array
+    public static function list(?int $ownerId = null): array
     {
-        if ($tenantId !== null) {
-            return Database::fetchAll("SELECT * FROM scheduled_tasks WHERE tenant_id=? ORDER BY id DESC", [$tenantId]);
+        if ($ownerId !== null) {
+            return Database::fetchAll("SELECT * FROM scheduled_tasks WHERE owner_id=? ORDER BY id DESC", [$ownerId]);
         }
         return Database::fetchAll("SELECT * FROM scheduled_tasks ORDER BY id DESC");
     }
@@ -28,9 +28,9 @@ class ScheduledTask
         $now = time();
         $next = self::computeNext($norm['cron'], $now);
         Database::execute(
-            "INSERT INTO scheduled_tasks (tenant_id, name, application_id, device_id, port, payload_hex, confirmed, cron, enabled, next_run_at, last_run_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO scheduled_tasks (owner_id, name, application_id, device_id, port, payload_hex, confirmed, cron, enabled, next_run_at, last_run_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             [
-                (int) ($norm['tenant_id'] ?? 0),
+                (int) ($norm['owner_id'] ?? 0),
                 $norm['name'],
                 $norm['application_id'],
                 $norm['device_id'],
@@ -82,7 +82,7 @@ class ScheduledTask
 
     public static function run(array $task): array
     {
-        $dev = Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [(int) $task['device_id']]);
+        $dev = Database::fetch("SELECT id, app_id, owner_id, name FROM devices WHERE id=?", [(int) $task['device_id']]);
         if (!$dev) {
             self::markResult((int) $task['id'], $task['cron'] ?? '', 'device_not_found');
             return ['error' => 'device_not_found'];
@@ -137,7 +137,7 @@ class ScheduledTask
     private static function normalize(array $p): array
     {
         $devId = (int) ($p['device_id'] ?? 0);
-        $dev = $devId > 0 ? Database::fetch("SELECT id, app_id, tenant_id, name FROM devices WHERE id=?", [$devId]) : null;
+        $dev = $devId > 0 ? Database::fetch("SELECT id, app_id, owner_id, name FROM devices WHERE id=?", [$devId]) : null;
         if (!$dev) {
             return ['error' => 'device_not_found'];
         }
@@ -155,7 +155,7 @@ class ScheduledTask
         }
         return [
             'name'           => mb_substr((string) ($p['name'] ?? ('Scheduled #' . $devId)), 0, 128),
-            'tenant_id'      => (int) ($p['tenant_id'] ?? (int) $dev['tenant_id']),
+            'owner_id'      => (int) ($p['owner_id'] ?? (int) $dev['owner_id']),
             'application_id' => (int) $dev['app_id'],
             'device_id'      => $devId,
             'port'           => $port,

@@ -1,7 +1,7 @@
 -- holastack MySQL schema
 CREATE TABLE IF NOT EXISTS applications (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     description VARCHAR(255) DEFAULT '',
     app_eui VARCHAR(32) DEFAULT '',
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS applications (
 
 CREATE TABLE IF NOT EXISTS gateways (
     gw_id VARCHAR(32) PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     region VARCHAR(32) DEFAULT '',
     created_at INT NOT NULL,
@@ -24,19 +24,12 @@ CREATE TABLE IF NOT EXISTS gateways (
     altitude DOUBLE DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS tenants (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(128) NOT NULL,
-    description VARCHAR(255) DEFAULT '',
-    private_gateways_limit INT NOT NULL DEFAULT 0,
-    private_gateways_unlimited TINYINT NOT NULL DEFAULT 0,
-    created_at INT NOT NULL
-);
+
 
 CREATE TABLE IF NOT EXISTS devices (
     id INT AUTO_INCREMENT PRIMARY KEY,
     app_id INT NOT NULL,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     dev_eui VARCHAR(32) NOT NULL,
     join_eui VARCHAR(32) DEFAULT '',
@@ -98,7 +91,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(16) NOT NULL DEFAULT 'admin',
-    tenant_id INT NOT NULL DEFAULT 0,
+    owner_id INT NOT NULL DEFAULT 0,
     email VARCHAR(255) NOT NULL DEFAULT '',
     created_at INT NOT NULL
 );
@@ -165,7 +158,7 @@ CREATE TABLE IF NOT EXISTS events (
 -- ---- 设备配置模板（Device Profile） ----
 CREATE TABLE IF NOT EXISTS device_profiles (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     description VARCHAR(255) DEFAULT '',
     region VARCHAR(16) NOT NULL DEFAULT 'EU868',
@@ -194,11 +187,11 @@ CREATE TABLE IF NOT EXISTS device_profiles (
     created_at INT NOT NULL
 );
 
--- ---- API Key（ChirpStack 模型：全局 admin 或绑定租户） ----
+-- ---- API Key（ChirpStack 模型：全局 admin 或绑定私有 owner） ----
 CREATE TABLE IF NOT EXISTS api_keys (
     id INT AUTO_INCREMENT PRIMARY KEY,
     uuid VARCHAR(36) NOT NULL DEFAULT '',
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     api_key VARCHAR(255) NOT NULL UNIQUE,
     application_id INT NOT NULL DEFAULT 0,
@@ -220,7 +213,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS integrations (
     id INT AUTO_INCREMENT PRIMARY KEY,
     application_id INT NOT NULL,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     kind VARCHAR(32) NOT NULL,
     enabled TINYINT NOT NULL DEFAULT 1,
     config_json TEXT,
@@ -231,7 +224,7 @@ CREATE TABLE IF NOT EXISTS integrations (
 -- ---- 组播组（Multicast Group, Class B/C） ----
 CREATE TABLE IF NOT EXISTS multicast_groups (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     application_id INT NOT NULL,
     region VARCHAR(16) NOT NULL DEFAULT 'EU868',
@@ -274,7 +267,7 @@ CREATE TABLE IF NOT EXISTS multicast_queue (
 -- ---- Basic Station / LNS（WebSocket 后端） ----
 CREATE TABLE IF NOT EXISTS stations (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     gateway_id VARCHAR(32) NOT NULL,
     name VARCHAR(128) NOT NULL,
     region VARCHAR(16) NOT NULL DEFAULT 'EU868',
@@ -286,7 +279,7 @@ CREATE TABLE IF NOT EXISTS stations (
 -- ---- 中继（Relay, TS011 / LoRaWAN 1.1 Relay） ----
 CREATE TABLE IF NOT EXISTS relay_gateways (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     relay_dev_eui VARCHAR(32) NOT NULL,
     region VARCHAR(16) NOT NULL DEFAULT 'EU868',
@@ -319,7 +312,7 @@ CREATE TABLE IF NOT EXISTS relay_devices (
 -- ---- FUOTA（固件分片 + 组播 + 时钟同步） ----
 CREATE TABLE IF NOT EXISTS fuota_campaigns (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     application_id INT NOT NULL,
     multicast_group_id INT NOT NULL,
@@ -343,7 +336,7 @@ CREATE TABLE IF NOT EXISTS fuota_campaigns (
     firmware_crc INT NOT NULL DEFAULT 0,
     status_req_sent TINYINT NOT NULL DEFAULT 0,
     created_at INT NOT NULL,
-    INDEX idx_fc_tenant (tenant_id),
+    INDEX idx_fc_owner (owner_id),
     INDEX idx_fc_state (state)
 );
 
@@ -384,7 +377,7 @@ CREATE TABLE IF NOT EXISTS fuota_frames (
 -- ---- 漫游（Roaming, Backend Interface） ----
 CREATE TABLE IF NOT EXISTS roaming_servers (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    tenant_id INT DEFAULT 0,
+    owner_id INT DEFAULT 0,
     name VARCHAR(128) NOT NULL,
     kind VARCHAR(16) NOT NULL DEFAULT 'PASSIVE',
     protocol VARCHAR(16) NOT NULL DEFAULT 'BI_1_0',
@@ -406,11 +399,35 @@ CREATE TABLE IF NOT EXISTS api_logs (
     user_id INT NOT NULL DEFAULT 0,
     username VARCHAR(64) DEFAULT '',
     role VARCHAR(16) DEFAULT '',
-    tenant_id INT NOT NULL DEFAULT 0,
+    owner_id INT NOT NULL DEFAULT 0,
     application_id INT NOT NULL DEFAULT 0,
     query VARCHAR(512) DEFAULT '',
     body_size INT NOT NULL DEFAULT 0,
-    INDEX idx_api_logs_tenant (tenant_id),
+    INDEX idx_api_logs_owner (owner_id),
     INDEX idx_api_logs_app (application_id),
     INDEX idx_api_logs_created (created_at)
+);
+
+CREATE TABLE IF NOT EXISTS integration_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at INT NOT NULL,
+    owner_id INT NOT NULL DEFAULT 0,
+    app_id INT NOT NULL DEFAULT 0,
+    integration_id INT NOT NULL DEFAULT 0,
+    kind VARCHAR(24) NOT NULL DEFAULT 'WEBHOOK',
+    event VARCHAR(12) NOT NULL DEFAULT 'up',
+    `trigger` VARCHAR(16) NOT NULL DEFAULT 'uplink',
+    dev_eui VARCHAR(32) DEFAULT '',
+    dev_addr VARCHAR(16) DEFAULT '',
+    fcnt INT NOT NULL DEFAULT 0,
+    fport INT NOT NULL DEFAULT 0,
+    target VARCHAR(512) DEFAULT '',
+    request_body MEDIUMTEXT,
+    http_status INT NOT NULL DEFAULT 0,
+    ok TINYINT NOT NULL DEFAULT 0,
+    latency_ms INT NOT NULL DEFAULT 0,
+    message VARCHAR(512) DEFAULT '',
+    INDEX idx_ilog_app (app_id),
+    INDEX idx_ilog_created (created_at),
+    INDEX idx_ilog_dev (dev_eui)
 );

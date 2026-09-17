@@ -194,23 +194,15 @@ class Database
                 ['downlinks', 'mac', 'INTEGER NOT NULL DEFAULT 0'],
                 ['applications', 'callback_url', 'TEXT DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT DEFAULT \'\''],
-                ['users', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['users', 'email', 'TEXT DEFAULT \'\''],
                 ['users', 'role_id', 'INTEGER DEFAULT 0'],
-                ['applications', 'tenant_id', 'INTEGER DEFAULT 0'],
-                ['devices', 'tenant_id', 'INTEGER DEFAULT 0'],
-                ['device_profiles', 'tenant_id', 'INTEGER DEFAULT 0'],
-                ['gateways', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['gateways', 'rf_config', 'TEXT DEFAULT \'\''],
                 ['gateways', 'latitude', 'REAL DEFAULT 0'],
                 ['gateways', 'longitude', 'REAL DEFAULT 0'],
                 ['gateways', 'altitude', 'REAL DEFAULT 0'],
-                ['api_keys', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['api_keys', 'uuid', "TEXT NOT NULL DEFAULT ''"],
                 ['api_keys', 'is_admin', 'INTEGER NOT NULL DEFAULT 0'],
                 ['api_keys', 'is_read_only', 'INTEGER NOT NULL DEFAULT 0'],
-                ['integrations', 'tenant_id', 'INTEGER DEFAULT 0'],
-                ['multicast_groups', 'tenant_id', 'INTEGER DEFAULT 0'],
                 ['api_keys', 'created_at', 'INTEGER DEFAULT 0'],
                 ['roaming_servers', 'net_id', 'TEXT DEFAULT \'\''],
                 ['roaming_servers', 'kek_label', 'TEXT DEFAULT \'\''],
@@ -251,8 +243,6 @@ class Database
                 ['fuota_deployments', 'status_ans', 'INTEGER NOT NULL DEFAULT 0'],
                 ['fuota_deployments', 'updated_at', 'INTEGER NOT NULL DEFAULT 0'],
 
-                ['tenants', 'private_gateways_unlimited', 'INTEGER NOT NULL DEFAULT 0'],
-
                 ['roles', 'devices_limit', 'INTEGER NOT NULL DEFAULT 0'],
                 ['roles', 'gateways_limit', 'INTEGER NOT NULL DEFAULT 0'],
                 ['roles', 'gateways_unlimited', 'INTEGER NOT NULL DEFAULT 0'],
@@ -274,37 +264,41 @@ class Database
 
             $pdo->exec('CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, type VARCHAR(16) NOT NULL, level VARCHAR(8) NOT NULL DEFAULT \'info\', gateway_id VARCHAR(32) DEFAULT \'\', dev_id INTEGER DEFAULT 0, app_id INTEGER DEFAULT 0, message TEXT DEFAULT \'\', raw_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT \'\', private_gateways_limit INTEGER NOT NULL DEFAULT 0, private_gateways_unlimited INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
 
-            $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, gateway_id TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', lns_secret TEXT DEFAULT \'\', ca_cert TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, relay_dev_eui TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, gateway_id TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', lns_secret TEXT DEFAULT \'\', ca_cert TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL, relay_dev_eui TEXT NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, relay_gateway_id INTEGER NOT NULL, dev_eui TEXT NOT NULL, slot_index INTEGER NOT NULL DEFAULT 0, join_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', root_wor_s_key TEXT DEFAULT \'\', provisioned INTEGER NOT NULL DEFAULT 0, uplink_limit_bucket_size INTEGER NOT NULL DEFAULT 0, uplink_limit_reload_rate INTEGER NOT NULL DEFAULT 0, w_f_cnt_last_request INTEGER NOT NULL DEFAULT 0, nwk_s_key TEXT DEFAULT \'\', app_s_key TEXT DEFAULT \'\', f_nwk_s_int_key TEXT DEFAULT \'\', s_nwk_s_int_key TEXT DEFAULT \'\', nwk_s_enc_key TEXT DEFAULT \'\', mac_version TEXT DEFAULT \'1.1\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, multicast_group_id INTEGER NOT NULL, fragment_size INTEGER NOT NULL DEFAULT 200, redundancy INTEGER NOT NULL DEFAULT 1, descriptor_version INTEGER NOT NULL DEFAULT 0, fw_version TEXT DEFAULT \'\', fw_length INTEGER NOT NULL DEFAULT 0, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', mc_ke_key TEXT DEFAULT \'\', min_delay INTEGER NOT NULL DEFAULT 200, max_delay INTEGER NOT NULL DEFAULT 1000, timeout INTEGER NOT NULL DEFAULT 3600, frames_sent INTEGER NOT NULL DEFAULT 0, total_frames INTEGER NOT NULL DEFAULT 0, next_frame_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, firmware_sha256 TEXT DEFAULT \'\', firmware_crc INTEGER NOT NULL DEFAULT 0, status_req_sent INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, multicast_group_id INTEGER NOT NULL, fragment_size INTEGER NOT NULL DEFAULT 200, redundancy INTEGER NOT NULL DEFAULT 1, descriptor_version INTEGER NOT NULL DEFAULT 0, fw_version TEXT DEFAULT \'\', fw_length INTEGER NOT NULL DEFAULT 0, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', mc_ke_key TEXT DEFAULT \'\', min_delay INTEGER NOT NULL DEFAULT 200, max_delay INTEGER NOT NULL DEFAULT 1000, timeout INTEGER NOT NULL DEFAULT 3600, frames_sent INTEGER NOT NULL DEFAULT 0, total_frames INTEGER NOT NULL DEFAULT 0, next_frame_at INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, firmware_sha256 TEXT DEFAULT \'\', firmware_crc INTEGER NOT NULL DEFAULT 0, status_req_sent INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, dev_id INTEGER NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INTEGER NOT NULL DEFAULT 0, frag_nb_missing INTEGER NOT NULL DEFAULT 0, mc_group_ans INTEGER NOT NULL DEFAULT 0, status_ans INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INTEGER PRIMARY KEY AUTOINCREMENT, deployment_id INTEGER NOT NULL, frag_index INTEGER NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_frames (id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER NOT NULL, seq INTEGER NOT NULL, fopts_hex TEXT NOT NULL, created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server TEXT DEFAULT \'\', async_timeout INTEGER NOT NULL DEFAULT 250, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server TEXT DEFAULT \'\', async_timeout INTEGER NOT NULL DEFAULT 250, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)');
 
-            $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INTEGER PRIMARY KEY AUTOINCREMENT, application_id INTEGER NOT NULL, tenant_id INTEGER DEFAULT 0, kind TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', group_type TEXT NOT NULL DEFAULT \'C\', mc_addr TEXT DEFAULT \'\', mc_nwk_s_key TEXT DEFAULT \'\', mc_app_s_key TEXT DEFAULT \'\', f_cnt INTEGER NOT NULL DEFAULT 0, dr INTEGER NOT NULL DEFAULT 0, frequency INTEGER NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INTEGER NOT NULL DEFAULT 0, class_c_scheduling_type TEXT NOT NULL DEFAULT \'DELAY\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INTEGER PRIMARY KEY AUTOINCREMENT, application_id INTEGER NOT NULL, owner_id INTEGER DEFAULT 0, kind TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_json TEXT DEFAULT \'\', created_at INTEGER NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL, application_id INTEGER NOT NULL, region TEXT NOT NULL DEFAULT \'EU868\', group_type TEXT NOT NULL DEFAULT \'C\', mc_addr TEXT DEFAULT \'\', mc_nwk_s_key TEXT DEFAULT \'\', mc_app_s_key TEXT DEFAULT \'\', f_cnt INTEGER NOT NULL DEFAULT 0, dr INTEGER NOT NULL DEFAULT 0, frequency INTEGER NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INTEGER NOT NULL DEFAULT 0, class_c_scheduling_type TEXT NOT NULL DEFAULT \'DELAY\', created_at INTEGER NOT NULL)');
             self::ensureColumn('uplinks', 'phy_payload', 'TEXT DEFAULT \'\'');
 
-            $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path TEXT DEFAULT \'\', status INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0, ip TEXT DEFAULT \'\', user_id INTEGER NOT NULL DEFAULT 0, username TEXT DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INTEGER NOT NULL DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, query TEXT DEFAULT \'\', body_size INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS thing_models (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', fields_json TEXT DEFAULT \'\', codec TEXT NOT NULL DEFAULT \'SEGMENT\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path TEXT DEFAULT \'\', status INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0, ip TEXT DEFAULT \'\', user_id INTEGER NOT NULL DEFAULT 0, username TEXT DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', owner_id INTEGER NOT NULL DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, query TEXT DEFAULT \'\', body_size INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS thing_models (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', fields_json TEXT DEFAULT \'\', codec TEXT NOT NULL DEFAULT \'SEGMENT\', created_at INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS device_readings (id INTEGER PRIMARY KEY AUTOINCREMENT, dev_id INTEGER NOT NULL DEFAULT 0, app_id INTEGER NOT NULL DEFAULT 0, field_key TEXT NOT NULL DEFAULT \'\', value REAL NOT NULL DEFAULT 0, text_value TEXT NOT NULL DEFAULT \'\', fcnt INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_notification_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', webhook_url TEXT DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', field_key TEXT NOT NULL DEFAULT \'\', operator TEXT NOT NULL DEFAULT \'gt\', threshold TEXT NOT NULL DEFAULT \'\', severity TEXT NOT NULL DEFAULT \'warn\', notify_group_id INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, device_name TEXT DEFAULT \'\', rule_id INTEGER NOT NULL DEFAULT 0, rule_name TEXT DEFAULT \'\', field_key TEXT DEFAULT \'\', value REAL NOT NULL DEFAULT 0, text_value TEXT DEFAULT \'\', severity TEXT NOT NULL DEFAULT \'warn\', status TEXT NOT NULL DEFAULT \'triggered\', message TEXT DEFAULT \'\', ts INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_notification_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', webhook_url TEXT DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', field_key TEXT NOT NULL DEFAULT \'\', operator TEXT NOT NULL DEFAULT \'gt\', threshold TEXT NOT NULL DEFAULT \'\', severity TEXT NOT NULL DEFAULT \'warn\', notify_group_id INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, device_name TEXT DEFAULT \'\', rule_id INTEGER NOT NULL DEFAULT 0, rule_name TEXT DEFAULT \'\', field_key TEXT DEFAULT \'\', value REAL NOT NULL DEFAULT 0, text_value TEXT DEFAULT \'\', severity TEXT NOT NULL DEFAULT \'warn\', status TEXT NOT NULL DEFAULT \'triggered\', message TEXT DEFAULT \'\', ts INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_alerts_dev_status ON alerts(device_id, status)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, port INTEGER NOT NULL DEFAULT 1, payload_hex TEXT NOT NULL DEFAULT \'\', confirmed INTEGER NOT NULL DEFAULT 0, cron TEXT NOT NULL DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, next_run_at INTEGER NOT NULL DEFAULT 0, last_run_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', application_id INTEGER NOT NULL DEFAULT 0, device_id INTEGER NOT NULL DEFAULT 0, port INTEGER NOT NULL DEFAULT 1, payload_hex TEXT NOT NULL DEFAULT \'\', confirmed INTEGER NOT NULL DEFAULT 0, cron TEXT NOT NULL DEFAULT \'\', enabled INTEGER NOT NULL DEFAULT 1, next_run_at INTEGER NOT NULL DEFAULT 0, last_run_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_st_next ON scheduled_tasks(enabled, next_run_at)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', description TEXT DEFAULT \'\', permissions TEXT DEFAULT \'\', is_system INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', trigger_device_id INTEGER NOT NULL DEFAULT 0, trigger_field TEXT NOT NULL DEFAULT \'\', trigger_operator TEXT NOT NULL DEFAULT \'gt\', trigger_value TEXT NOT NULL DEFAULT \'\', cooldown_seconds INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1, action_type TEXT NOT NULL DEFAULT \'downlink\', action_device_id INTEGER NOT NULL DEFAULT 0, action_port INTEGER NOT NULL DEFAULT 1, action_payload_hex TEXT NOT NULL DEFAULT \'\', action_confirmed INTEGER NOT NULL DEFAULT 0, notify_group_id INTEGER NOT NULL DEFAULT 0, fired_count INTEGER NOT NULL DEFAULT 0, last_fired_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', description TEXT DEFAULT \'\', permissions TEXT DEFAULT \'\', is_system INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER DEFAULT 0, application_id INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT \'\', trigger_device_id INTEGER NOT NULL DEFAULT 0, trigger_field TEXT NOT NULL DEFAULT \'\', trigger_operator TEXT NOT NULL DEFAULT \'gt\', trigger_value TEXT NOT NULL DEFAULT \'\', cooldown_seconds INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1, action_type TEXT NOT NULL DEFAULT \'downlink\', action_device_id INTEGER NOT NULL DEFAULT 0, action_port INTEGER NOT NULL DEFAULT 1, action_payload_hex TEXT NOT NULL DEFAULT \'\', action_confirmed INTEGER NOT NULL DEFAULT 0, notify_group_id INTEGER NOT NULL DEFAULT 0, fired_count INTEGER NOT NULL DEFAULT 0, last_fired_at INTEGER NOT NULL DEFAULT 0, last_result TEXT DEFAULT \'\', created_at INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_au_app ON automations(application_id, enabled)');
-            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_owner ON api_logs(owner_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_app ON api_logs(application_id)');
             $pdo->exec('CREATE INDEX IF NOT EXISTS idx_api_logs_created ON api_logs(created_at)');
+
+            $pdo->exec('CREATE TABLE IF NOT EXISTS integration_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, owner_id INTEGER NOT NULL DEFAULT 0, app_id INTEGER NOT NULL DEFAULT 0, integration_id INTEGER NOT NULL DEFAULT 0, kind VARCHAR(24) NOT NULL DEFAULT \'WEBHOOK\', event VARCHAR(12) NOT NULL DEFAULT \'up\', `trigger` VARCHAR(16) NOT NULL DEFAULT \'uplink\', dev_eui TEXT DEFAULT \'\', dev_addr TEXT DEFAULT \'\', fcnt INTEGER NOT NULL DEFAULT 0, fport INTEGER NOT NULL DEFAULT 0, target TEXT DEFAULT \'\', request_body TEXT DEFAULT \'\', http_status INTEGER NOT NULL DEFAULT 0, ok INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0, message TEXT DEFAULT \'\')');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ilog_app ON integration_logs(app_id)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ilog_created ON integration_logs(created_at)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ilog_dev ON integration_logs(dev_eui)');
 
             try { $pdo->exec('DROP TABLE IF EXISTS departments'); } catch (\Throwable $e) { error_log('drop departments failed: ' . $e->getMessage()); }
         } else {
@@ -331,29 +325,28 @@ class Database
             if (!self::mysqlColumnExists('events', 'raw_json')) {
                 $pdo->exec('ALTER TABLE events ADD COLUMN raw_json TEXT');
             }
-            $pdo->exec('CREATE TABLE IF NOT EXISTS tenants (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(128) NOT NULL, description VARCHAR(255) DEFAULT \'\', private_gateways_limit INT NOT NULL DEFAULT 0, private_gateways_unlimited TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
 
-            $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, gateway_id VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', lns_secret VARCHAR(128) DEFAULT \'\', ca_cert TEXT, created_at INT NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, relay_dev_eui VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS stations (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, gateway_id VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', lns_secret VARCHAR(128) DEFAULT \'\', ca_cert TEXT, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS relay_gateways (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, relay_dev_eui VARCHAR(32) NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS relay_devices (id INT AUTO_INCREMENT PRIMARY KEY, relay_gateway_id INT NOT NULL, dev_eui VARCHAR(32) NOT NULL, slot_index INT NOT NULL DEFAULT 0, join_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', root_wor_s_key VARCHAR(64) DEFAULT \'\', provisioned TINYINT NOT NULL DEFAULT 0, uplink_limit_bucket_size INT NOT NULL DEFAULT 0, uplink_limit_reload_rate INT NOT NULL DEFAULT 0, w_f_cnt_last_request INT NOT NULL DEFAULT 0, nwk_s_key VARCHAR(64) DEFAULT \'\', app_s_key VARCHAR(64) DEFAULT \'\', f_nwk_s_int_key VARCHAR(64) DEFAULT \'\', s_nwk_s_int_key VARCHAR(64) DEFAULT \'\', nwk_s_enc_key VARCHAR(64) DEFAULT \'\', mac_version VARCHAR(16) DEFAULT \'1.1\', created_at INT NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, multicast_group_id INT NOT NULL, fragment_size INT NOT NULL DEFAULT 200, redundancy INT NOT NULL DEFAULT 1, descriptor_version INT NOT NULL DEFAULT 0, fw_version VARCHAR(32) DEFAULT \'\', fw_length INT NOT NULL DEFAULT 0, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', mc_ke_key VARCHAR(64) DEFAULT \'\', min_delay INT NOT NULL DEFAULT 200, max_delay INT NOT NULL DEFAULT 1000, timeout INT NOT NULL DEFAULT 3600, frames_sent INT NOT NULL DEFAULT 0, total_frames INT NOT NULL DEFAULT 0, next_frame_at INT NOT NULL DEFAULT 0, started_at INT NOT NULL DEFAULT 0, updated_at INT NOT NULL DEFAULT 0, firmware_sha256 VARCHAR(64) DEFAULT \'\', firmware_crc INT NOT NULL DEFAULT 0, status_req_sent TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_campaigns (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, multicast_group_id INT NOT NULL, fragment_size INT NOT NULL DEFAULT 200, redundancy INT NOT NULL DEFAULT 1, descriptor_version INT NOT NULL DEFAULT 0, fw_version VARCHAR(32) DEFAULT \'\', fw_length INT NOT NULL DEFAULT 0, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', mc_ke_key VARCHAR(64) DEFAULT \'\', min_delay INT NOT NULL DEFAULT 200, max_delay INT NOT NULL DEFAULT 1000, timeout INT NOT NULL DEFAULT 3600, frames_sent INT NOT NULL DEFAULT 0, total_frames INT NOT NULL DEFAULT 0, next_frame_at INT NOT NULL DEFAULT 0, started_at INT NOT NULL DEFAULT 0, updated_at INT NOT NULL DEFAULT 0, firmware_sha256 VARCHAR(64) DEFAULT \'\', firmware_crc INT NOT NULL DEFAULT 0, status_req_sent TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_deployments (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, dev_id INT NOT NULL, state VARCHAR(16) NOT NULL DEFAULT \'PENDING\', fragments_received INT NOT NULL DEFAULT 0, frag_nb_missing INT NOT NULL DEFAULT 0, mc_group_ans TINYINT NOT NULL DEFAULT 0, status_ans TINYINT NOT NULL DEFAULT 0, updated_at INT NOT NULL DEFAULT 0, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_fragments (id INT AUTO_INCREMENT PRIMARY KEY, deployment_id INT NOT NULL, frag_index INT NOT NULL, data TEXT NOT NULL, created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS fuota_frames (id INT AUTO_INCREMENT PRIMARY KEY, campaign_id INT NOT NULL, seq INT NOT NULL, fopts_hex TEXT NOT NULL, created_at INT NOT NULL)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server VARCHAR(255) DEFAULT \'\', async_timeout INT NOT NULL DEFAULT 250, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_servers (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, kind VARCHAR(16) NOT NULL DEFAULT \'PASSIVE\', protocol VARCHAR(16) NOT NULL DEFAULT \'BI_1_0\', server VARCHAR(255) DEFAULT \'\', async_timeout INT NOT NULL DEFAULT 250, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL)');
 
-            $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INT AUTO_INCREMENT PRIMARY KEY, application_id INT NOT NULL, tenant_id INT DEFAULT 0, kind VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL DEFAULT 1, config_json TEXT, created_at INT NOT NULL, INDEX idx_integrations_app (application_id))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', group_type VARCHAR(8) NOT NULL DEFAULT \'C\', mc_addr VARCHAR(16) DEFAULT \'\', mc_nwk_s_key VARCHAR(64) DEFAULT \'\', mc_app_s_key VARCHAR(64) DEFAULT \'\', f_cnt INT NOT NULL DEFAULT 0, dr INT NOT NULL DEFAULT 0, frequency INT NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INT NOT NULL DEFAULT 0, class_c_scheduling_type VARCHAR(8) NOT NULL DEFAULT \'DELAY\', created_at INT NOT NULL, INDEX idx_mg_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS integrations (id INT AUTO_INCREMENT PRIMARY KEY, application_id INT NOT NULL, owner_id INT DEFAULT 0, kind VARCHAR(32) NOT NULL, enabled TINYINT NOT NULL DEFAULT 1, config_json TEXT, created_at INT NOT NULL, INDEX idx_integrations_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS multicast_groups (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL, application_id INT NOT NULL, region VARCHAR(16) NOT NULL DEFAULT \'EU868\', group_type VARCHAR(8) NOT NULL DEFAULT \'C\', mc_addr VARCHAR(16) DEFAULT \'\', mc_nwk_s_key VARCHAR(64) DEFAULT \'\', mc_app_s_key VARCHAR(64) DEFAULT \'\', f_cnt INT NOT NULL DEFAULT 0, dr INT NOT NULL DEFAULT 0, frequency INT NOT NULL DEFAULT 0, class_b_ping_slot_periodicity INT NOT NULL DEFAULT 0, class_c_scheduling_type VARCHAR(8) NOT NULL DEFAULT \'DELAY\', created_at INT NOT NULL, INDEX idx_mg_app (application_id))');
 
             $pdo->exec('CREATE TABLE IF NOT EXISTS api_logs (id INT AUTO_INCREMENT PRIMARY KEY, created_at INT NOT NULL, method VARCHAR(8) NOT NULL DEFAULT \'\', path VARCHAR(255) DEFAULT \'\', status INT NOT NULL DEFAULT 0, latency_ms INT NOT NULL DEFAULT 0, ip VARCHAR(64) DEFAULT \'\', user_id INT NOT NULL DEFAULT 0, username VARCHAR(64) DEFAULT \'\', role VARCHAR(16) DEFAULT \'\', tenant_id INT NOT NULL DEFAULT 0, application_id INT NOT NULL DEFAULT 0, query VARCHAR(512) DEFAULT \'\', body_size INT NOT NULL DEFAULT 0, INDEX idx_api_logs_tenant (tenant_id), INDEX idx_api_logs_app (application_id), INDEX idx_api_logs_created (created_at))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS thing_models (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', fields_json TEXT, codec VARCHAR(16) NOT NULL DEFAULT \'SEGMENT\', created_at INT NOT NULL DEFAULT 0, INDEX idx_tm_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS thing_models (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', fields_json TEXT, codec VARCHAR(16) NOT NULL DEFAULT \'SEGMENT\', created_at INT NOT NULL DEFAULT 0, INDEX idx_tm_app (application_id))');
             $pdo->exec('CREATE TABLE IF NOT EXISTS device_readings (id BIGINT AUTO_INCREMENT PRIMARY KEY, dev_id INT NOT NULL DEFAULT 0, app_id INT NOT NULL DEFAULT 0, field_key VARCHAR(64) NOT NULL DEFAULT \'\', value DOUBLE NOT NULL DEFAULT 0, text_value VARCHAR(255) NOT NULL DEFAULT \'\', fcnt INT NOT NULL DEFAULT 0, ts INT NOT NULL DEFAULT 0, INDEX idx_rd_dev_key (dev_id, field_key, ts))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_notification_groups (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', webhook_url VARCHAR(512) DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_rules (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', field_key VARCHAR(64) NOT NULL DEFAULT \'\', operator VARCHAR(8) NOT NULL DEFAULT \'gt\', threshold VARCHAR(64) NOT NULL DEFAULT \'\', severity VARCHAR(16) NOT NULL DEFAULT \'warn\', notify_group_id INT NOT NULL DEFAULT 0, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL DEFAULT 0, INDEX idx_ar_app (application_id))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS alerts (id BIGINT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, device_id INT NOT NULL DEFAULT 0, device_name VARCHAR(128) DEFAULT \'\', rule_id INT NOT NULL DEFAULT 0, rule_name VARCHAR(128) DEFAULT \'\', field_key VARCHAR(64) DEFAULT \'\', value DOUBLE NOT NULL DEFAULT 0, text_value VARCHAR(255) DEFAULT \'\', severity VARCHAR(16) NOT NULL DEFAULT \'warn\', status VARCHAR(16) NOT NULL DEFAULT \'triggered\', message VARCHAR(255) DEFAULT \'\', ts INT NOT NULL DEFAULT 0, INDEX idx_a_dev_status (device_id, status), INDEX idx_a_ts (ts))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, port INT NOT NULL DEFAULT 1, payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', confirmed TINYINT NOT NULL DEFAULT 0, cron VARCHAR(64) NOT NULL DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, next_run_at INT NOT NULL DEFAULT 0, last_run_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_st_next (enabled, next_run_at))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', description VARCHAR(255) DEFAULT \'\', permissions TEXT, is_system TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL DEFAULT 0, INDEX idx_roles_tenant (tenant_id))');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', trigger_device_id INT NOT NULL DEFAULT 0, trigger_field VARCHAR(64) NOT NULL DEFAULT \'\', trigger_operator VARCHAR(8) NOT NULL DEFAULT \'gt\', trigger_value VARCHAR(64) NOT NULL DEFAULT \'\', cooldown_seconds INT NOT NULL DEFAULT 60, enabled TINYINT NOT NULL DEFAULT 1, action_type VARCHAR(16) NOT NULL DEFAULT \'downlink\', action_device_id INT NOT NULL DEFAULT 0, action_port INT NOT NULL DEFAULT 1, action_payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', action_confirmed TINYINT NOT NULL DEFAULT 0, notify_group_id INT NOT NULL DEFAULT 0, fired_count INT NOT NULL DEFAULT 0, last_fired_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_au_app (application_id, enabled))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_notification_groups (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', webhook_url VARCHAR(512) DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL DEFAULT 0)');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alert_rules (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', field_key VARCHAR(64) NOT NULL DEFAULT \'\', operator VARCHAR(8) NOT NULL DEFAULT \'gt\', threshold VARCHAR(64) NOT NULL DEFAULT \'\', severity VARCHAR(16) NOT NULL DEFAULT \'warn\', notify_group_id INT NOT NULL DEFAULT 0, enabled TINYINT NOT NULL DEFAULT 1, created_at INT NOT NULL DEFAULT 0, INDEX idx_ar_app (application_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS alerts (id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, device_id INT NOT NULL DEFAULT 0, device_name VARCHAR(128) DEFAULT \'\', rule_id INT NOT NULL DEFAULT 0, rule_name VARCHAR(128) DEFAULT \'\', field_key VARCHAR(64) DEFAULT \'\', value DOUBLE NOT NULL DEFAULT 0, text_value VARCHAR(255) DEFAULT \'\', severity VARCHAR(16) NOT NULL DEFAULT \'warn\', status VARCHAR(16) NOT NULL DEFAULT \'triggered\', message VARCHAR(255) DEFAULT \'\', ts INT NOT NULL DEFAULT 0, INDEX idx_a_dev_status (device_id, status), INDEX idx_a_ts (ts))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS scheduled_tasks (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', application_id INT NOT NULL DEFAULT 0, device_id INT NOT NULL DEFAULT 0, port INT NOT NULL DEFAULT 1, payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', confirmed TINYINT NOT NULL DEFAULT 0, cron VARCHAR(64) NOT NULL DEFAULT \'\', enabled TINYINT NOT NULL DEFAULT 1, next_run_at INT NOT NULL DEFAULT 0, last_run_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_st_next (enabled, next_run_at))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS roles (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', description VARCHAR(255) DEFAULT \'\', permissions TEXT, is_system TINYINT NOT NULL DEFAULT 0, created_at INT NOT NULL DEFAULT 0, INDEX idx_roles_owner (owner_id))');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS automations (id INT AUTO_INCREMENT PRIMARY KEY, owner_id INT DEFAULT 0, application_id INT NOT NULL DEFAULT 0, name VARCHAR(128) NOT NULL DEFAULT \'\', trigger_device_id INT NOT NULL DEFAULT 0, trigger_field VARCHAR(64) NOT NULL DEFAULT \'\', trigger_operator VARCHAR(8) NOT NULL DEFAULT \'gt\', trigger_value VARCHAR(64) NOT NULL DEFAULT \'\', cooldown_seconds INT NOT NULL DEFAULT 60, enabled TINYINT NOT NULL DEFAULT 1, action_type VARCHAR(16) NOT NULL DEFAULT \'downlink\', action_device_id INT NOT NULL DEFAULT 0, action_port INT NOT NULL DEFAULT 1, action_payload_hex VARCHAR(512) NOT NULL DEFAULT \'\', action_confirmed TINYINT NOT NULL DEFAULT 0, notify_group_id INT NOT NULL DEFAULT 0, fired_count INT NOT NULL DEFAULT 0, last_fired_at INT NOT NULL DEFAULT 0, last_result VARCHAR(255) DEFAULT \'\', created_at INT NOT NULL DEFAULT 0, INDEX idx_au_app (application_id, enabled))');
 
             try { $pdo->exec('DROP TABLE IF EXISTS departments'); } catch (\Throwable $e) { error_log('drop departments failed: ' . $e->getMessage()); }
             foreach ([
@@ -393,23 +386,15 @@ class Database
                 ['devices', 'altitude', 'DOUBLE DEFAULT 0'],
                 ['applications', 'callback_url', 'VARCHAR(512) DEFAULT \'\''],
                 ['events', 'raw_json', 'TEXT'],
-                ['users', 'tenant_id', 'INT DEFAULT 0'],
                 ['users', 'email', 'VARCHAR(255) DEFAULT \'\''],
                 ['users', 'role_id', 'INT DEFAULT 0'],
-                ['applications', 'tenant_id', 'INT DEFAULT 0'],
-                ['devices', 'tenant_id', 'INT DEFAULT 0'],
-                ['device_profiles', 'tenant_id', 'INT DEFAULT 0'],
-                ['gateways', 'tenant_id', 'INT DEFAULT 0'],
                 ['gateways', 'rf_config', 'TEXT'],
                 ['gateways', 'latitude', 'DOUBLE DEFAULT 0'],
                 ['gateways', 'longitude', 'DOUBLE DEFAULT 0'],
                 ['gateways', 'altitude', 'DOUBLE DEFAULT 0'],
-                ['api_keys', 'tenant_id', 'INT DEFAULT 0'],
                 ['api_keys', 'uuid', "VARCHAR(36) NOT NULL DEFAULT ''"],
                 ['api_keys', 'is_admin', 'TINYINT NOT NULL DEFAULT 0'],
                 ['api_keys', 'is_read_only', 'TINYINT NOT NULL DEFAULT 0'],
-                ['integrations', 'tenant_id', 'INT DEFAULT 0'],
-                ['multicast_groups', 'tenant_id', 'INT DEFAULT 0'],
                 ['downlinks', 'transmissions', 'INT DEFAULT 0'],
                 ['downlinks', 'acknowledged_at', 'INT DEFAULT 0'],
                 ['downlinks', 'raw_json', 'TEXT'],
@@ -453,8 +438,6 @@ class Database
                 ['fuota_deployments', 'status_ans', 'TINYINT NOT NULL DEFAULT 0'],
                 ['fuota_deployments', 'updated_at', 'INT NOT NULL DEFAULT 0'],
 
-                ['tenants', 'private_gateways_unlimited', 'TINYINT NOT NULL DEFAULT 0'],
-
                 ['roles', 'devices_limit', 'INT NOT NULL DEFAULT 0'],
                 ['roles', 'gateways_limit', 'INT NOT NULL DEFAULT 0'],
                 ['roles', 'gateways_unlimited', 'TINYINT NOT NULL DEFAULT 0'],
@@ -472,33 +455,59 @@ class Database
             }
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_keks (id INT AUTO_INCREMENT PRIMARY KEY, label VARCHAR(32) NOT NULL UNIQUE, kek VARCHAR(64) DEFAULT \'\', created_at INT NOT NULL)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS roaming_pending (id INT AUTO_INCREMENT PRIMARY KEY, kind VARCHAR(16) NOT NULL, dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', gw_id VARCHAR(32) NOT NULL DEFAULT \'\', peer TEXT, ul_tmst INT NOT NULL DEFAULT 0, region VARCHAR(16) NOT NULL DEFAULT \'\', freq DOUBLE NOT NULL DEFAULT 0, datr VARCHAR(16) DEFAULT \'\', dl_delay INT NOT NULL DEFAULT 0, created_at INT NOT NULL, expires_at INT NOT NULL DEFAULT 0, INDEX idx_rp_dev (dev_eui), INDEX idx_rp_addr (dev_addr))');
+
+            $pdo->exec('CREATE TABLE IF NOT EXISTS integration_logs (id INT AUTO_INCREMENT PRIMARY KEY, created_at INT NOT NULL, owner_id INT NOT NULL DEFAULT 0, app_id INT NOT NULL DEFAULT 0, integration_id INT NOT NULL DEFAULT 0, kind VARCHAR(24) NOT NULL DEFAULT \'WEBHOOK\', event VARCHAR(12) NOT NULL DEFAULT \'up\', `trigger` VARCHAR(16) NOT NULL DEFAULT \'uplink\', dev_eui VARCHAR(32) DEFAULT \'\', dev_addr VARCHAR(16) DEFAULT \'\', fcnt INT NOT NULL DEFAULT 0, fport INT NOT NULL DEFAULT 0, target VARCHAR(512) DEFAULT \'\', request_body MEDIUMTEXT, http_status INT NOT NULL DEFAULT 0, ok TINYINT NOT NULL DEFAULT 0, latency_ms INT NOT NULL DEFAULT 0, message VARCHAR(512) DEFAULT \'\', INDEX idx_ilog_app (app_id), INDEX idx_ilog_created (created_at), INDEX idx_ilog_dev (dev_eui))');
         }
 
         self::seedSystemRoles();
-        self::reconcileTenantBindings();
+        self::migrateTenantsToOwners($type);
     }
 
-    public static function reconcileTenantBindings(): void
+    private static function migrateTenantsToOwners(string $type): void
     {
-        $orphans = self::fetchAll(
-            "SELECT u.id, u.username, u.role_id FROM users u
-             WHERE u.tenant_id=0 AND u.role_id>0
-               AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.id=u.role_id AND r.is_system=1)
-             ORDER BY u.id ASC"
-        );
-        foreach ($orphans as $u) {
-            $existing = self::fetch("SELECT id FROM tenants WHERE name=?", [$u['username']]);
-            if ($existing) {
-                $tid = (int) $existing['id'];
-            } else {
-                self::execute(
-                    "INSERT INTO tenants (name, description, private_gateways_limit, private_gateways_unlimited, created_at) VALUES (?,?,0,1,?)",
-                    [$u['username'], '', time()]
-                );
-                $tid = (int) self::lastInsertId();
-            }
-            self::execute("UPDATE users SET tenant_id=? WHERE id=?", [$tid, $u['id']]);
+        $pdo = self::pdo();
+        $hasTenants = $type === 'sqlite'
+            ? (bool) $pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tenants'")->fetchColumn()
+            : (bool) $pdo->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='tenants'")->fetchColumn();
+        if (!$hasTenants) {
+            return;
         }
+        $colExists = fn(string $t, string $c) => $type === 'sqlite'
+            ? in_array($c, $pdo->query("PRAGMA table_info($t)")->fetchAll(\PDO::FETCH_COLUMN, 1), true)
+            : self::mysqlColumnExists($t, $c);
+        $ownerDef = $type === 'sqlite' ? 'INTEGER NOT NULL DEFAULT 0' : 'INT NOT NULL DEFAULT 0';
+
+        $firstUsers = [];
+        foreach ($pdo->query("SELECT id, tenant_id FROM users WHERE tenant_id>0 ORDER BY id ASC")->fetchAll(\PDO::FETCH_ASSOC) as $u) {
+            $tid = (int) $u['tenant_id'];
+            if (!isset($firstUsers[$tid])) {
+                $firstUsers[$tid] = (int) $u['id'];
+            }
+        }
+        $adminId = (int) ($pdo->query("SELECT id FROM users WHERE role='admin' ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
+        $mapOwner = fn(int $tid) => $tid > 0 ? ($firstUsers[$tid] ?? $adminId) : 0;
+
+        $tables = ['users', 'applications', 'devices', 'device_profiles', 'gateways', 'api_keys',
+                   'integrations', 'multicast_groups', 'thing_models', 'alert_notification_groups',
+                   'alert_rules', 'alerts', 'scheduled_tasks', 'automations', 'api_logs',
+                   'stations', 'relay_gateways', 'fuota_campaigns', 'roaming_servers', 'roles'];
+        foreach ($tables as $t) {
+            if (!$colExists($t, 'tenant_id')) {
+                continue;
+            }
+            if (!$colExists($t, 'owner_id')) {
+                $pdo->exec("ALTER TABLE $t ADD COLUMN owner_id $ownerDef");
+            }
+            foreach ($pdo->query("SELECT DISTINCT tenant_id FROM $t")->fetchAll(\PDO::FETCH_COLUMN) as $tid) {
+                $pdo->exec("UPDATE $t SET owner_id=" . $mapOwner((int) $tid) . " WHERE tenant_id=" . (int) $tid);
+            }
+        }
+        foreach ($tables as $t) {
+            if ($colExists($t, 'tenant_id')) {
+                try { $pdo->exec("ALTER TABLE $t DROP COLUMN tenant_id"); } catch (\Throwable $e) { error_log("drop $t.tenant_id failed: " . $e->getMessage()); }
+            }
+        }
+        try { $pdo->exec('DROP TABLE IF EXISTS tenants'); } catch (\Throwable $e) { error_log('drop tenants failed: ' . $e->getMessage()); }
     }
 
     public static function seedSystemRoles(): void
@@ -518,7 +527,7 @@ class Database
                 );
             } else {
                 self::execute(
-                    "INSERT INTO roles (tenant_id, name, description, permissions, is_system, gateways_unlimited, devices_limit, gateways_limit, created_at) VALUES (0,?,?,?,?,1,0,0,?)",
+                    "INSERT INTO roles (owner_id, name, description, permissions, is_system, gateways_unlimited, devices_limit, gateways_limit, created_at) VALUES (0,?,?,?,?,1,0,0,?)",
                     [$name, $desc, $perms, 1, time()]
                 );
             }

@@ -107,7 +107,7 @@ window.alert = (m) => {
 const _origConfirm = window.confirm;
 window.confirm = (q) => _origConfirm.call(window, t(q));
 
-let state = {user:null, token:null, view:'dashboard', live:false, stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, tenantFilter:'', devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',tenant_id:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, dpsSort:{col:null,dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', devsFActivation:'', devsFCls:'', devsFOnline:'', devsFStatus:'', gwsFOnline:'', dpsFRegion:'', dpsFCls:'', upsFFcnt:'', upsFPort:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, appsPage:1, devsPage:1, gwsPage:1, usersPage:1, apiKeysPage:1, intgPage:1, dpsPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, appsLimit:50, devsLimit:50, gwsLimit:50, usersLimit:50, apiKeysLimit:50, intgLimit:50, dpsLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, appsOffset:0, devsOffset:0, gwsOffset:0, usersOffset:0, apiKeysOffset:0, intgOffset:0, dpsOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0, appsTotal:0, devsTotal:0, gwsTotal:0, usersTotal:0, apiKeysTotal:0, intgTotal:0, dpsTotal:0};
+let state = {user:null, token:null, view:'dashboard', live:false, stats:null, apps:[], devs:[], gws:[], ups:[], users:[], evs:[], regions:['EU868','US915','CN470','AS923','AU915','CN779','EU433','IN865','KR920','RU864'], upsFilter:'', upsAppFilter:'', dlDevFilter:'', dlAppFilter:'', evsDevFilter:'', evsGwFilter:'', dps:[], appSel:null, intAppSel:null, mcDetail:null, devAppFilter:'', apiLogFilter:{path:'',ip:'',status:'',method:'',application_id:''}, upsSort:{col:'time',dir:'desc'}, dlsSort:{col:'time',dir:'desc'}, evsSort:{col:'time',dir:'desc'}, apiLogSort:{col:'time',dir:'desc'}, appsSort:{col:'time',dir:'desc'}, devsSort:{col:'time',dir:'desc'}, gwsSort:{col:'time',dir:'desc'}, usersSort:{col:'time',dir:'desc'}, apiKeysSort:{col:'time',dir:'desc'}, intgSort:{col:'time',dir:'desc'}, dpsSort:{col:null,dir:'desc'}, upsFStatus:'', dlsFStatus:'', evsFLevel:'', evsFType:'', apiLogFStatus:'', devsFActivation:'', devsFCls:'', devsFOnline:'', devsFStatus:'', gwsFOnline:'', dpsFRegion:'', dpsFCls:'', upsFFcnt:'', upsFPort:'', upsPage:1, dlsPage:1, evsPage:1, apiLogPage:1, appsPage:1, devsPage:1, gwsPage:1, usersPage:1, apiKeysPage:1, intgPage:1, dpsPage:1, upsLimit:50, dlsLimit:50, evsLimit:50, apiLogLimit:50, appsLimit:50, devsLimit:50, gwsLimit:50, usersLimit:50, apiKeysLimit:50, intgLimit:50, dpsLimit:50, upsOffset:0, dlsOffset:0, evsOffset:0, apiLogOffset:0, appsOffset:0, devsOffset:0, gwsOffset:0, usersOffset:0, apiKeysOffset:0, intgOffset:0, dpsOffset:0, upsTotal:0, dlsTotal:0, evsTotal:0, apiLogTotal:0, appsTotal:0, devsTotal:0, gwsTotal:0, usersTotal:0, apiKeysTotal:0, intgTotal:0, dpsTotal:0};
 
 async function boot(){
   state.token = localStorage.getItem('elw_token') || null;
@@ -191,6 +191,7 @@ const NAV_GROUPS = [
     {v:'integrations', perm:'integrations', text:'外部集成', icon:'puzzlePiece'},
     {v:'api-keys', perm:'api-keys', text:'API 密钥', icon:'key'},
     {v:'api-logs', perm:'api-logs', text:'API 调用日志', icon:'clipboardDocumentList'},
+    {v:'integration-logs', perm:'integration-logs', text:'集成运行日志', icon:'cloudArrowUp'},
     {v:'apidocs', perm:'apidocs', text:'API 文档', icon:'bookOpen'},
     {v:'loracalc', perm:'loracalc', text:'LoRa 计算器', icon:'calculator'},
   ]},
@@ -489,7 +490,6 @@ window.addEventListener('unhandledrejection', (ev) => {
 });
 
 function resetFilters(clearPageState, viewFn){
-  state.tenantFilter='';
   if (clearPageState) { try { clearPageState(); } catch (e) {} }
   busy('重置中…', () => viewFn());
 }
@@ -533,13 +533,13 @@ async function nav(v, silent=false){
     else if (v==='downlinks') await viewDownlinks();
     else if (v==='events') await viewEvents();
     else if (v==='device-profiles') await viewDeviceProfiles();
-    else if (v==='tenants') await viewRoles();
     else if (v==='integrations') await viewIntegrations();
     else if (v==='api-keys') await viewApiKeys();
     else if (v==='multicast-groups') await viewMulticastGroups();
     else if (v==='fuota') await viewFuota();
     else if (v==='users') await viewUsers();
     else if (v==='api-logs') await viewApiLogs();
+    else if (v==='integration-logs') await viewIntegrationLogs();
     else if (v==='loracalc') await viewLoraCalc();
     else if (v==='apidocs') { await applyPublicSettings(); await viewApiDocs(); }
     else if (v==='noc') await viewNoc();
